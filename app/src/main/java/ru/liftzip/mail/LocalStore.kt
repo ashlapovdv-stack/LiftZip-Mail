@@ -1,0 +1,67 @@
+package ru.liftzip.mail
+
+import android.content.ContentValues
+import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
+import org.json.JSONArray
+import org.json.JSONObject
+
+class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", null, 1) {
+    override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE accounts (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE messages (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, folder TEXT NOT NULL, data TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX message_account ON messages(account_id, folder)")
+    }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    @Synchronized fun accounts(): List<MailAccount> = readableDatabase.rawQuery("SELECT data FROM accounts ORDER BY rowid", null).use { c ->
+        buildList { while(c.moveToNext()) { val j=JSONObject(c.getString(0)); add(MailAccount(
+            id=j.getString("id"), name=j.getString("name"), email=j.getString("email"), username=j.getString("username"),
+            provider=Provider.valueOf(j.getString("provider")), imapHost=j.getString("imapHost"), imapPort=j.getInt("imapPort"),
+            imapStartTls=j.getBoolean("imapStartTls"), smtpHost=j.getString("smtpHost"), smtpPort=j.getInt("smtpPort"),
+            smtpStartTls=j.getBoolean("smtpStartTls"), secret=j.getString("secret"), senderName=j.optString("senderName",j.getString("name"))
+        )) } }
+    }
+    @Synchronized fun putAccount(a: MailAccount) {
+        val j=JSONObject().put("id",a.id).put("name",a.name).put("email",a.email).put("username",a.username)
+            .put("provider",a.provider.name).put("imapHost",a.imapHost).put("imapPort",a.imapPort).put("imapStartTls",a.imapStartTls)
+            .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName)
+        writableDatabase.insertOrThrow("accounts",null,ContentValues().apply { put("id",a.id);put("data",j.toString()) })
+    }
+    @Synchronized fun removeAccount(id: String) { writableDatabase.delete("accounts","id = ?",arrayOf(id)) }
+    @Synchronized fun messages(): List<MailItem> = readableDatabase.rawQuery("SELECT data FROM messages",null).use { c -> buildList {
+        while(c.moveToNext()) add(decodeMessage(JSONObject(c.getString(0))))
+    } }
+    @Synchronized fun putMessage(m: MailItem) { putMessage(writableDatabase,m) }
+    private fun putMessage(db: SQLiteDatabase,m: MailItem) {
+        db.insertWithOnConflict("messages",null,ContentValues().apply {
+            put("id",m.id); put("account_id",m.accountId); put("folder",m.localFolder); put("data",encodeMessage(m).toString())
+        },SQLiteDatabase.CONFLICT_REPLACE)
+    }
+    @Synchronized fun removeMessage(id: String) { writableDatabase.delete("messages","id = ?",arrayOf(id)) }
+    @Synchronized fun replaceInbox(accountId: String,items: List<MailItem>) {
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("messages","account_id = ? AND folder = ?",arrayOf(accountId,"inbox"))
+            items.forEach { putMessage(db,it) }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+    private fun encodeMessage(m: MailItem) = JSONObject().put("id",m.id).put("account",m.accountId).put("uid",m.uid)
+        .put("validity",m.validity).put("remoteFolder",m.remoteFolder).put("sender",m.sender).put("email",m.senderEmail)
+        .put("to",m.recipients).put("subject",m.subject).put("body",m.body).put("date",m.date).put("unread",m.unread)
+        .put("starred",m.starred).put("folder",m.localFolder).put("delivery",m.delivery)
+        .put("attachments",JSONArray().apply { m.attachments.forEach { a->put(JSONObject().put("path",a.path).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
+        .put("outgoing",JSONArray().apply { m.outgoing.forEach { a->put(JSONObject().put("uri",a.uri).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
+    private fun decodeMessage(j: JSONObject): MailItem {
+        val attachments=j.optJSONArray("attachments")?:JSONArray()
+        val outgoing=j.optJSONArray("outgoing")?:JSONArray()
+        return MailItem(j.getString("id"),j.getString("account"),j.getLong("uid"),j.getLong("validity"),j.getString("remoteFolder"),
+            HeaderText.decode(j.getString("sender")),j.getString("email"),HeaderText.recipients(j.getString("to")),HeaderText.decode(j.getString("subject")),j.getString("body"),j.getLong("date"),
+            j.getBoolean("unread"),j.getBoolean("starred"),j.getString("folder"),
+            List(attachments.length()) { i-> val a=attachments.getJSONObject(i);Attachment(a.getString("path"),a.getString("name"),a.getString("mime"),a.getInt("size")) },
+            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"))
+    }
+}
