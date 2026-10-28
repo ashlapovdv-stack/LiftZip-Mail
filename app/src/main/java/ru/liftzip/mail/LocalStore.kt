@@ -44,12 +44,29 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
     }
     @Synchronized fun removeAccount(id: String) { writableDatabase.delete("accounts","id = ?",arrayOf(id)) }
     @Synchronized fun messages(): List<MailItem> = readableDatabase.rawQuery("SELECT data FROM messages",null).use { c -> buildList {
-        while(c.moveToNext()) add(decodeMessage(JSONObject(c.getString(0))))
+        while(c.moveToNext()) add(decodeMessage(JSONObject(c.getString(0)),preview=true))
     } }
+    @Synchronized fun message(id: String): MailItem?=readableDatabase.rawQuery("SELECT data FROM messages WHERE id = ?",arrayOf(id)).use{c->
+        if(c.moveToFirst())decodeMessage(JSONObject(c.getString(0)))else null
+    }
+    @Synchronized fun search(query: String,checkCancelled: ()->Unit): Set<String> {
+        val terms=query.lowercase().trim().split(Regex("\\s+")).filter(String::isNotBlank)
+        if(terms.isEmpty())return emptySet()
+        return readableDatabase.rawQuery("SELECT data FROM messages",null).use{c->buildSet{
+            while(c.moveToNext()){
+                checkCancelled()
+                val m=decodeMessage(JSONObject(c.getString(0)))
+                if(MailContent.matches(m,terms))add(m.id)
+            }
+        }}
+    }
     @Synchronized fun putMessage(m: MailItem) { putMessage(writableDatabase,m) }
     private fun putMessage(db: SQLiteDatabase,m: MailItem) {
+        // A flag/header update from a list preview must never overwrite the stored full body.
+        val storedBody=if(m.previewOnly)db.rawQuery("SELECT data FROM messages WHERE id = ?",arrayOf(m.id)).use{c->if(c.moveToFirst())JSONObject(c.getString(0)).getString("body") else null}else null
+        val full=MailContent.forStorage(m,storedBody)
         db.insertWithOnConflict("messages",null,ContentValues().apply {
-            put("id",m.id); put("account_id",m.accountId); put("folder",m.localFolder); put("data",encodeMessage(m).toString())
+            put("id",full.id); put("account_id",full.accountId); put("folder",full.localFolder); put("data",encodeMessage(full).toString())
         },SQLiteDatabase.CONFLICT_REPLACE)
     }
     @Synchronized fun removeMessage(id: String) { writableDatabase.delete("messages","id = ?",arrayOf(id)) }
@@ -84,13 +101,13 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         .put("starred",m.starred).put("folder",m.localFolder).put("delivery",m.delivery)
         .put("attachments",JSONArray().apply { m.attachments.forEach { a->put(JSONObject().put("path",a.path).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
         .put("outgoing",JSONArray().apply { m.outgoing.forEach { a->put(JSONObject().put("uri",a.uri).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
-    private fun decodeMessage(j: JSONObject): MailItem {
+    private fun decodeMessage(j: JSONObject,preview: Boolean=false): MailItem {
         val attachments=j.optJSONArray("attachments")?:JSONArray()
         val outgoing=j.optJSONArray("outgoing")?:JSONArray()
         return MailItem(j.getString("id"),j.getString("account"),j.getLong("uid"),j.getLong("validity"),j.getString("remoteFolder"),
-            HeaderText.decode(j.getString("sender")),j.getString("email"),HeaderText.recipients(j.getString("to")),HeaderText.decode(j.getString("subject")),j.getString("body"),j.getLong("date"),
+            HeaderText.decode(j.getString("sender")),j.getString("email"),HeaderText.recipients(j.getString("to")),HeaderText.decode(j.getString("subject")),j.getString("body").let{if(preview)it.take(MailContent.PREVIEW_LENGTH)else it},j.getLong("date"),
             j.getBoolean("unread"),j.getBoolean("starred"),j.getString("folder"),
             List(attachments.length()) { i-> val a=attachments.getJSONObject(i);Attachment(a.getString("path"),a.getString("name"),a.getString("mime"),a.getInt("size")) },
-            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"))
+            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview)
     }
 }

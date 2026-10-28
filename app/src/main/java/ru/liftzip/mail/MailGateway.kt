@@ -82,7 +82,7 @@ class MailGateway(private val context: Context) {
                 val content=if(existing!=null)DecodedMail(existing.body,existing.attachments) else reader.read(m)
                 MailItem("${a.id}:${folder.uidValidity}:$uid",a.id,uid,folder.uidValidity,"INBOX",from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",content.text,
-                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments)
+                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=existing?.previewOnly?:false)
             }
             InboxPage(if(extending)(validCache+items).associateBy{it.id}.values.toList() else items,
                 InboxHistory(count,messages.minOf{it.messageNumber}>1))

@@ -36,9 +36,9 @@ class MailRepository(private val context: Context) {
     private val mutex=Mutex()
     private val state=MutableStateFlow(MailSnapshot())
     val snapshot=state.asStateFlow()
-    private fun refresh(arrived: Set<String> = emptySet()) {
+    private fun refresh(arrived: Set<String> = emptySet(),messages: List<MailItem>?=null) {
         val accounts=db.accounts()
-        state.value=MailSnapshot(accounts,db.messages(),accounts.associate { a->
+        state.value=MailSnapshot(accounts,messages?:db.messages(),accounts.associate { a->
             a.id to InboxHistory(if(syncPrefs.contains("count:${a.id}"))syncPrefs.getInt("count:${a.id}",0) else null,syncPrefs.getBoolean("older:${a.id}",true))
         },settings.getString("default-sender",null)?.takeIf{id->accounts.any{it.id==id}},
             PollSettings.normalized(settings.getInt("foreground-minutes",1),settings.getInt("background-minutes",15)),readHistory(),
@@ -47,6 +47,10 @@ class MailRepository(private val context: Context) {
         notifications.history(state.value)
     }
     suspend fun load()=withContext(Dispatchers.IO){mutex.withLock{refresh()}}
+    suspend fun message(id: String): MailItem?=withContext(Dispatchers.IO){db.message(id)}
+    suspend fun search(query: String): Set<String> =withContext(Dispatchers.IO){
+        val coroutine=currentCoroutineContext();db.search(query){coroutine.ensureActive()}
+    }
     suspend fun addAccount(account: MailAccount,password: String)=withContext(Dispatchers.IO){mutex.withLock {
         require(db.accounts().none { it.email.equals(account.email,true) && it.imapHost.equals(account.imapHost,true) }) { "Этот ящик уже добавлен." }
         gateway.verify(account,password)
@@ -57,6 +61,7 @@ class MailRepository(private val context: Context) {
     }}
     suspend fun editAccount(account: MailAccount,password: String)=withContext(Dispatchers.IO){mutex.withLock {
         val old=db.accounts().find{it.id==account.id}?:error("Ящик не найден.")
+        require(db.accounts().none{it.id!=old.id && it.email.equals(account.email,true) && it.imapHost.equals(account.imapHost,true)}){"Этот ящик уже добавлен."}
         require(old.email.equals(account.email,true)){"Для другого адреса добавьте отдельный ящик."}
         MailRules.validateAccount(account,password,passwordRequired=false)?.let{error(it)}
         val secret=password.ifEmpty{vault.open(old.id,old.secret)}
@@ -90,30 +95,33 @@ class MailRepository(private val context: Context) {
     private suspend fun updateInboxes(accountId: String?,loadOlder: Boolean): SyncResult=withContext(Dispatchers.IO){mutex.withLock {
         val arrived=mutableSetOf<String>()
         val errors=mutableListOf<String>()
+        var messages=state.value.messages
         db.accounts().filter{accountId==null || it.id==accountId}.forEach { a->
             if(loadOlder && !syncPrefs.getBoolean("older:${a.id}",true))return@forEach
             try {
-                val old=db.messages().filter { it.accountId==a.id && it.localFolder=="inbox" }
+                val old=messages.filter { it.accountId==a.id && it.localFolder=="inbox" }
                 val coroutine=currentCoroutineContext()
                 val page=gateway.inbox(a,vault.open(a.id,a.secret),old,loadOlder,checkCancelled={coroutine.ensureActive()})
                 if(!loadOlder)arrived+=SyncRules.newUnreadIds(old,page.messages,syncPrefs.getBoolean(a.id,false))
                 db.applyInbox(old,page.messages)
+                messages=messages.filterNot{it.accountId==a.id && it.localFolder=="inbox"}+page.messages.map(MailContent::preview)
                 syncPrefs.edit().putBoolean(a.id,true).putInt("count:${a.id}",page.history.total?:page.messages.size).putBoolean("older:${a.id}",page.history.hasOlder).apply()
                 if(!loadOlder)syncPrefs.edit().putLong("checked:${a.id}",System.currentTimeMillis()).remove("error:${a.id}").apply()
             } catch(e: CancellationException){throw e}
             catch(e: Exception){val error=friendlyError(e);errors+="${a.name}: $error";syncPrefs.edit().putString("error:${a.id}",error).apply()}
         }
-        refresh(arrived);SyncResult(arrived.size,errors)
+        refresh(arrived,messages);SyncResult(arrived.size,errors)
     }}
     suspend fun changeFlags(message: MailItem,unread: Boolean?=null,starred: Boolean?=null)=withContext(Dispatchers.IO){mutex.withLock {
         val a=db.accounts().find { it.id==message.accountId }?:error("Ящик не найден.")
         if(message.uid>0)gateway.flags(a,vault.open(a.id,a.secret),message,seen=unread?.not(),starred=starred)
-        val current=db.messages().find { it.id==message.id }?:return@withLock
-        db.putMessage(current.copy(unread=unread?:current.unread,starred=starred?:current.starred));refresh()
+        val current=state.value.messages.find { it.id==message.id }?:return@withLock
+        val updated=current.copy(unread=unread?:current.unread,starred=starred?:current.starred)
+        db.putMessage(updated);refresh(messages=state.value.messages.map{if(it.id==updated.id)updated else it})
     }}
     suspend fun markRead(ids: Set<String>,unread: Boolean): FlagChange=withContext(Dispatchers.IO){mutex.withLock {
         val accounts=db.accounts().associateBy{it.id}
-        val requested=db.messages().filter{it.id in ids}
+        val requested=state.value.messages.filter{it.id in ids}
         val updated=mutableSetOf<String>()
         val errors=mutableListOf<String>()
         requested.groupBy{Triple(it.accountId,it.remoteFolder,it.validity)}.forEach{(key,group)->
@@ -129,7 +137,7 @@ class MailRepository(private val context: Context) {
                 }catch(e: CancellationException){throw e}catch(e: Exception){errors+="${account.name}: ${friendlyError(e)}"}
             }
         }
-        refresh();FlagChange(updated,errors.distinct())
+        refresh(messages=state.value.messages.map{if(it.id in updated)it.copy(unread=unread)else it});FlagChange(updated,errors.distinct())
     }}
     private fun readHistory(): HistoryDownload=runCatching{
         val j=JSONObject(settings.getString("history-download","{}").orEmpty())
@@ -166,12 +174,13 @@ class MailRepository(private val context: Context) {
         }
         val account=accounts.first{it.id==accountId}
         try {
-            val old=db.messages().filter{it.accountId==accountId && it.localFolder=="inbox"}
+            val old=state.value.messages.filter{it.accountId==accountId && it.localFolder=="inbox"}
             val coroutine=currentCoroutineContext()
             val page=gateway.inbox(account,vault.open(account.id,account.secret),old,loadOlder=true,pageSize=20,checkCancelled={coroutine.ensureActive()})
             db.applyInbox(old,page.messages)
             syncPrefs.edit().putBoolean(accountId,true).putInt("count:$accountId",page.history.total?:page.messages.size).putBoolean("older:$accountId",page.history.hasOlder).apply()
-            writeHistory(job.copy(status="running",error=if(skipped.isEmpty())"" else job.error));refresh()
+            writeHistory(job.copy(status="running",error=if(skipped.isEmpty())"" else job.error))
+            refresh(messages=state.value.messages.filterNot{it.accountId==accountId && it.localFolder=="inbox"}+page.messages.map(MailContent::preview))
             HistoryStep(more=true)
         }catch(e: CancellationException){throw e}catch(e: Exception){
             writeHistory(job.copy(error="${account.name}: ${friendlyError(e)}"));refresh();HistoryStep(more=true,failedAccount=accountId)

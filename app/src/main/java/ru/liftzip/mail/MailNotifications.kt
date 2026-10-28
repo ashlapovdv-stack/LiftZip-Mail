@@ -13,7 +13,6 @@ import androidx.core.app.NotificationCompat
 class MailNotifications(private val context: Context) {
     private val manager=context.getSystemService(NotificationManager::class.java)
     private val prefs=context.getSharedPreferences("mail-notifications",Context.MODE_PRIVATE)
-    private fun permitted()=Build.VERSION.SDK_INT<33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED
     private fun openApp()=PendingIntent.getActivity(context,0,Intent(context,MainActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
     fun reconcile(messages: List<MailItem>,arrived: Set<String> = emptySet()) {
@@ -24,7 +23,7 @@ class MailNotifications(private val context: Context) {
         val hasNew=(pending-previous).isNotEmpty()
         // Dismissing an alert must not cause it to reappear on every local save/history page.
         if(!hasNew && manager.activeNotifications.none{it.id==100})return
-        if(!permitted())return
+        if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return
         manager.createNotificationChannel(NotificationChannel("mail","Новые письма",NotificationManager.IMPORTANCE_DEFAULT).apply{setShowBadge(true)})
         manager.notify(100,NotificationCompat.Builder(context,"mail").setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Непрочитанная почта").setContentText("Новых непрочитанных писем: ${pending.size}")
@@ -35,7 +34,7 @@ class MailNotifications(private val context: Context) {
     fun history(snapshot: MailSnapshot) {
         val job=snapshot.historyDownload
         if(!job.active){manager.cancel(101);return}
-        if(!permitted())return
+        if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return
         manager.createNotificationChannel(NotificationChannel("history","Загрузка истории",NotificationManager.IMPORTANCE_LOW).apply{setShowBadge(false)})
         val ids=job.accountIds.toSet()
         val loaded=snapshot.messages.count{it.localFolder=="inbox" && it.accountId in ids}

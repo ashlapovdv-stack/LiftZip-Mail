@@ -114,6 +114,7 @@ private val Paper=Color(0xFFF8F9F6)
         draft=value?:ComposeDraft(accountId=a.id);route="compose"
     }
     LaunchedEffect(s.notice){s.notice?.let { snack.showSnackbar(it,duration=SnackbarDuration.Long);vm.dismissNotice() }}
+    LaunchedEffect(route,selected){if(route=="reader")selected?.let(vm::openMessage)}
     BackHandler(enabled=route!="inbox") {
         val d=draft
         if(route=="edit"){route="settings";editing=null}
@@ -144,9 +145,10 @@ private val Paper=Color(0xFFF8F9F6)
                 route=="compose" && draft!=null -> ComposeScreen(draft!!,s,onChange={draft=it},onBack={vm.saveDraft(draft!!){draft=null;goInbox()}},
                     onDelete={vm.deleteDraft(draft!!.id){draft=null;goInbox()}},onSend={vm.send(draft!!){draft=null;goInbox()}})
                 route=="reader" -> {
-                    val message=s.messages.find{it.id==selected}
+                    val summary=s.messages.find{it.id==selected}
+                    val message=s.opened?.takeIf{it.id==selected}?.let{full->summary?.let{full.copy(unread=it.unread,starred=it.starred)}}?:summary
                     if(message==null)LaunchedEffect(Unit){goInbox()}
-                    else ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy,onBack={goInbox()},onStar={vm.star(message)},
+                    else ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,onBack={goInbox()},onStar={vm.star(message)},
                         onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
@@ -162,9 +164,10 @@ private val Paper=Color(0xFFF8F9F6)
                     val memoryKey="${currentAccount?:"all"}:${folder.name}"
                     val memory=inboxMemory.getOrPut(memoryKey){InboxMemory()}
                     savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,memory,onAccount={currentAccount=it},onFolder={folder=it},onAdd={route="add"},
-                    onSettings={route="settings"},onHistory={historyReturn="inbox";route="history"},onRefresh=vm::refresh,onLoadOlder={vm.loadOlder(currentAccount)},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onOpen={m->
-                        if(m.localFolder=="drafts")compose(ComposeDraft(m.id,m.accountId,m.recipients,m.subject,m.body,m.outgoing,previousDeliveryUncertain=m.delivery in listOf("sending","uncertain")))
-                        else {selected=m.id;route="reader";vm.read(m)}
+                    onSettings={route="settings"},onHistory={historyReturn="inbox";route="history"},onRefresh=vm::refresh,onLoadOlder={vm.loadOlder(currentAccount)},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onSearch=vm::search,onOpen={m->
+                        selected=m.id
+                        if(m.localFolder=="drafts")vm.openDraft(m.id){full->if(route=="inbox" && selected==full.id)compose(ComposeDraft(full.id,full.accountId,full.recipients,full.subject,full.body,full.outgoing,previousDeliveryUncertain=full.delivery in listOf("sending","uncertain")))}
+                        else route="reader"
                     })}
                 }
             }
@@ -188,12 +191,16 @@ private val Paper=Color(0xFFF8F9F6)
 
 @Composable private fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,memory: InboxMemory,onAccount: (String?)->Unit,onFolder: (MailFolder)->Unit,
     onAdd: ()->Unit,onSettings: ()->Unit,onHistory: ()->Unit,onRefresh: ()->Unit,onLoadOlder: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
-    onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onOpen: (MailItem)->Unit) {
+    onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit) {
     val drawer=rememberDrawerState(DrawerValue.Closed)
     val scope=rememberCoroutineScope()
     var query by rememberSaveable { mutableStateOf("") }
-    var checked by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
-    val visible=remember(s.messages,accountId,folder,query){MailRules.filter(s.messages,accountId,folder,query)}
+    var checked by remember { mutableStateOf(arrayListOf<String>()) }
+    LaunchedEffect(query){onSearch(query)}
+    val visible=remember(s.messages,accountId,folder,query,s.searchIds,s.searchQuery){
+        val source=if(query.isBlank())s.messages else s.messages.filter{s.searchQuery==query && it.id in s.searchIds}
+        MailRules.filter(source,accountId,folder,"")
+    }
     val visibleIds=remember(visible){visible.map{it.id}}
     val selected=checked.toSet().intersect(visibleIds.toSet())
     val selectionMode=selected.isNotEmpty()
@@ -247,6 +254,7 @@ private val Paper=Color(0xFFF8F9F6)
                 if(s.busy)LinearProgressIndicator(Modifier.fillMaxWidth())
                 OutlinedTextField(value=query,onValueChange={query=it},placeholder={Text("Поиск писем")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton(onClick={query=""}){Icon(Icons.Outlined.Close,"Очистить поиск")}},
                     singleLine=true,shape=RoundedCornerShape(18.dp),modifier=Modifier.fillMaxWidth().padding(horizontal=18.dp,vertical=10.dp))
+                if(s.searching && query.isNotBlank())LinearProgressIndicator(Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
                     Text(if(query.isNotBlank())"Поиск среди загруженных писем" else if(folder==MailFolder.SENT)"Отправленные с этого устройства" else "${visible.size} писем · ${visible.count{it.unread}} непрочитанных",
                         style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -338,8 +346,9 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             Text("Кому: ${m.recipients}",Modifier.padding(top=12.dp,bottom=18.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             if(m.localFolder=="sent")InfoCard("Письмо принято SMTP-сервером отправителя. Эта копия хранится на устройстве.")
             HorizontalDivider(Modifier.padding(vertical=10.dp))
-            SelectionContainer { Text((if(quotedExpanded || !parts.canCollapse)m.body else parts.current).ifBlank{"В письме нет доступного текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=27.sp,modifier=Modifier.fillMaxWidth().padding(vertical=14.dp)) }
-            if(parts.canCollapse) {
+            if(m.previewOnly)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+            else SelectionContainer { Text((if(quotedExpanded || !parts.canCollapse)m.body else parts.current).ifBlank{"В письме нет доступного текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=27.sp,modifier=Modifier.fillMaxWidth().padding(vertical=14.dp)) }
+            if(!m.previewOnly && parts.canCollapse) {
                 if(quotedExpanded)TextButton(onClick={quotedExpanded=false}){Text("Скрыть предыдущие сообщения")}
                 else OutlinedIconButton(onClick={quotedExpanded=true},modifier=Modifier.padding(bottom=12.dp)) {Icon(Icons.Outlined.MoreHoriz,"Показать предыдущие сообщения")}
             }

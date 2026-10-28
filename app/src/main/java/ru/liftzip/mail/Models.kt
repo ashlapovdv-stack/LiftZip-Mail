@@ -29,7 +29,7 @@ data class MailItem(
     val recipients: String, val subject: String, val body: String, val date: Long,
     val unread: Boolean = false, val starred: Boolean = false, val localFolder: String = "inbox",
     val attachments: List<Attachment> = emptyList(), val outgoing: List<OutgoingFile> = emptyList(),
-    val delivery: String = ""
+    val delivery: String = "", val previewOnly: Boolean = false
 )
 
 data class ComposeDraft(
@@ -81,7 +81,7 @@ object MailRules {
                     MailFolder.UNREAD -> m.unread && m.localFolder != "drafts"
                     else -> m.localFolder == folder.key
                 }) &&
-                terms.all { word -> "${m.sender} ${m.senderEmail} ${m.subject} ${m.body}".lowercase().contains(word) }
+                MailContent.matches(m,terms)
         }.sortedByDescending { it.date }
     }
 }

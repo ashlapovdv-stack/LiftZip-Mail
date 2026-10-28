@@ -12,18 +12,32 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = emptyList(),val messages: List<MailItem> = emptyList(),val history: Map<String,InboxHistory> = emptyMap(),val defaultAccountId: String?=null,
-    val poll: PollSettings=PollSettings(),val historyDownload: HistoryDownload=HistoryDownload(),val checks: Map<String,SyncCheck> = emptyMap(),val refreshing: Boolean=false,val busy: Boolean=false,val notice: String?=null)
+    val poll: PollSettings=PollSettings(),val historyDownload: HistoryDownload=HistoryDownload(),val checks: Map<String,SyncCheck> = emptyMap(),
+    val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
+    val refreshing: Boolean=false,val busy: Boolean=false,val notice: String?=null)
 
 class MailViewModel(app: Application): AndroidViewModel(app) {
     private val repo=(app as MailApplication).repository
     private val mutable=MutableStateFlow(UiState())
     private var foreground: Job?=null
     private var checking: Job?=null
+    private var opening: Job?=null
+    private val query=MutableStateFlow("")
     val state=mutable.asStateFlow()
     init {
         viewModelScope.launch {
             repo.snapshot.collect { snapshot->mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
                 poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks) } }
+        }
+        viewModelScope.launch {
+            combine(query,repo.snapshot){q,snapshot->q to snapshot.messages}.distinctUntilChanged().collectLatest{(text,_)->
+                mutable.update{it.copy(searchQuery=text,searchIds=if(text==it.searchQuery)it.searchIds else emptySet(),searching=text.isNotBlank())}
+                if(text.isBlank())mutable.update{it.copy(searchIds=emptySet(),searching=false)}else {
+                    delay(200)
+                    try {val ids=repo.search(text);mutable.update{it.copy(searchIds=ids,searching=false)}}
+                    catch(e: CancellationException){throw e}catch(e: Exception){mutable.update{it.copy(searchIds=emptySet(),searching=false)};notice(friendlyError(e))}
+                }
+            }
         }
         work {
             repo.load()
@@ -31,6 +45,19 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             if(repo.snapshot.value.accounts.isNotEmpty())MailWorker.schedule(getApplication())
         }
     }
+    fun search(text: String){query.value=text}
+    fun openMessage(id: String) {
+        opening?.cancel()
+        if(mutable.value.opened?.id!=id)mutable.update{it.copy(opened=null)}
+        opening=viewModelScope.launch {
+            try {
+                val message=repo.message(id)?:error("Письмо не найдено.")
+                mutable.update{it.copy(opened=message)}
+                read(message)
+            }catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e))}
+        }
+    }
+    fun openDraft(id: String,onReady: (MailItem)->Unit)=work{onReady(repo.message(id)?:error("Черновик не найден."))}
     fun visible(active: Boolean) {
         if(!active){foreground?.cancel();foreground=null;return}
         if(foreground?.isActive==true)return
