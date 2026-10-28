@@ -24,7 +24,7 @@ jobs:
           java-version: '17'
           cache: gradle
       - name: Build APK and run unit tests
-        run: bash ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+        run: bash ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
       - name: Save APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -40,4 +40,5 @@ jobs:
           path: |
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/*.xml
+            app/build/reports/lint-results-debug.*
           retention-days: 14

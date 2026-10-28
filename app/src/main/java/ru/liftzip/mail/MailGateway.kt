@@ -46,27 +46,35 @@ class MailGateway(private val context: Context) {
         try { session(a).getTransport("smtp").use { it.connect(a.smtpHost,a.smtpPort,a.username,password) } }
         catch(e: Exception) { throw MailConnectionException("Исходящая почта SMTP",a.smtpHost,a.smtpPort,e) }
     }
-    fun inbox(a: MailAccount,password: String,cached: List<MailItem> = emptyList(),loadOlder: Boolean=false): InboxPage = store(a,password).use { store->
+    fun inbox(a: MailAccount,password: String,cached: List<MailItem> = emptyList(),loadOlder: Boolean=false,
+        pageSize: Int=InboxPaging.PAGE_SIZE,checkCancelled: ()->Unit={}): InboxPage = store(a,password).use { store->
         val folder=store.getFolder("INBOX") as IMAPFolder
         folder.open(Folder.READ_ONLY)
         try {
             val count=folder.messageCount
             if(count==0)return@use InboxPage(emptyList(),InboxHistory(0,false))
             // UID, unlike sequence number, survives arrivals and deletions between sessions.
-            val oldestUid=cached.filter{it.validity==folder.uidValidity && it.uid>0}.minOfOrNull{it.uid}
-            val retained=if(oldestUid==null)emptyList() else folder.getMessagesByUID(oldestUid,UIDFolder.LASTUID)
-                .filter{folder.getUID(it)>=oldestUid}
+            val validCache=cached.filter{it.validity==folder.uidValidity && it.uid>0}
+            val oldestUid=validCache.minOfOrNull{it.uid}
+            // History pages fetch only the next batch, not all previously downloaded bodies/headers.
+            val retained=if(oldestUid==null)emptyList() else if(loadOlder) {
+                folder.getMessageByUID(oldestUid)?.let{listOf(it)} ?: folder.getMessagesByUID(oldestUid,UIDFolder.LASTUID)
+                    .filter{folder.getUID(it)>=oldestUid}.take(1)
+            } else folder.getMessagesByUID(oldestUid,UIDFolder.LASTUID).filter{folder.getUID(it)>=oldestUid}
+            val extending=loadOlder && retained.isNotEmpty()
             val messages=if(retained.isEmpty()) {
-                val range=InboxPaging.latest(count)!!
+                val range=InboxPaging.latest(count,pageSize)!!
                 folder.getMessages(range.first,range.last).toList()
-            } else {
-                val range=if(loadOlder)InboxPaging.older(retained.minOf{it.messageNumber}) else null
-                (if(range==null)emptyList() else folder.getMessages(range.first,range.last).toList())+retained
-            }
+            } else if(loadOlder) {
+                val range=InboxPaging.older(retained.minOf{it.messageNumber},pageSize)
+                    ?:return@use InboxPage(validCache,InboxHistory(count,false))
+                folder.getMessages(range.first,range.last).toList()
+            } else retained
             folder.fetch(messages.toTypedArray(),FetchProfile().apply { add(FetchProfile.Item.ENVELOPE);add(FetchProfile.Item.FLAGS);add(UIDFolder.FetchProfileItem.UID) })
             val reader=MimeReader { Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString() }
             val cachedById=cached.associateBy { it.id }
             val items=messages.map { m->
+                checkCancelled()
                 (m as? IMAPMessage)?.setPeek(true)
                 val uid=folder.getUID(m)
                 val from=m.from?.firstOrNull() as? InternetAddress
@@ -76,7 +84,19 @@ class MailGateway(private val context: Context) {
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",content.text,
                     (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments)
             }
-            InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1))
+            InboxPage(if(extending)(validCache+items).associateBy{it.id}.values.toList() else items,
+                InboxHistory(count,messages.minOf{it.messageNumber}>1))
+        } finally { folder.close(false) }
+    }
+    fun flagsMany(a: MailAccount,password: String,messages: List<MailItem>,seen: Boolean): Set<Long> = store(a,password).use { store->
+        if(messages.isEmpty())return@use emptySet()
+        val folder=store.getFolder(messages.first().remoteFolder) as IMAPFolder
+        folder.open(Folder.READ_WRITE)
+        try {
+            require(messages.all{it.validity==folder.uidValidity}){"Папка изменилась. Обновите список писем."}
+            val remote=folder.getMessagesByUID(messages.map{it.uid}.distinct().toLongArray()).filterNotNull()
+            if(remote.isNotEmpty())folder.setFlags(remote.toTypedArray(),Flags(Flags.Flag.SEEN),seen)
+            remote.map{folder.getUID(it)}.toSet()
         } finally { folder.close(false) }
     }
     fun flags(a: MailAccount,password: String,m: MailItem,seen: Boolean?=null,starred: Boolean?=null) = store(a,password).use { store->

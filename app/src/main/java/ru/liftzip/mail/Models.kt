@@ -39,7 +39,7 @@ data class ComposeDraft(
 ) : java.io.Serializable
 
 enum class MailFolder(val label: String, val key: String) {
-    INBOX("Входящие", "inbox"), STARRED("Избранное", "starred"),
+    INBOX("Входящие", "inbox"), UNREAD("Непрочитанные", "unread"), STARRED("Избранное", "starred"),
     SENT("Отправленные", "sent"), DRAFTS("Черновики", "drafts")
 }
 
@@ -61,7 +61,7 @@ object MailRules {
         draft.attachments.sumOf { it.size.coerceAtLeast(0) } > 25 * 1024 * 1024 -> "Суммарный размер вложений — не более 25 МБ."
         else -> null
     }
-    fun validateAccount(account: MailAccount, password: String): String? = when {
+    fun validateAccount(account: MailAccount, password: String, passwordRequired: Boolean = true): String? = when {
         account.name.isBlank() -> "Укажите название ящика."
         account.senderName.any { it == '\r' || it == '\n' } -> "Имя отправителя должно быть одной строкой."
         !validEmail(account.email) -> "Проверьте адрес почты."
@@ -69,14 +69,18 @@ object MailRules {
         account.imapHost.isBlank() || account.smtpHost.isBlank() -> "Укажите адреса IMAP и SMTP."
         listOf(account.imapHost, account.smtpHost).any { it.contains('/') || it.contains(':') || it.any(Char::isWhitespace) } -> "Укажите имя сервера без https:// и номера порта."
         account.imapPort !in 1..65535 || account.smtpPort !in 1..65535 -> "Проверьте номера портов."
-        password.isBlank() -> "Введите пароль почты или пароль приложения."
+        passwordRequired && password.isBlank() -> "Введите пароль почты или пароль приложения."
         else -> null
     }
     fun filter(messages: List<MailItem>, accountId: String?, folder: MailFolder, query: String): List<MailItem> {
         val terms = query.lowercase().trim().split(Regex("\\s+")).filter(String::isNotBlank)
         return messages.filter { m ->
             (accountId == null || m.accountId == accountId) &&
-                (if (folder == MailFolder.STARRED) m.starred && m.localFolder != "drafts" else m.localFolder == folder.key) &&
+                (when(folder) {
+                    MailFolder.STARRED -> m.starred && m.localFolder != "drafts"
+                    MailFolder.UNREAD -> m.unread && m.localFolder != "drafts"
+                    else -> m.localFolder == folder.key
+                }) &&
                 terms.all { word -> "${m.sender} ${m.senderEmail} ${m.subject} ${m.body}".lowercase().contains(word) }
         }.sortedByDescending { it.date }
     }

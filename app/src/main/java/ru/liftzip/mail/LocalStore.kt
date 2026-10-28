@@ -29,6 +29,19 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName)
         writableDatabase.insertOrThrow("accounts",null,ContentValues().apply { put("id",a.id);put("data",j.toString()) })
     }
+    @Synchronized fun updateAccount(a: MailAccount,resetInbox: Boolean) {
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            val j=JSONObject().put("id",a.id).put("name",a.name).put("email",a.email).put("username",a.username)
+                .put("provider",a.provider.name).put("imapHost",a.imapHost).put("imapPort",a.imapPort).put("imapStartTls",a.imapStartTls)
+                .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName)
+            // UPDATE preserves the account row and its drafts/sent; REPLACE would cascade-delete them.
+            require(db.update("accounts",ContentValues().apply{put("data",j.toString())},"id = ?",arrayOf(a.id))==1)
+            if(resetInbox)db.delete("messages","account_id = ? AND folder = ?",arrayOf(a.id,"inbox"))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
     @Synchronized fun removeAccount(id: String) { writableDatabase.delete("accounts","id = ?",arrayOf(id)) }
     @Synchronized fun messages(): List<MailItem> = readableDatabase.rawQuery("SELECT data FROM messages",null).use { c -> buildList {
         while(c.moveToNext()) add(decodeMessage(JSONObject(c.getString(0))))
@@ -48,6 +61,22 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             items.forEach { putMessage(db,it) }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+    }
+    @Synchronized fun applyInbox(previous: List<MailItem>,items: List<MailItem>) {
+        val db=writableDatabase
+        val old=previous.associateBy{it.id}
+        val ids=items.map{it.id}.toSet()
+        db.beginTransaction()
+        try {
+            previous.filter{it.id !in ids}.forEach{db.delete("messages","id = ?",arrayOf(it.id))}
+            items.filter{old[it.id]!=it}.forEach{putMessage(db,it)}
+            db.setTransactionSuccessful()
+        } finally {db.endTransaction()}
+    }
+    @Synchronized fun putMessages(items: List<MailItem>) {
+        val db=writableDatabase
+        db.beginTransaction()
+        try {items.forEach{putMessage(db,it)};db.setTransactionSuccessful()}finally{db.endTransaction()}
     }
     private fun encodeMessage(m: MailItem) = JSONObject().put("id",m.id).put("account",m.accountId).put("uid",m.uid)
         .put("validity",m.validity).put("remoteFolder",m.remoteFolder).put("sender",m.sender).put("email",m.senderEmail)

@@ -1,43 +1,67 @@
 package ru.liftzip.mail
 
-import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.core.app.NotificationCompat
+import android.os.SystemClock
 import androidx.work.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.util.concurrent.TimeUnit
 
 class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(context,params) {
     override suspend fun doWork(): Result {
         val repo=(applicationContext as MailApplication).repository
         return try {
-            val result=repo.sync()
-            if(result.newUnread>0)notifyNewMail(result.newUnread)
-            // Authentication failures require the user, not endless retries.
+            repo.load()
+            if(repo.snapshot.value.poll.backgroundMinutes==0)return Result.success()
+            repo.sync()
             Result.success()
         }catch(e: CancellationException){throw e}catch(e: Exception){Result.retry()}
     }
-    private fun notifyNewMail(count: Int) {
-        if(Build.VERSION.SDK_INT>=33 && applicationContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return
-        val manager=applicationContext.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel("mail","Новые письма",NotificationManager.IMPORTANCE_DEFAULT))
-        val intent=PendingIntent.getActivity(applicationContext,0,Intent(applicationContext,MainActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        manager.notify(100,NotificationCompat.Builder(applicationContext,"mail").setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Новые письма").setContentText("Непрочитанных новых писем: $count")
-            .setContentIntent(intent).setAutoCancel(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build())
-    }
     companion object {
         fun schedule(context: Context) {
-            val work=PeriodicWorkRequestBuilder<MailWorker>(15,TimeUnit.MINUTES)
+            val minutes=context.getSharedPreferences("mail-settings",Context.MODE_PRIVATE).getInt("background-minutes",15)
+            if(minutes==0){cancel(context);return}
+            val work=PeriodicWorkRequestBuilder<MailWorker>(minutes.coerceAtLeast(15).toLong(),TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork("mail-poll",ExistingPeriodicWorkPolicy.KEEP,work)
+            // UPDATE applies a changed interval instead of retaining the old request forever.
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork("mail-poll",ExistingPeriodicWorkPolicy.UPDATE,work)
         }
         fun cancel(context: Context)=WorkManager.getInstance(context).cancelUniqueWork("mail-poll")
+    }
+}
+
+class HistoryWorker(context: Context,params: WorkerParameters): CoroutineWorker(context,params) {
+    override suspend fun doWork(): Result {
+        val generation=inputData.getString("generation")?:return Result.failure()
+        val repo=(applicationContext as MailApplication).repository
+        return try {
+            repo.load()
+            val failed=mutableSetOf<String>()
+            val started=SystemClock.elapsedRealtime()
+            while(true) {
+                currentCoroutineContext().ensureActive()
+                val step=repo.historyStep(generation,failed)
+                step.failedAccount?.let{failed+=it}
+                if(step.retry)return Result.retry()
+                if(!step.more)return Result.success()
+                if(SystemClock.elapsedRealtime()-started>=150_000) {
+                    // Chunked jobs resume from persisted UIDs without an hours-long worker.
+                    repo.waitHistory(generation)
+                    enqueue(applicationContext,generation,ExistingWorkPolicy.APPEND_OR_REPLACE)
+                    return Result.success()
+                }
+            }
+            @Suppress("UNREACHABLE_CODE") Result.success()
+        }catch(e: CancellationException){throw e}catch(e: Exception){Result.retry()}
+    }
+    companion object {
+        fun enqueue(context: Context,generation: String,policy: ExistingWorkPolicy=ExistingWorkPolicy.REPLACE) {
+            val work=OneTimeWorkRequestBuilder<HistoryWorker>()
+                .setInputData(workDataOf("generation" to generation))
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,10,TimeUnit.SECONDS).build()
+            WorkManager.getInstance(context).enqueueUniqueWork("mail-history",policy,work)
+        }
     }
 }
