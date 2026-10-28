@@ -9,10 +9,13 @@ import java.security.MessageDigest
 data class ForwardSource(val name: String,val mime: String,val size: Long,val open: ()->InputStream)
 
 /** Forwarded draft attachments must survive cache eviction and process restarts. */
-class ForwardAttachments(private val context: Context) {
+class ForwardAttachments(private val root: File, private val uriFor: (File)->String) {
+    constructor(context: Context):this(File(context.filesDir,"forwarded"),{ file->
+        FileProvider.getUriForFile(context,"${context.packageName}.attachments",file).toString()
+    })
     private fun directory(id: String): File {
         val key=MessageDigest.getInstance("SHA-256").digest(id.toByteArray()).joinToString(""){"%02x".format(it)}
-        return File(File(context.filesDir,"forwarded"),key)
+        return File(root,key)
     }
 
     fun prepare(draftId: String,sources: List<ForwardSource>): List<OutgoingFile> {
@@ -37,8 +40,7 @@ class ForwardAttachments(private val context: Context) {
                         output.write(buffer,0,count)
                     }
                 } }
-                val uri=FileProvider.getUriForFile(context,"${context.packageName}.attachments",target)
-                OutgoingFile(uri.toString(),source.name,AttachmentRules.mime(source.name,source.mime),length)
+                OutgoingFile(uriFor(target),source.name,AttachmentRules.mime(source.name,source.mime),length)
             }
         } catch(e: Exception) { folder.deleteRecursively();throw e }
     }
