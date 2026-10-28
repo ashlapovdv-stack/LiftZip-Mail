@@ -47,7 +47,19 @@ class MailRepository(private val context: Context) {
         notifications.history(state.value)
     }
     suspend fun load()=withContext(Dispatchers.IO){mutex.withLock{refresh()}}
-    suspend fun message(id: String): MailItem?=withContext(Dispatchers.IO){db.message(id)}
+    suspend fun message(id: String): MailItem?=withContext(Dispatchers.IO){
+        val cached=db.message(id)?:return@withContext null
+        if(cached.contentCached)return@withContext cached
+        mutex.withLock {
+            val current=db.message(id)?:return@withLock null
+            if(current.contentCached)return@withLock current
+            val account=db.accounts().find{it.id==current.accountId}?:error("Ящик не найден.")
+            val full=gateway.content(account,vault.open(account.id,account.secret),current)
+            db.putMessage(full)
+            refresh(messages=state.value.messages.map{if(it.id==id)MailContent.preview(full)else it})
+            full
+        }
+    }
     suspend fun search(query: String): Set<String> =withContext(Dispatchers.IO){
         val coroutine=currentCoroutineContext();db.search(query){coroutine.ensureActive()}
     }
@@ -91,6 +103,28 @@ class MailRepository(private val context: Context) {
         settings.edit().putInt("foreground-minutes",p.foregroundMinutes).putInt("background-minutes",p.backgroundMinutes).apply();refresh()
     }}
     suspend fun sync(): SyncResult=updateInboxes(null,false)
+    suspend fun syncUnread(accountId: String?): SyncResult=withContext(Dispatchers.IO){mutex.withLock{
+        val errors=mutableListOf<String>()
+        var messages=state.value.messages
+        db.accounts().filter{accountId==null || it.id==accountId}.forEach{account->
+            try {
+                currentCoroutineContext().ensureActive()
+                val old=messages.filter{it.accountId==account.id && SyncRules.remoteInbox(it)}
+                val coroutine=currentCoroutineContext()
+                val page=gateway.unread(account,vault.open(account.id,account.secret),old){coroutine.ensureActive()}
+                coroutine.ensureActive()
+                val merged=SyncRules.mergeUnread(old,page)
+                db.applyInbox(old,merged)
+                messages=messages.filterNot{it.accountId==account.id && SyncRules.remoteInbox(it)}+merged.map(MailContent::preview)
+                if(old.any{it.validity!=page.validity})syncPrefs.edit().putBoolean(account.id,false).putBoolean("older:${account.id}",true).apply()
+                syncPrefs.edit().putInt("count:${account.id}",page.total).putLong("checked:${account.id}",System.currentTimeMillis()).remove("error:${account.id}").apply()
+                refresh(messages=messages)
+            }catch(e: CancellationException){throw e}catch(e: Exception){
+                val error=friendlyError(e);errors+="${account.name}: $error";syncPrefs.edit().putString("error:${account.id}",error).apply()
+            }
+        }
+        refresh(messages=messages);SyncResult(0,errors)
+    }}
     suspend fun loadOlder(accountId: String?): SyncResult=updateInboxes(accountId,true)
     private suspend fun updateInboxes(accountId: String?,loadOlder: Boolean): SyncResult=withContext(Dispatchers.IO){mutex.withLock {
         val arrived=mutableSetOf<String>()
@@ -99,14 +133,17 @@ class MailRepository(private val context: Context) {
         db.accounts().filter{accountId==null || it.id==accountId}.forEach { a->
             if(loadOlder && !syncPrefs.getBoolean("older:${a.id}",true))return@forEach
             try {
-                val old=messages.filter { it.accountId==a.id && it.localFolder=="inbox" }
+                currentCoroutineContext().ensureActive()
+                val old=messages.filter { it.accountId==a.id && SyncRules.remoteInbox(it) }
                 val coroutine=currentCoroutineContext()
                 val page=gateway.inbox(a,vault.open(a.id,a.secret),old,loadOlder,checkCancelled={coroutine.ensureActive()})
-                if(!loadOlder)arrived+=SyncRules.newUnreadIds(old,page.messages,syncPrefs.getBoolean(a.id,false))
-                db.applyInbox(old,page.messages)
-                messages=messages.filterNot{it.accountId==a.id && it.localFolder=="inbox"}+page.messages.map(MailContent::preview)
+                if(!loadOlder)arrived+=SyncRules.newUnreadIds(old.filter{it.localFolder=="inbox"},page.messages,syncPrefs.getBoolean(a.id,false))
+                val merged=SyncRules.mergeWindow(old,page)
+                db.applyInbox(old,merged)
+                messages=messages.filterNot{it.accountId==a.id && SyncRules.remoteInbox(it)}+merged.map(MailContent::preview)
                 syncPrefs.edit().putBoolean(a.id,true).putInt("count:${a.id}",page.history.total?:page.messages.size).putBoolean("older:${a.id}",page.history.hasOlder).apply()
                 if(!loadOlder)syncPrefs.edit().putLong("checked:${a.id}",System.currentTimeMillis()).remove("error:${a.id}").apply()
+                refresh(arrived,messages)
             } catch(e: CancellationException){throw e}
             catch(e: Exception){val error=friendlyError(e);errors+="${a.name}: $error";syncPrefs.edit().putString("error:${a.id}",error).apply()}
         }
@@ -174,13 +211,14 @@ class MailRepository(private val context: Context) {
         }
         val account=accounts.first{it.id==accountId}
         try {
-            val old=state.value.messages.filter{it.accountId==accountId && it.localFolder=="inbox"}
+            val old=state.value.messages.filter{it.accountId==accountId && SyncRules.remoteInbox(it)}
             val coroutine=currentCoroutineContext()
             val page=gateway.inbox(account,vault.open(account.id,account.secret),old,loadOlder=true,pageSize=20,checkCancelled={coroutine.ensureActive()})
-            db.applyInbox(old,page.messages)
+            val merged=SyncRules.mergeWindow(old,page)
+            db.applyInbox(old,merged)
             syncPrefs.edit().putBoolean(accountId,true).putInt("count:$accountId",page.history.total?:page.messages.size).putBoolean("older:$accountId",page.history.hasOlder).apply()
             writeHistory(job.copy(status="running",error=if(skipped.isEmpty())"" else job.error))
-            refresh(messages=state.value.messages.filterNot{it.accountId==accountId && it.localFolder=="inbox"}+page.messages.map(MailContent::preview))
+            refresh(messages=state.value.messages.filterNot{it.accountId==accountId && SyncRules.remoteInbox(it)}+merged.map(MailContent::preview))
             HistoryStep(more=true)
         }catch(e: CancellationException){throw e}catch(e: Exception){
             writeHistory(job.copy(error="${account.name}: ${friendlyError(e)}"));refresh();HistoryStep(more=true,failedAccount=accountId)

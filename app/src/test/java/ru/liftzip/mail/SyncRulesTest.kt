@@ -58,13 +58,15 @@ class SyncRulesTest {
     }
     @Test fun editingPasswordDisplayNameOrSmtpPreservesIncomingCache() {
         val old=account("a")
-        assertTrue(SyncRules.sameInbox(old,old.copy(name="Work",senderName="Sales",secret="new",smtpHost="out.example.com",imapPort=143,imapStartTls=true)))
+        assertTrue(SyncRules.sameInbox(old,old.copy(name="Work",senderName="Sales",secret="new",smtpHost="out.example.com")))
         assertTrue(SyncRules.sameInbox(old,old.copy(imapHost="IMAP.EXAMPLE.COM")))
     }
     @Test fun anotherImapServerOrLoginRequiresANewIncomingCache() {
         val old=account("a")
         assertFalse(SyncRules.sameInbox(old,old.copy(imapHost="new.example.com")))
         assertFalse(SyncRules.sameInbox(old,old.copy(username="other@example.com")))
+        assertFalse(SyncRules.sameInbox(old,old.copy(imapPort=1993)))
+        assertFalse(SyncRules.sameInbox(old,old.copy(imapStartTls=true)))
     }
     @Test fun editingAnAccountCanRetainThePasswordButAddingCannotOmitIt() {
         assertNull(MailRules.validateAccount(account("a"),"",passwordRequired=false))
@@ -109,5 +111,41 @@ class SyncRulesTest {
         assertEquals(257,batches)
         assertEquals(5137,loaded.size)
         assertEquals((1..5137).toSet(),loaded.toSet())
+    }
+    @Test fun unreadServerResultsIncludeMailOutsideTheLoadedInboxWindow() {
+        val newest=mail("newest",folder="inbox",date=1000)
+        val oldest=mail("old-unread",folder="unread-cache",date=1).copy(contentCached=false)
+        val merged=SyncRules.mergeUnread(listOf(newest),UnreadPage(1,listOf(newest,oldest),1000))
+        assertEquals(setOf("newest","old-unread"),MailRules.filter(merged,"a",MailFolder.UNREAD,"").map{it.id}.toSet())
+        assertEquals(listOf("newest"),MailRules.filter(merged,"a",MailFolder.INBOX,"").map{it.id})
+    }
+    @Test fun serverReadStatusRemovesMailFromUnreadWithoutRemovingLoadedHistory() {
+        val merged=SyncRules.mergeUnread(listOf(mail("read-elsewhere"),mail("still-unread")),UnreadPage(1,listOf(mail("still-unread")),2))
+        assertEquals(setOf("read-elsewhere","still-unread"),merged.map{it.id}.toSet())
+        assertFalse(merged.first{it.id=="read-elsewhere"}.unread)
+    }
+    @Test fun unreadValidityResetDiscardsHeadersFromThePreviousMailboxEpoch() {
+        val merged=SyncRules.mergeUnread(listOf(mail("old",validity=1)),UnreadPage(2,listOf(mail("fresh",validity=2)),10))
+        assertEquals(listOf("fresh"),merged.map{it.id})
+    }
+    @Test fun aSparseUnreadResultDoesNotBecomeTheHistoryWindowBoundary() {
+        val old=mail("old-unread",folder="unread-cache",date=1)
+        val latest=mail("latest",date=1000)
+        val merged=SyncRules.mergeWindow(listOf(old,latest),InboxPage(listOf(latest),InboxHistory(1000,true)))
+        assertEquals(1000L,merged.filter{it.localFolder=="inbox"}.minOf{it.uid})
+        assertEquals("unread-cache",merged.first{it.id=="old-unread"}.localFolder)
+    }
+    @Test fun loadingHistoryPromotesAnExistingUnreadHeaderWithoutDuplicates() {
+        val header=mail("same",folder="unread-cache").copy(contentCached=false)
+        val full=header.copy(localFolder="inbox",body="Full text",contentCached=true)
+        val merged=SyncRules.mergeWindow(listOf(header),InboxPage(listOf(full),InboxHistory(1,false)))
+        assertEquals(listOf(full),merged)
+    }
+    @Test fun anEmptyRemoteInboxClearsBothItsHistoryAndUnreadHeaders() {
+        assertTrue(SyncRules.mergeWindow(listOf(mail("latest"),mail("old",folder="unread-cache")),InboxPage(emptyList(),InboxHistory(0,false))).isEmpty())
+    }
+    @Test fun unreadFolderHasNoHundredMessageLimit() {
+        val messages=(1..5137).map{mail("message-$it",folder="unread-cache",date=it.toLong()).copy(contentCached=false)}
+        assertEquals(5137,MailRules.filter(messages,"a",MailFolder.UNREAD,"").size)
     }
 }

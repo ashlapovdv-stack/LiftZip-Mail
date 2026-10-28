@@ -22,6 +22,17 @@ data class FlagChange(val updated: Set<String>, val errors: List<String>)
 data class HistoryStep(val more: Boolean = false, val failedAccount: String? = null, val retry: Boolean = false)
 
 object SyncRules {
+    fun remoteInbox(message: MailItem)=message.localFolder=="inbox" || message.localFolder=="unread-cache"
+    fun mergeWindow(cached: List<MailItem>,page: InboxPage): List<MailItem> {
+        val validity=page.messages.firstOrNull()?.validity
+        val ids=page.messages.map{it.id}.toSet()
+        val separate=cached.filter{it.localFolder=="unread-cache" && it.validity==validity && it.id !in ids}
+        return separate+page.messages
+    }
+    fun mergeUnread(cached: List<MailItem>,page: UnreadPage): List<MailItem> {
+        val ids=page.messages.map{it.id}.toSet()
+        return cached.filter{it.validity==page.validity && it.id !in ids}.map{it.copy(unread=false)}+page.messages
+    }
     fun pendingNotifications(previous: Set<String>, arrived: Set<String>, messages: List<MailItem>): Set<String> {
         val unread = messages.asSequence().filter { it.localFolder == "inbox" && it.unread }.map { it.id }.toSet()
         return (previous + arrived).intersect(unread)
@@ -34,7 +45,8 @@ object SyncRules {
     }
 
     fun sameInbox(old: MailAccount, updated: MailAccount) =
-        old.imapHost.equals(updated.imapHost, true) && old.username == updated.username
+        old.imapHost.equals(updated.imapHost, true) && old.username == updated.username &&
+            old.imapPort == updated.imapPort && old.imapStartTls == updated.imapStartTls
 
     fun newUnreadIds(old: List<MailItem>, incoming: List<MailItem>, initialized: Boolean): Set<String> {
         if (!initialized) return emptySet()

@@ -7,6 +7,7 @@ import jakarta.activation.DataHandler
 import jakarta.activation.DataSource
 import jakarta.mail.*
 import jakarta.mail.internet.*
+import jakarta.mail.search.FlagTerm
 import org.eclipse.angus.mail.imap.IMAPFolder
 import org.eclipse.angus.mail.imap.IMAPMessage
 import java.io.FilterInputStream
@@ -54,7 +55,7 @@ class MailGateway(private val context: Context) {
             val count=folder.messageCount
             if(count==0)return@use InboxPage(emptyList(),InboxHistory(0,false))
             // UID, unlike sequence number, survives arrivals and deletions between sessions.
-            val validCache=cached.filter{it.validity==folder.uidValidity && it.uid>0}
+            val validCache=cached.filter{it.validity==folder.uidValidity && it.uid>0 && it.localFolder=="inbox"}
             val oldestUid=validCache.minOfOrNull{it.uid}
             // History pages fetch only the next batch, not all previously downloaded bodies/headers.
             val retained=if(oldestUid==null)emptyList() else if(loadOlder) {
@@ -79,14 +80,47 @@ class MailGateway(private val context: Context) {
                 val uid=folder.getUID(m)
                 val from=m.from?.firstOrNull() as? InternetAddress
                 val existing=cachedById["${a.id}:${folder.uidValidity}:$uid"]
-                val content=if(existing!=null)DecodedMail(existing.body,existing.attachments) else reader.read(m)
+                val reused=existing?.takeIf{it.contentCached}
+                val content=if(reused!=null)DecodedMail(reused.body,reused.attachments) else reader.read(m)
                 MailItem("${a.id}:${folder.uidValidity}:$uid",a.id,uid,folder.uidValidity,"INBOX",from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",content.text,
-                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=existing?.previewOnly?:false)
+                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=reused?.previewOnly?:false)
             }
             InboxPage(if(extending)(validCache+items).associateBy{it.id}.values.toList() else items,
                 InboxHistory(count,messages.minOf{it.messageNumber}>1))
         } finally { folder.close(false) }
+    }
+    fun unread(a: MailAccount,password: String,cached: List<MailItem>,checkCancelled: ()->Unit={}): UnreadPage=store(a,password).use{store->
+        val folder=store.getFolder("INBOX") as IMAPFolder
+        folder.open(Folder.READ_ONLY)
+        try {
+            val messages=folder.search(FlagTerm(Flags(Flags.Flag.SEEN),false))
+            if(messages.isNotEmpty())folder.fetch(messages,FetchProfile().apply{add(FetchProfile.Item.ENVELOPE);add(FetchProfile.Item.FLAGS);add(UIDFolder.FetchProfileItem.UID)})
+            val byId=cached.associateBy{it.id}
+            val items=messages.map{m->
+                checkCancelled()
+                val uid=folder.getUID(m)
+                val id="${a.id}:${folder.uidValidity}:$uid"
+                val existing=byId[id]
+                val from=m.from?.firstOrNull() as? InternetAddress
+                MailItem(id,a.id,uid,folder.uidValidity,"INBOX",from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
+                    HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",existing?.body.orEmpty(),
+                    (m.receivedDate?:m.sentDate)?.time?:0L,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),localFolder=existing?.localFolder?:"unread-cache",
+                    attachments=existing?.attachments.orEmpty(),previewOnly=existing?.previewOnly?:false,contentCached=existing?.contentCached?:false)
+            }
+            UnreadPage(folder.uidValidity,items,folder.messageCount)
+        }finally{folder.close(false)}
+    }
+    fun content(a: MailAccount,password: String,message: MailItem): MailItem=store(a,password).use{store->
+        val folder=store.getFolder(message.remoteFolder) as IMAPFolder
+        folder.open(Folder.READ_ONLY)
+        try {
+            require(folder.uidValidity==message.validity){"Папка изменилась. Обновите список писем."}
+            val remote=folder.getMessageByUID(message.uid)?:error("Письмо перемещено или удалено на сервере.")
+            (remote as? IMAPMessage)?.setPeek(true)
+            val decoded=MimeReader{Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
+            message.copy(body=decoded.text,attachments=decoded.attachments,previewOnly=false,contentCached=true)
+        }finally{folder.close(false)}
     }
     fun flagsMany(a: MailAccount,password: String,messages: List<MailItem>,seen: Boolean): Set<Long> = store(a,password).use { store->
         if(messages.isEmpty())return@use emptySet()

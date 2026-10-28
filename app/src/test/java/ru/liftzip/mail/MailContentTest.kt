@@ -43,4 +43,8 @@ class MailContentTest {
         assertTrue(MailContent.matches(mail("Total amount"),listOf("sender","invoice","amount")))
         assertFalse(MailContent.matches(mail("Total amount"),listOf("sender","missing")))
     }
+    @Test fun changingHeaderReadStatusDoesNotPretendItsBodyWasDownloaded() {
+        val header=mail("").copy(previewOnly=true,contentCached=false,unread=false)
+        assertFalse(MailContent.forStorage(header,"").contentCached)
+    }
 }

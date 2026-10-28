@@ -115,6 +115,7 @@ private val Paper=Color(0xFFF8F9F6)
     }
     LaunchedEffect(s.notice){s.notice?.let { snack.showSnackbar(it,duration=SnackbarDuration.Long);vm.dismissNotice() }}
     LaunchedEffect(route,selected){if(route=="reader")selected?.let(vm::openMessage)}
+    LaunchedEffect(route,folder,currentAccount){vm.showUnread(route=="inbox" && folder==MailFolder.UNREAD,currentAccount)}
     BackHandler(enabled=route!="inbox") {
         val d=draft
         if(route=="edit"){route="settings";editing=null}
@@ -246,7 +247,7 @@ private val Paper=Color(0xFFF8F9F6)
                 IconButton(onClick={mark(true)},enabled=!s.busy){Icon(Icons.Outlined.MarkEmailUnread,"Отметить непрочитанными")}
             }) else TopAppBar(title={Column{Text(folder.label,fontWeight=FontWeight.Bold);Text(current?.name?:"Все ящики",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
                 navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}},actions={
-                    IconButton(onClick=onRefresh,enabled=!s.refreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
+                    IconButton(onClick=onRefresh,enabled=!s.refreshing && !s.unreadRefreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
                 })
         },floatingActionButton={if(!selectionMode)ExtendedFloatingActionButton(onClick=onCompose,icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})},
             bottomBar={NavigationBar{MailFolder.entries.forEach{f->NavigationBarItem(selected=f==folder,onClick={onFolder(f)},icon={Icon(folderIcon(f),null)},label={Text(f.label,fontSize=10.sp)},alwaysShowLabel=true)}}}){padding->
@@ -262,7 +263,7 @@ private val Paper=Color(0xFFF8F9F6)
                 if(folder==MailFolder.INBOX || folder==MailFolder.UNREAD)TextButton(onClick=onHistory,modifier=Modifier.padding(horizontal=10.dp)) {
                     Icon(Icons.Outlined.Download,null,Modifier.size(18.dp));Spacer(Modifier.width(8.dp));Text(if(s.historyDownload.active)"История загружается · посмотреть" else "Загрузить всю историю")
                 }
-                PullToRefreshBox(isRefreshing=s.refreshing,onRefresh=onRefresh,modifier=Modifier.weight(1f)) {
+                PullToRefreshBox(isRefreshing=s.refreshing || s.unreadRefreshing,onRefresh=onRefresh,modifier=Modifier.weight(1f)) {
                     LazyColumn(Modifier.fillMaxSize(),state=memory.list,contentPadding=PaddingValues(bottom=100.dp)) {
                         if(visible.isEmpty())item(key="empty") {Box(Modifier.fillMaxWidth().padding(vertical=30.dp),contentAlignment=Alignment.Center) {
                             Column(horizontalAlignment=Alignment.CenterHorizontally,modifier=Modifier.padding(24.dp)) {
@@ -314,7 +315,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     Text(displayDate(m.date),Modifier.padding(start=8.dp),style=MaterialTheme.typography.labelSmall,color=if(m.unread)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(4.dp));Text(m.subject.ifBlank{"Без темы"},maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=if(m.unread)FontWeight.Bold else FontWeight.Normal,fontSize=14.sp)
-                Text(m.body.replace('\n',' ').trim(),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=3.dp))
+                Text(if(!m.contentCached)"Текст загрузится при открытии" else m.body.replace('\n',' ').trim(),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=3.dp))
                 Row(Modifier.padding(top=7.dp),verticalAlignment=Alignment.CenterVertically) {
                     if(m.unread){Box(Modifier.size(7.dp).background(MaterialTheme.colorScheme.primary,CircleShape));Spacer(Modifier.width(5.dp))}
                     Text((if(m.unread)"Не прочитано · " else "")+account?.name.orEmpty(),Modifier.weight(1f,fill=false),maxLines=1,overflow=TextOverflow.Ellipsis,
@@ -415,7 +416,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
             error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
-            if(initial!=null && (!initial.imapHost.equals(imap,true) || initial.username!=user.ifBlank{email}.trim()))InfoCard("При смене IMAP-сервера или логина входящие будут загружены заново. Черновики и отправленные сохранятся.")
+            if(initial!=null && (!initial.imapHost.equals(imap,true) || initial.username!=user.ifBlank{email}.trim() || initial.imapPort.toString()!=imapPort || initial.imapStartTls!=imapTls))InfoCard("При смене параметров IMAP или логина входящие будут загружены заново. Черновики и отправленные сохранятся.")
             Button(onClick={val a=MailAccount(id=initial?.id?:java.util.UUID.randomUUID().toString(),name=name.trim(),email=email.trim(),username=user.ifBlank{email}.trim(),provider=provider,imapHost=imap,imapPort=imapPort.toIntOrNull()?:0,imapStartTls=imapTls,smtpHost=smtp,smtpPort=smtpPort.toIntOrNull()?:0,smtpStartTls=smtpTls,senderName=senderName.trim().ifBlank{name})
                 val pw=if(provider==Provider.GMAIL)password.replace(" ","") else password
                 error=MailRules.validateAccount(a,pw,passwordRequired=initial==null);if(error==null)onAdd(a,pw)},enabled=!busy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(busy)"Проверяем соединение…" else if(initial==null)"Проверить и подключить" else "Проверить и сохранить")}

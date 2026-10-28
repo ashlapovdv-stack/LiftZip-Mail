@@ -38,7 +38,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
                 .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName)
             // UPDATE preserves the account row and its drafts/sent; REPLACE would cascade-delete them.
             require(db.update("accounts",ContentValues().apply{put("data",j.toString())},"id = ?",arrayOf(a.id))==1)
-            if(resetInbox)db.delete("messages","account_id = ? AND folder = ?",arrayOf(a.id,"inbox"))
+            if(resetInbox)db.delete("messages","account_id = ? AND folder IN (?, ?)",arrayOf(a.id,"inbox","unread-cache"))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -98,7 +98,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
     private fun encodeMessage(m: MailItem) = JSONObject().put("id",m.id).put("account",m.accountId).put("uid",m.uid)
         .put("validity",m.validity).put("remoteFolder",m.remoteFolder).put("sender",m.sender).put("email",m.senderEmail)
         .put("to",m.recipients).put("subject",m.subject).put("body",m.body).put("date",m.date).put("unread",m.unread)
-        .put("starred",m.starred).put("folder",m.localFolder).put("delivery",m.delivery)
+        .put("starred",m.starred).put("folder",m.localFolder).put("delivery",m.delivery).put("contentCached",m.contentCached)
         .put("attachments",JSONArray().apply { m.attachments.forEach { a->put(JSONObject().put("path",a.path).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
         .put("outgoing",JSONArray().apply { m.outgoing.forEach { a->put(JSONObject().put("uri",a.uri).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
     private fun decodeMessage(j: JSONObject,preview: Boolean=false): MailItem {
@@ -108,6 +108,6 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             HeaderText.decode(j.getString("sender")),j.getString("email"),HeaderText.recipients(j.getString("to")),HeaderText.decode(j.getString("subject")),j.getString("body").let{if(preview)it.take(MailContent.PREVIEW_LENGTH)else it},j.getLong("date"),
             j.getBoolean("unread"),j.getBoolean("starred"),j.getString("folder"),
             List(attachments.length()) { i-> val a=attachments.getJSONObject(i);Attachment(a.getString("path"),a.getString("name"),a.getString("mime"),a.getInt("size")) },
-            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview)
+            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true))
     }
 }

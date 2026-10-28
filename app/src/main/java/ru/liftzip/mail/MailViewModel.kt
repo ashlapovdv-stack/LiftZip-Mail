@@ -14,7 +14,9 @@ import kotlinx.coroutines.isActive
 data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = emptyList(),val messages: List<MailItem> = emptyList(),val history: Map<String,InboxHistory> = emptyMap(),val defaultAccountId: String?=null,
     val poll: PollSettings=PollSettings(),val historyDownload: HistoryDownload=HistoryDownload(),val checks: Map<String,SyncCheck> = emptyMap(),
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
-    val refreshing: Boolean=false,val busy: Boolean=false,val notice: String?=null)
+    val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: String?=null)
+
+private data class UnreadScope(val enabled: Boolean=false,val accountId: String?=null)
 
 class MailViewModel(app: Application): AndroidViewModel(app) {
     private val repo=(app as MailApplication).repository
@@ -23,6 +25,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     private var checking: Job?=null
     private var opening: Job?=null
     private val query=MutableStateFlow("")
+    private val unreadScope=MutableStateFlow(UnreadScope())
     val state=mutable.asStateFlow()
     init {
         viewModelScope.launch {
@@ -39,6 +42,15 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
                 }
             }
         }
+        viewModelScope.launch {
+            combine(unreadScope,state.map{it.loaded}.distinctUntilChanged()){scope,loaded->scope to loaded}.distinctUntilChanged().collectLatest{(scope,loaded)->
+                if(!loaded || !scope.enabled)return@collectLatest
+                mutable.update{it.copy(unreadRefreshing=true)}
+                try {val result=repo.syncUnread(scope.accountId);if(result.errors.isNotEmpty())notice(result.errors.joinToString("\n"))}
+                catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e))}
+                finally{mutable.update{it.copy(unreadRefreshing=false)}}
+            }
+        }
         work {
             repo.load()
             mutable.update { it.copy(loaded=true) }
@@ -46,6 +58,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
     }
     fun search(text: String){query.value=text}
+    fun showUnread(enabled: Boolean,accountId: String?){unreadScope.value=UnreadScope(enabled,accountId)}
     fun openMessage(id: String) {
         opening?.cancel()
         if(mutable.value.opened?.id!=id)mutable.update{it.copy(opened=null)}
@@ -102,7 +115,10 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             mutable.update{it.copy(refreshing=true)}
             try {
                 val result=repo.sync()
-                if(manual)notice(if(result.errors.isEmpty())"Почта обновлена" else result.errors.joinToString("\n"))
+                val scope=unreadScope.value
+                val errors=result.errors.toMutableList()
+                if(scope.enabled && !mutable.value.unreadRefreshing)errors+=repo.syncUnread(scope.accountId).errors
+                if(manual)notice(if(errors.isEmpty())"Почта обновлена" else errors.distinct().joinToString("\n"))
             }catch(e: CancellationException){throw e}catch(e: Exception){if(manual)notice(friendlyError(e))}
             finally{mutable.update{it.copy(refreshing=false)}}
         }

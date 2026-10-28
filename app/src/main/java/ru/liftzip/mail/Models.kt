@@ -23,13 +23,14 @@ data class OutgoingFile(val uri: String, val name: String, val mime: String, val
 data class OpenedAttachment(val uri: String, val name: String, val mime: String) : java.io.Serializable
 data class InboxHistory(val total: Int? = null, val hasOlder: Boolean = true)
 data class InboxPage(val messages: List<MailItem>, val history: InboxHistory)
+data class UnreadPage(val validity: Long,val messages: List<MailItem>,val total: Int)
 data class MailItem(
     val id: String, val accountId: String, val uid: Long = 0, val validity: Long = 0,
     val remoteFolder: String = "INBOX", val sender: String, val senderEmail: String,
     val recipients: String, val subject: String, val body: String, val date: Long,
     val unread: Boolean = false, val starred: Boolean = false, val localFolder: String = "inbox",
     val attachments: List<Attachment> = emptyList(), val outgoing: List<OutgoingFile> = emptyList(),
-    val delivery: String = "", val previewOnly: Boolean = false
+    val delivery: String = "", val previewOnly: Boolean = false, val contentCached: Boolean = true
 )
 
 data class ComposeDraft(
