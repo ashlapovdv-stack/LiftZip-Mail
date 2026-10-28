@@ -9,6 +9,9 @@ object ReplyText {
     private val weekdays = Regex("^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье),?\\s+\\d.*", RegexOption.IGNORE_CASE)
     private val original = Regex("^-{2,}\\s*(Original Message|Исходное сообщение)\\s*-{2,}$", RegexOption.IGNORE_CASE)
     private val date = Regex("\\b\\d{1,4}\\b")
+    private val headerEnd = Regex("(?:\\bwrote|(?<!\\p{L})писал(?:а|\\(а\\))?):\\s*$", RegexOption.IGNORE_CASE)
+    private val englishEnd = Regex("\\bwrote:\\s*$", RegexOption.IGNORE_CASE)
+    private val russianEnd = Regex("(?<!\\p{L})писал(?:а|\\(а\\))?:\\s*$", RegexOption.IGNORE_CASE)
 
     fun split(body: String): ReplyParts {
         val text = body.replace("\r\n", "\n").replace('\r', '\n')
@@ -18,10 +21,10 @@ object ReplyText {
             val line = lines[index].trim()
             val following = lines.subList(index + 1,minOf(index + 5,lines.size)).firstOrNull { it.isNotBlank() }?.trim().orEmpty()
             val headerLines = lines.subList(index,minOf(index + 4,lines.size))
-            val end = headerLines.indexOfFirst { Regex("(?:\\bwrote|\\bписал(?:а|\\(а\\))?):\\s*$",RegexOption.IGNORE_CASE).containsMatchIn(it) }
+            val end = headerLines.indexOfFirst { headerEnd.containsMatchIn(it) }
             val header = if(end<0)"" else headerLines.take(end + 1).joinToString(" ") { it.trim() }
-            val english = line.startsWith("On ") && date.containsMatchIn(header) && Regex("\\bwrote:\\s*$").containsMatchIn(header)
-            val russian = date.containsMatchIn(header) && Regex("\\bписал(?:а|\\(а\\))?:\\s*$", RegexOption.IGNORE_CASE).containsMatchIn(header)
+            val english = line.startsWith("On ") && date.containsMatchIn(header) && englishEnd.containsMatchIn(header)
+            val russian = line.firstOrNull()?.isDigit()==true && date.containsMatchIn(line) && russianEnd.containsMatchIn(header)
             val mailRu = weekdays.matches(line) && following.startsWith("от ", true) && following.contains('@')
             val ours = line == "──────────" && following.endsWith("пишет:")
             if (english || russian || mailRu || ours || original.matches(line)) {

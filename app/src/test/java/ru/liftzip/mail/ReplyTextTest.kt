@@ -50,4 +50,9 @@ class ReplyTextTest {
         assertEquals("Принято",parts.current)
         assertTrue(parts.canCollapse)
     }
+    @Test fun attributionLookaheadNeverConsumesTheNewReplyBeforeItsDateLine() {
+        val parts=ReplyText.split("Новый ответ\nНужно 2 детали\n\n28 октября 2026 г. Клиент <a@example.com> писал:\n> Старое")
+        assertEquals("Новый ответ\nНужно 2 детали",parts.current)
+        assertTrue(parts.canCollapse)
+    }
 }

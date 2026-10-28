@@ -9,7 +9,17 @@ object HeaderText {
     fun decode(value: String): String = runCatching { MimeUtility.decodeText(value) }.getOrDefault(value)
 
     fun addresses(values: Array<out Address>?): String = values?.joinToString(", ") { address ->
-        if (address is InternetAddress) address.toUnicodeString() else decode(address.toString())
+        if (address !is InternetAddress) decode(address.toString())
+        else {
+            val name=address.personal?.let(::decode).orEmpty()
+            val email=address.address.orEmpty()
+            // Transport formatting unnecessarily quotes every Cyrillic name. This is UI text.
+            if(name.isBlank() || email.isBlank())decode(address.toUnicodeString())
+            else {
+                val display=if(name.any{it in ",;\"<>\\"})"\""+name.replace("\\","\\\\").replace("\"","\\\"")+"\"" else name
+                "$display <$email>"
+            }
+        }
     }.orEmpty()
 
     // Also fixes headers already cached by version 0.1, without deleting the mailbox.
