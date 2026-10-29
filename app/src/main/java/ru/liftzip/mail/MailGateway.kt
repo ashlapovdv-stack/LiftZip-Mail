@@ -34,6 +34,7 @@ class MailGateway(private val context: Context) {
             setProperty("mail.$imap.ssl.checkserveridentity","true")
             setProperty("mail.$imap.peek","true")
             setProperty("mail.$imap.partialfetch","true")
+            setProperty("mail.$imap.fetchsize","65536")
             if(a.imapStartTls){setProperty("mail.imap.starttls.enable","true");setProperty("mail.imap.starttls.required","true")}
             setProperty("mail.smtp.auth","true")
             setProperty("mail.smtp.connectiontimeout","15000")
@@ -59,7 +60,7 @@ class MailGateway(private val context: Context) {
         folder.open(Folder.READ_ONLY)
         try {
             val count=folder.messageCount
-            if(count==0)return@use InboxPage(emptyList(),InboxHistory(0,false),folder.uidValidity)
+            if(count==0)return@use InboxPage(emptyList(),InboxHistory(0,false,0),folder.uidValidity)
             // UID, unlike sequence number, survives arrivals and deletions between sessions.
             val validCache=cached.filter{it.validity==folder.uidValidity && it.uid>0 && it.localFolder=="inbox"}
             val oldestUid=validCache.minOfOrNull{it.uid}
@@ -95,7 +96,8 @@ class MailGateway(private val context: Context) {
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",content.text,
                     (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false)
             }
-            InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1),folder.uidValidity)
+            val unread=if(loadOlder)null else folder.unreadMessageCount.takeIf{it>=0}
+            InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1,unread),folder.uidValidity)
         } finally { folder.close(false) }
     }
     fun unread(a: MailAccount,password: String,cached: List<MailItem>,checkCancelled: ()->Unit={}): UnreadPage=store(a,password,fast=true).use{store->

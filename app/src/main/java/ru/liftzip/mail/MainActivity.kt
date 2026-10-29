@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -78,8 +79,8 @@ private val Paper=Color(0xFFF8F9F6)
 
 @Composable private fun MailTheme(content: @Composable ()->Unit) {
     val dark=isSystemInDarkTheme()
-    val colors=if(dark)darkColorScheme(primary=Color(0xFFBDD0B2),secondary=Color(0xFFD5D8B8),surface=Color(0xFF171B16),background=Color(0xFF111510))
-    else lightColorScheme(primary=Olive,secondary=Color(0xFF69775F),primaryContainer=Color(0xFFE4EBD9),surface=Paper,background=Paper,surfaceContainer=Color(0xFFF0F2EB))
+    val colors=if(dark)darkColorScheme(primary=Color(0xFFBDD0B2),secondary=Color(0xFFD5D8B8),secondaryContainer=Color(0xFF354332),onSecondaryContainer=Color(0xFFE2EADB),surface=Color(0xFF171B16),background=Color(0xFF111510))
+    else lightColorScheme(primary=Olive,secondary=Color(0xFF69775F),secondaryContainer=Color(0xFFE3E8DC),onSecondaryContainer=Color(0xFF293525),primaryContainer=Color(0xFFE4EBD9),surface=Paper,background=Paper,surfaceContainer=Color(0xFFF0F2EB))
     MaterialTheme(colorScheme=colors,content=content)
 }
 
@@ -111,7 +112,7 @@ private val Paper=Color(0xFFF8F9F6)
             val uri=Uri.parse(file.uri)
             context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,file.mime)
                 .apply{clipData=ClipData.newRawUri(file.name,uri)}.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-        }.onFailure { vm.notice("Не удалось открыть файл. Установите приложение для просмотра этого формата или сохраните вложение.") }
+        }.onFailure { vm.notice("Не удалось открыть файл. Установите приложение для просмотра этого формата или сохраните вложение.",error=true) }
     }
     fun openFile(file: OpenedAttachment) {
         if(AttachmentRules.canPreview(file.mime)){preview=file;route="preview"}else openExternal(file)
@@ -134,7 +135,7 @@ private val Paper=Color(0xFFF8F9F6)
             onNotificationConsumed()
         }
     }
-    LaunchedEffect(s.notice){s.notice?.let { snack.showSnackbar(it,duration=SnackbarDuration.Long);vm.dismissNotice() }}
+    LaunchedEffect(s.notice?.id){s.notice?.let { snack.showSnackbar(NoticeVisuals(it));vm.dismissNotice(it.id) }}
     LaunchedEffect(route,selected){if(route=="reader")selected?.let(vm::openMessage)}
     LaunchedEffect(route,folder,currentAccount){vm.showUnread(route=="inbox" && folder==MailFolder.UNREAD,currentAccount)}
     BackHandler(enabled=route!="inbox") {
@@ -142,11 +143,11 @@ private val Paper=Color(0xFFF8F9F6)
         if(route=="edit"){route="settings";editing=null}
         else if(route=="history")route=historyReturn
         else if(route=="preview"){preview=null;route="reader"}
-        else if(route=="compose" && d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()))vm.saveDraft(d){draft=null;goInbox()}
+        else if(route=="compose" && d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))vm.saveDraft(d){draft=null;goInbox()}
         else goInbox()
     }
     Scaffold(snackbarHost={SnackbarHost(snack,Modifier.navigationBarsPadding().imePadding()
-        .padding(start=8.dp,end=8.dp,bottom=if(route=="inbox" && s.accounts.isNotEmpty() || route=="compose")80.dp else 12.dp))},contentWindowInsets=WindowInsets(0,0,0,0)) { outer->
+        .padding(start=12.dp,end=12.dp,bottom=if(route=="inbox" && s.accounts.isNotEmpty() || route=="compose")88.dp else 12.dp)){ServiceSnackbar(it)}},contentWindowInsets=WindowInsets(0,0,0,0)) { outer->
         Box(Modifier.fillMaxSize().padding(outer)) {
             when {
                 !s.loaded -> Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){CircularProgressIndicator()}
@@ -166,8 +167,14 @@ private val Paper=Color(0xFFF8F9F6)
                     onNotificationPermission={if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         else context.startActivity(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName).putExtra(Settings.EXTRA_CHANNEL_ID,MailNotifications.CHANNEL))},onTestNotification=vm::testNotification,onCheck=vm::refresh)
                 route=="preview" && preview!=null -> AttachmentPreviewScreen(preview!!,onBack={preview=null;route="reader"},onExternal={openExternal(preview!!)})
-                route=="compose" && draft!=null -> ComposeScreen(draft!!,s,onChange={draft=it},onBack={vm.saveDraft(draft!!){draft=null;goInbox()}},
-                    onDelete={vm.deleteDraft(draft!!.id){draft=null;goInbox()}},onSend={vm.send(draft!!){draft=null;goInbox()}})
+                route=="compose" && draft!=null -> {
+                    val editor=draft!!
+                    val stored=s.messages.find{it.id==editor.id}
+                    val active=editor.copy(forwarding=s.forwarding[editor.id]?:stored?.forwarding?:editor.forwarding)
+                    ComposeScreen(active,s,onChange={draft=it},onBack={vm.saveDraft(active){draft=null;goInbox()}},
+                        onDelete={vm.deleteDraft(active.id){draft=null;goInbox()}},onSend={vm.send(active){draft=null;goInbox()}},
+                        onRetryForward={vm.retryForward(active.id)},onRemoveForward={vm.removeForwardFile(active.id,it)})
+                }
                 route=="reader" -> {
                     val summary=s.messages.find{it.id==selected}
                     val message=s.opened?.takeIf{it.id==selected}?.let{full->summary?.let{full.copy(unread=it.unread,starred=it.starred)}}?:summary
@@ -187,10 +194,10 @@ private val Paper=Color(0xFFF8F9F6)
                 else -> {
                     val memoryKey="${currentAccount?:"all"}:${folder.name}"
                     val memory=inboxMemory.getOrPut(memoryKey){InboxMemory()}
-                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,memory,onAccount={currentAccount=it},onEnable=vm::setAccountEnabled,onFolder={folder=it},onAdd={route="add"},
+                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,memory,onAccount={currentAccount=it},onEnable=vm::setAccountEnabled,onFolder={folder=it},onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
                     onSettings={route="settings"},onRefresh=vm::refresh,onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onSearch=vm::search,onOpen={m->
                         selected=m.id
-                        if(m.localFolder=="drafts")vm.openDraft(m.id){full->if(route=="inbox" && selected==full.id)compose(ComposeDraft(full.id,full.accountId,full.recipients,full.subject,full.body,full.outgoing,previousDeliveryUncertain=full.delivery in listOf("sending","uncertain")))}
+                        if(m.localFolder=="drafts")vm.openDraft(m.id){full->if(route=="inbox" && selected==full.id)compose(ComposeDraft(full.id,full.accountId,full.recipients,full.subject,full.body,full.outgoing,previousDeliveryUncertain=full.delivery in listOf("sending","uncertain"),forwarding=full.forwarding))}
                         else route="reader"
                     })}
                 }
@@ -214,12 +221,13 @@ private val Paper=Color(0xFFF8F9F6)
 }
 
 @Composable private fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,memory: InboxMemory,onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,
-    onAdd: ()->Unit,onSettings: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
+    onAdd: ()->Unit,onExit: ()->Unit,onSettings: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
     onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit) {
     val drawer=rememberDrawerState(DrawerValue.Closed)
     val scope=rememberCoroutineScope()
     var query by rememberSaveable { mutableStateOf("") }
     var checked by remember { mutableStateOf(arrayListOf<String>()) }
+    var exitRequested by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(query){onSearch(query)}
     val visible=remember(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery){
         val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
@@ -237,7 +245,6 @@ private val Paper=Color(0xFFF8F9F6)
     val loaded=s.messages.count{it.localFolder=="inbox" && it.accountId in selectedIds}
     fun toggle(id: String){checked=ArrayList(if(id in selected)selected-id else selected+id)}
     fun mark(unread: Boolean){onMarkRead(selected,unread){updated->checked=ArrayList(checked.filter{it !in updated})}}
-    BackHandler(enabled=selectionMode){checked=arrayListOf()}
     LaunchedEffect(visibleIds){checked=ArrayList(checked.filter{it in visibleIds})}
     LaunchedEffect(memory,visibleIds.firstOrNull()) {
         if(visibleIds.isNotEmpty()) {
@@ -259,15 +266,31 @@ private val Paper=Color(0xFFF8F9F6)
             s.accounts.forEach{a->Row(Modifier.fillMaxWidth().padding(end=12.dp),verticalAlignment=Alignment.CenterVertically) {
                 NavigationDrawerItem(label={Column{Text(a.name,maxLines=1,overflow=TextOverflow.Ellipsis);Text(a.email,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelSmall);if(!a.enabled)Text("Синхронизация выключена",style=MaterialTheme.typography.labelSmall)}},selected=a.id==accountId,
                     icon={AccountMark(a)},modifier=Modifier.weight(1f).padding(start=12.dp,end=4.dp),onClick={onAccount(a.id);scope.launch{drawer.close()}})
+                val unread=s.history[a.id]?.unread?:UnreadCounts.cached(s.messages,a.id)
+                Surface(shape=RoundedCornerShape(10.dp),color=if(unread>0)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                    modifier=Modifier.padding(end=8.dp).semantics{contentDescription="${a.name}: непрочитанных $unread"}) {
+                    Text(unread.toString(),Modifier.padding(horizontal=8.dp,vertical=4.dp),fontWeight=if(unread>0)FontWeight.Bold else FontWeight.Normal,
+                        style=MaterialTheme.typography.labelMedium,color=if(unread>0)MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Switch(checked=a.enabled,onCheckedChange={onEnable(a.id,it)},modifier=Modifier.semantics{contentDescription="Синхронизация ящика ${a.name}"})
             }}
             Spacer(Modifier.height(16.dp));HorizontalDivider(Modifier.padding(horizontal=24.dp))
             TextButton(onClick={scope.launch{drawer.close()};onAdd()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
             Spacer(Modifier.weight(1f))
             TextButton(onClick={scope.launch{drawer.close()};onSettings()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Lift-Zip Почта · 0.3.3",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.4.0",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }) {
+        BackHandler {
+            when {
+                drawer.currentValue!=DrawerValue.Closed || drawer.targetValue!=DrawerValue.Closed -> scope.launch{drawer.close()}
+                selectionMode -> checked=arrayListOf()
+                else -> exitRequested=true
+            }
+        }
+        if(exitRequested)AlertDialog(onDismissRequest=onExit,properties=DialogProperties(dismissOnClickOutside=false),
+            title={Text("Выйти из Почты?")},text={Text("Нажмите «Выйти» или кнопку Android «Назад» ещё раз. Фоновая проверка почты продолжится по настройкам.")},
+            confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
         Scaffold(topBar={
             if(selectionMode)TopAppBar(title={Text("Выбрано: ${selected.size}")},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
                 IconButton(onClick={checked=ArrayList(visibleIds)},enabled=!s.busy){Icon(Icons.Outlined.SelectAll,"Выбрать все загруженные письма в списке")}
@@ -356,8 +379,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
 }
 
 @Composable private fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,onBack: ()->Unit,onStar: ()->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit) {
-    val parts=remember(m.body){ReplyText.split(m.body)}
-    var quotedExpanded by rememberSaveable(m.id){mutableStateOf(false)}
+    val conversation=remember(m.body){ConversationText.parse(m.body)}
     Scaffold(topBar={TopAppBar(title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}})}) { padding->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal=22.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -371,11 +393,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             if(m.localFolder=="sent")InfoCard("Письмо принято SMTP-сервером отправителя. Эта копия хранится на устройстве.")
             HorizontalDivider(Modifier.padding(vertical=10.dp))
             if(m.previewOnly)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
-            else SelectionContainer { Text((if(quotedExpanded || !parts.canCollapse)m.body else parts.current).ifBlank{"В письме нет доступного текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=27.sp,modifier=Modifier.fillMaxWidth().padding(vertical=14.dp)) }
-            if(!m.previewOnly && parts.canCollapse) {
-                if(quotedExpanded)TextButton(onClick={quotedExpanded=false}){Text("Скрыть предыдущие сообщения")}
-                else OutlinedIconButton(onClick={quotedExpanded=true},modifier=Modifier.padding(bottom=12.dp)) {Icon(Icons.Outlined.MoreHoriz,"Показать предыдущие сообщения")}
-            }
+            else SelectionContainer { Text(conversation.current.ifBlank{"В письме нет доступного текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=27.sp,modifier=Modifier.fillMaxWidth().padding(vertical=14.dp)) }
+            if(!m.previewOnly && conversation.messages.isNotEmpty())ConversationHistory(m.id,conversation,listOfNotNull(account?.email))
             m.attachments.forEach { file->
                 OutlinedCard(onClick={onOpenAttachment(file)},modifier=Modifier.fillMaxWidth().padding(vertical=5.dp),enabled=!busy) {
                     Row(Modifier.padding(start=15.dp,top=10.dp,bottom=10.dp,end=5.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -449,7 +468,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     }
 }
 
-@Composable private fun ComposeScreen(d: ComposeDraft,s: UiState,onChange: (ComposeDraft)->Unit,onBack: ()->Unit,onDelete: ()->Unit,onSend: ()->Unit) {
+@Composable private fun ComposeScreen(d: ComposeDraft,s: UiState,onChange: (ComposeDraft)->Unit,onBack: ()->Unit,onDelete: ()->Unit,onSend: ()->Unit,
+    onRetryForward: ()->Unit,onRemoveForward: (String)->Unit) {
     val context=LocalContext.current
     var senderMenu by remember { mutableStateOf(false) }
     var attachmentError by remember { mutableStateOf<String?>(null) }
@@ -464,7 +484,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             OutgoingFile(uri.toString(),name,context.contentResolver.getType(uri)?:"application/octet-stream",size)
         }.getOrNull() }
         if(files.size!=uris.size)attachmentError="Некоторые файлы недоступны. Попробуйте выбрать их из папки на устройстве."
-        else if(files.any{it.size>20L*1024*1024}||(d.attachments+files).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
+        else if(files.any{it.size>20L*1024*1024}||(d.filesToSend()+files).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
         else onChange(d.copy(attachments=(d.attachments+files).distinctBy{it.uri}))
     }
     Scaffold(topBar={TopAppBar(title={Text("Новое письмо")},navigationIcon={IconButton(onClick=onBack,enabled=!s.busy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Сохранить черновик и закрыть")}},actions={
@@ -472,7 +492,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         IconButton(onClick=onDelete,enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить черновик")}
     })},bottomBar={Surface(tonalElevation=3.dp){Row(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(14.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
         OutlinedButton(onClick=onBack,enabled=!s.busy,modifier=Modifier.weight(1f)){Text("Сохранить")}
-        Button(onClick={if(d.previousDeliveryUncertain)confirmResend=true else onSend()},enabled=!s.busy,modifier=Modifier.weight(1f)){Icon(Icons.AutoMirrored.Outlined.Send,null);Spacer(Modifier.width(8.dp));Text(if(s.busy)"Подождите…" else "Отправить")}
+        Button(onClick={if(d.previousDeliveryUncertain)confirmResend=true else onSend()},enabled=!s.busy && d.forwarding?.ready!=false,modifier=Modifier.weight(1f)){Icon(Icons.AutoMirrored.Outlined.Send,null);Spacer(Modifier.width(8.dp));Text(if(s.busy)"Подождите…" else "Отправить")}
     }}}) { padding->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
             if(d.previousDeliveryUncertain)InfoCard("Результат прошлой отправки неизвестен. Проверьте доставку перед повтором.")
@@ -482,6 +502,14 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
             OutlinedTextField(d.to,{onChange(d.copy(to=it))},label={Text("Кому")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
             OutlinedTextField(d.subject,{onChange(d.copy(subject=it))},label={Text("Тема")},modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
+            d.forwarding?.takeIf{it.files.isNotEmpty()}?.let { plan->
+                Column(Modifier.fillMaxWidth().padding(horizontal=20.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                    Text(if(plan.ready)"Вложения готовы · ${plan.files.size}" else "Подготовка вложений · ${plan.files.count{it.status==ForwardStatus.READY}} из ${plan.files.size}",style=MaterialTheme.typography.labelLarge)
+                    if(!plan.ready)Text("Можно вводить адрес и текст. Отправка станет доступна, когда файлы будут готовы.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    plan.files.forEach{file->ForwardFileCard(file,!s.busy,onRemove={onRemoveForward(file.key)})}
+                    if(plan.files.any{it.status==ForwardStatus.ERROR})TextButton(onClick=onRetryForward,enabled=!s.busy){Icon(Icons.Outlined.Refresh,null);Spacer(Modifier.width(6.dp));Text("Повторить подготовку")}
+                }
+            }
             HorizontalDivider(Modifier.padding(top=4.dp))
             BasicTextField(value=d.body,onValueChange={onChange(d.copy(body=it))},enabled=!s.busy,
                 textStyle=MaterialTheme.typography.bodyLarge.copy(color=MaterialTheme.colorScheme.onSurface),cursorBrush=SolidColor(MaterialTheme.colorScheme.primary),
@@ -493,6 +521,37 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 attachmentError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
             }
             Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable private fun ForwardFileCard(file: ForwardFile,enabled: Boolean,onRemove: ()->Unit) {
+    val context=LocalContext.current
+    var openError by remember(file.key){mutableStateOf(false)}
+    Surface(shape=RoundedCornerShape(14.dp),color=MaterialTheme.colorScheme.surfaceContainer,modifier=Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(start=12.dp,top=8.dp,end=4.dp,bottom=8.dp)) {
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Icon(if(file.status==ForwardStatus.READY)Icons.Outlined.CheckCircleOutline else Icons.Outlined.AttachFile,null,Modifier.size(20.dp))
+                Column(Modifier.weight(1f).padding(horizontal=8.dp)) {
+                    Text(file.name,style=MaterialTheme.typography.bodyMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
+                    Text(when(file.status){
+                        ForwardStatus.WAITING->"В очереди"
+                        ForwardStatus.DOWNLOADING->"Подготовлено ${file.bytes/1024} КБ"+(if(file.size>0)" из ${file.size/1024} КБ" else "")
+                        ForwardStatus.READY->"Готово · ${(file.prepared!!.size/1024).coerceAtLeast(1)} КБ"
+                        ForwardStatus.ERROR->file.error
+                    },style=MaterialTheme.typography.labelSmall,color=if(file.status==ForwardStatus.ERROR)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if(file.prepared!=null)IconButton(onClick={runCatching{
+                    val uri=Uri.parse(file.prepared.uri)
+                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,file.prepared.mime).apply{clipData=ClipData.newRawUri(file.name,uri)}.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                }.onFailure{openError=true}},enabled=enabled){Icon(Icons.AutoMirrored.Outlined.OpenInNew,"Открыть ${file.name}")}
+                IconButton(onClick=onRemove,enabled=enabled){Icon(Icons.Outlined.Close,"Удалить ${file.name} из пересылки")}
+            }
+            if(file.status==ForwardStatus.DOWNLOADING) {
+                if(file.size>0)LinearProgressIndicator(progress={(file.bytes.toFloat()/file.size).coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth().padding(end=8.dp))
+                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(end=8.dp))
+            }
+            if(openError)Text("Не удалось открыть файл. Установите приложение для этого формата.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
         }
     }
 }
@@ -557,7 +616,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             HorizontalDivider(Modifier.padding(vertical=8.dp))
             Text("Хранение и синхронизация",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
             Text("Поиск работает по загруженным письмам. Черновики и отправленные из этого приложения хранятся на устройстве.\n\nВложения открываются нажатием на файл; значок загрузки сохраняет копию. PDF и изображения можно смотреть внутри приложения. Для других форматов используется установленная программа.\n\nПароли защищены Android Keystore. Резервное копирование почтовых данных отключено. Внешний сервер приложения не используется.",style=MaterialTheme.typography.bodyMedium)
-            Text("Тестовая сборка · 0.3.3",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Тестовая сборка · 0.4.0",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(24.dp))
         }
     }

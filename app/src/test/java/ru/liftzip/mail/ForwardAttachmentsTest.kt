@@ -56,4 +56,42 @@ class ForwardAttachmentsTest {
         assertFalse(File(URI(first.uri)).exists())
         assertTrue(File(URI(second.uri)).exists())
     }
+    @Test fun cachedAttachmentBecomesDurableWithoutAnotherDownload() {
+        val root=temporary.newFolder()
+        val cached=temporary.newFile().apply{writeText("Saved file")}
+        val file=store(root).prepareFile("draft","one","a.txt","text/plain",-1,cached=cached){fail("Must reuse the saved file")}
+        cached.delete()
+        assertEquals("Saved file",File(URI(file.uri)).readText())
+    }
+    @Test fun completedFileIsReusedAfterWorkerRestarts() {
+        val root=temporary.newFolder()
+        val saved=store(root).prepareFile("draft","one","a.txt","text/plain",-1){it.write("Ready".toByteArray())}
+        val again=store(root).prepareFile("draft","one","a.txt","text/plain",-1){fail("Complete file must not be fetched again")}
+        assertEquals(saved,again)
+    }
+    @Test fun failedDirectDownloadLeavesNoPartialAttachmentAndCanRetry() {
+        val root=temporary.newFolder()
+        assertThrows(java.io.IOException::class.java){
+            store(root).prepareFile("draft","one","a.txt","text/plain",-1){output->output.write("Partial".toByteArray());throw java.io.IOException("Disconnected")}
+        }
+        assertFalse(root.walkTopDown().any{it.isFile})
+        val ready=store(root).prepareFile("draft","one","a.txt","text/plain",-1){it.write("Complete".toByteArray())}
+        assertEquals("Complete",File(URI(ready.uri)).readText())
+    }
+    @Test fun partialFailureDoesNotRemoveOtherCompletedFiles() {
+        val root=temporary.newFolder()
+        val storage=store(root)
+        val first=storage.prepareFile("draft","one","a.txt","text/plain",-1){it.write("First".toByteArray())}
+        assertThrows(java.io.IOException::class.java){storage.prepareFile("draft","two","b.txt","text/plain",-1){throw java.io.IOException("Failed")}}
+        assertEquals("First",File(URI(first.uri)).readText())
+    }
+    @Test fun directTransferReportsActualByteProgress() {
+        val root=temporary.newFolder()
+        val progress=mutableListOf<Long>()
+        val ready=store(root).prepareFile("draft","one","a.txt","text/plain",-1,progress={progress+=it}){
+            it.write(byteArrayOf(1,2));it.write(byteArrayOf(3,4,5))
+        }
+        assertEquals(listOf(2L,5L),progress)
+        assertEquals(5L,ready.size)
+    }
 }

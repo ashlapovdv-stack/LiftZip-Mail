@@ -99,6 +99,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         .put("validity",m.validity).put("remoteFolder",m.remoteFolder).put("sender",m.sender).put("email",m.senderEmail)
         .put("to",m.recipients).put("subject",m.subject).put("body",m.body).put("date",m.date).put("unread",m.unread)
         .put("starred",m.starred).put("folder",m.localFolder).put("delivery",m.delivery).put("contentCached",m.contentCached)
+        .put("forwarding",m.forwarding?.let(::encodeForward))
         .put("attachments",JSONArray().apply { m.attachments.forEach { a->put(JSONObject().put("path",a.path).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
         .put("outgoing",JSONArray().apply { m.outgoing.forEach { a->put(JSONObject().put("uri",a.uri).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
     private fun decodeMessage(j: JSONObject,preview: Boolean=false): MailItem {
@@ -108,6 +109,20 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             HeaderText.decode(j.getString("sender")),j.getString("email"),HeaderText.recipients(j.getString("to")),HeaderText.decode(j.getString("subject")),j.getString("body").let{if(preview)it.take(MailContent.PREVIEW_LENGTH)else it},j.getLong("date"),
             j.getBoolean("unread"),j.getBoolean("starred"),j.getString("folder"),
             List(attachments.length()) { i-> val a=attachments.getJSONObject(i);Attachment(a.getString("path"),a.getString("name"),a.getString("mime"),a.getInt("size")) },
-            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true))
+            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true),forwarding=j.optJSONObject("forwarding")?.let(::decodeForward))
+    }
+    private fun encodeForward(p: ForwardPlan)=JSONObject().put("account",p.accountId).put("message",p.messageId)
+        .put("uid",p.uid).put("validity",p.validity).put("folder",p.remoteFolder).put("sourceKey",p.sourceKey)
+        .put("files",JSONArray().apply{p.files.forEach{f->put(JSONObject().put("key",f.key).put("name",f.name).put("mime",f.mime).put("size",f.size)
+            .put("path",f.path).put("sourceUri",f.sourceUri).put("status",f.status.name).put("bytes",f.bytes).put("error",f.error)
+            .put("prepared",f.prepared?.let{JSONObject().put("uri",it.uri).put("name",it.name).put("mime",it.mime).put("size",it.size)}))}})
+    private fun decodeForward(j: JSONObject): ForwardPlan {
+        val files=j.getJSONArray("files")
+        return ForwardPlan(j.getString("account"),j.getString("message"),j.getLong("uid"),j.getLong("validity"),j.getString("folder"),
+            List(files.length()){i->val f=files.getJSONObject(i)
+                ForwardFile(f.getString("key"),f.getString("name"),f.getString("mime"),f.getLong("size"),
+                    f.optString("path").takeIf{it.isNotEmpty()},f.optString("sourceUri").takeIf{it.isNotEmpty()},
+                    runCatching{ForwardStatus.valueOf(f.optString("status"))}.getOrDefault(ForwardStatus.WAITING),f.optLong("bytes"),
+                    f.optJSONObject("prepared")?.let{OutgoingFile(it.getString("uri"),it.getString("name"),it.getString("mime"),it.getLong("size"))},f.optString("error"))},j.optString("sourceKey"))
     }
 }

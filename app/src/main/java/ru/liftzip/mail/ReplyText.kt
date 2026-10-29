@@ -25,8 +25,10 @@ object ReplyText {
             val header = if(end<0)"" else headerLines.take(end + 1).joinToString(" ") { it.trim() }
             val english = line.startsWith("On ") && date.containsMatchIn(header) && englishEnd.containsMatchIn(header)
             val russian = line.firstOrNull()?.isDigit()==true && date.containsMatchIn(line) && russianEnd.containsMatchIn(header)
-            val mailRu = weekdays.matches(line) && following.startsWith("от ", true) && following.contains('@')
-            val ours = line == "──────────" && following.endsWith("пишет:")
+            val mailRu = weekdays.matches(line) && (1..headerLines.size).any{count->
+                Regex("(?:^|\\s)от\\s+.+@.+:\\s*$",RegexOption.IGNORE_CASE).containsMatchIn(headerLines.take(count).joinToString(" "){it.trim()})
+            }
+            val ours = Regex("^[─━]{5,}$").matches(line) && following.endsWith("пишет:",true)
             if (english || russian || mailRu || ours || original.matches(line)) {
                 boundary = index
                 break

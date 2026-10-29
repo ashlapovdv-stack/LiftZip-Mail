@@ -9,6 +9,8 @@ import java.security.MessageDigest
 class AttachmentCache(private val context: Context) {
     private val root get() = File(context.cacheDir,"attachments")
     private fun hash(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
+    fun existing(message: MailItem,attachment: Attachment): File? =
+        File(File(File(root,hash(message.accountId)),hash("${message.id}|${attachment.path}")),AttachmentRules.safeName(attachment.name)).takeIf{it.isFile}
 
     fun prepare(message: MailItem, attachment: Attachment, fetch: (OutputStream)->Unit): File {
         val parent=File(File(root,hash(message.accountId)),hash("${message.id}|${attachment.path}"))

@@ -3,7 +3,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <application android:name=".MailApplication" android:label="Почта Lift-Zip"
+    <application android:name=".MailApplication" android:label="Почта"
         android:icon="@drawable/ic_mail" android:roundIcon="@drawable/ic_mail"
         android:allowBackup="false" android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"

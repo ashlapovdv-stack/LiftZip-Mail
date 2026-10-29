@@ -16,6 +16,7 @@ import kotlinx.coroutines.sync.withPermit
 import java.net.SocketTimeoutException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -24,6 +25,7 @@ import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 data class MailSnapshot(val accounts: List<MailAccount> = emptyList(), val messages: List<MailItem> = emptyList(), val history: Map<String,InboxHistory> = emptyMap(), val defaultAccountId: String? = null,
     val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck())
@@ -45,6 +47,10 @@ class MailRepository(private val context: Context) {
     private val coordinator=MailboxCoordinator()
     private val historyMutex=Mutex()
     private val parallelChecks=Semaphore(3)
+    private val forwardTransfers=Semaphore(2)
+    private val forwardLocks=ConcurrentHashMap<String,Mutex>()
+    private val forwardProgress=MutableStateFlow<Map<String,ForwardPlan>>(emptyMap())
+    val forwardingProgress=forwardProgress.asStateFlow()
     private val flagVersions=mutableMapOf<String,Long>()
     private var nextFlagVersion=0L
     private val state=MutableStateFlow(MailSnapshot())
@@ -52,7 +58,8 @@ class MailRepository(private val context: Context) {
     private fun refresh(arrived: Set<String> = emptySet(),messages: List<MailItem>?=null) {
         val accounts=db.accounts()
         state.value=MailSnapshot(accounts,messages?:db.messages(),accounts.associate { a->
-            a.id to InboxHistory(if(syncPrefs.contains("count:${a.id}"))syncPrefs.getInt("count:${a.id}",0) else null,syncPrefs.getBoolean("older:${a.id}",true))
+            a.id to InboxHistory(if(syncPrefs.contains("count:${a.id}"))syncPrefs.getInt("count:${a.id}",0) else null,syncPrefs.getBoolean("older:${a.id}",true),
+                if(syncPrefs.contains("unread:${a.id}"))syncPrefs.getInt("unread:${a.id}",0)else null)
         },settings.getString("default-sender",null)?.takeIf{id->accounts.any{it.id==id}},
             PollSettings.normalized(settings.getInt("foreground-minutes",1),settings.getInt("background-minutes",15)),readHistory(),
             accounts.associate{it.id to SyncCheck(syncPrefs.getLong("checked:${it.id}",0),syncPrefs.getString("error:${it.id}","").orEmpty(),syncPrefs.getLong("duration:${it.id}",0))},
@@ -61,7 +68,10 @@ class MailRepository(private val context: Context) {
         if(arrived.isNotEmpty())NotificationPreviewWorker.enqueue(context)
         notifications.history(state.value)
     }
-    suspend fun load()=withContext(Dispatchers.IO){coordinator.data{refresh()}}
+    suspend fun load()=withContext(Dispatchers.IO){coordinator.data{
+        refresh()
+        state.value.messages.filter{it.localFolder=="drafts" && it.forwarding?.active==true}.forEach{ForwardWorker.enqueue(context,it.id)}
+    }}
     private data class Request(val account: MailAccount,val version: Long,val cached: List<MailItem>,val flags: Map<String,Long>,val cursor: ArrivalCursor)
     private data class CheckReply(val inbox: InboxPage?=null,val unread: UnreadPage?=null)
     private data class HistoryRequest(val request: Request,val missing: List<MailItem>)
@@ -117,7 +127,7 @@ class MailRepository(private val context: Context) {
         val secret=password.ifEmpty{vault.open(old.id,old.secret)}
         gateway.verify(account,secret)
         val reset=!SyncRules.sameInbox(old,account)
-        if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").apply()
+        if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("unread:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").apply()
         coordinator.invalidate(old.id)
         db.updateAccount(account.copy(secret=vault.seal(old.id,secret),enabled=old.enabled),reset)
         val history=readHistory()
@@ -125,10 +135,10 @@ class MailRepository(private val context: Context) {
         refresh()
     }}
     suspend fun removeAccount(id: String)=withContext(Dispatchers.IO){coordinator.data{
-        db.messages().filter{it.accountId==id}.forEach{forwarded.remove(it.id)}
+        db.messages().filter{it.accountId==id}.forEach{ForwardWorker.cancel(context,it.id);forwardProgress.update{progress->progress-it.id};forwarded.remove(it.id)}
         coordinator.invalidate(id);db.removeAccount(id);attachmentCache.removeAccount(id)
         if(settings.getString("default-sender",null)==id)settings.edit().remove("default-sender").apply()
-        syncPrefs.edit().remove(id).remove("count:$id").remove("older:$id").remove("checked:$id").remove("error:$id").apply()
+        syncPrefs.edit().remove(id).remove("count:$id").remove("unread:$id").remove("older:$id").remove("checked:$id").remove("error:$id").apply()
         val job=readHistory()
         if(id in job.accountIds)writeHistory(job.copy(accountIds=job.accountIds-id,status=if(job.accountIds.size==1)"done" else job.status))
         refresh()
@@ -184,6 +194,9 @@ class MailRepository(private val context: Context) {
                 rememberEpoch(id,validity,total)
                 val edit=syncPrefs.edit().putInt("count:$id",total?:merged.size).putLong("checked:$id",System.currentTimeMillis())
                     .putLong("duration:$id",(System.nanoTime()-started)/1_000_000).remove("error:$id")
+                val unreadCount=page?.history?.unread?:unreadPage?.messages?.count{it.unread}
+                if(unreadCount!=null)edit.putInt("unread:$id",UnreadCounts.reconcile(unreadCount,page?.messages?:unreadPage!!.messages,now,guarded))
+                else if(previousEpoch!=null && previousEpoch!=validity)edit.remove("unread:$id")
                 if(page!=null) {
                     val oldIds=captured.cached.filter{it.localFolder=="inbox"}.map{it.id}.toSet()
                     val expanded=now.any{it.localFolder=="inbox" && it.id !in oldIds}
@@ -215,6 +228,7 @@ class MailRepository(private val context: Context) {
             require(current(request)){"Ящик приостановлен или его настройки изменились."}
             val now=state.value.messages.find{it.id==message.id}?:return@data
             val updated=now.copy(unread=unread?:now.unread,starred=starred?:now.starred)
+            adjustUnreadCount(now.accountId,listOf(now),listOf(updated))
             flagsChanged(listOf(now.id));db.putMessage(updated);refresh(messages=state.value.messages.map{if(it.id==now.id)updated else it})
         }
     }
@@ -231,6 +245,7 @@ class MailRepository(private val context: Context) {
                     if(!current(request))return@data
                     val successful=group.filter{it.uid<=0 || it.uid in uids}.map{it.id}.toSet()
                     val updated=state.value.messages.filter{it.id in successful}.map{it.copy(unread=unread)}
+                    adjustUnreadCount(key.first,state.value.messages.filter{it.id in successful},updated)
                     db.putMessages(updated);flagsChanged(successful);changed+=successful
                     refresh(messages=state.value.messages.map{if(it.id in successful)it.copy(unread=unread)else it})
                     if(successful.size!=group.size)errors+="${request.account.name}: некоторые письма перемещены или удалены. Обновите список."
@@ -238,6 +253,9 @@ class MailRepository(private val context: Context) {
             }catch(e: CancellationException){throw e}catch(e: Exception){errors+="${request.account.name}: ${friendlyError(e)}"}
         }
         FlagChange(changed,errors.distinct())
+    }
+    private fun adjustUnreadCount(id: String,before: List<MailItem>,after: List<MailItem>) {
+        if(syncPrefs.contains("unread:$id"))syncPrefs.edit().putInt("unread:$id",UnreadCounts.changed(syncPrefs.getInt("unread:$id",0),before,after)).apply()
     }
     private fun readHistory(): HistoryDownload=runCatching{
         val j=JSONObject(settings.getString("history-download","{}").orEmpty())
@@ -374,36 +392,116 @@ class MailRepository(private val context: Context) {
     },commit={_,more->more})?:false
     suspend fun saveDraft(draft: ComposeDraft)=withContext(Dispatchers.IO){coordinator.data{
         val a=db.accounts().find { it.id==draft.accountId }?:error("Выберите ящик отправителя.")
-        db.putMessage(draft.toMessage(a,"drafts").copy(delivery=if(draft.previousDeliveryUncertain)"uncertain" else ""));refresh()
+        val stored=db.message(draft.id)
+        val merged=if(stored!=null)ForwardRules.mergeEditor(draft,stored.forwarding)else draft
+        db.putMessage(merged.toMessage(a,"drafts").copy(delivery=if(draft.previousDeliveryUncertain)"uncertain" else ""));refresh()
     }}
-    suspend fun deleteDraft(id: String)=withContext(Dispatchers.IO){coordinator.data{db.removeMessage(id);forwarded.remove(id);refresh()}}
+    suspend fun deleteDraft(id: String)=withContext(Dispatchers.IO){coordinator.data{
+        ForwardWorker.cancel(context,id);db.removeMessage(id);forwardProgress.update{it-id};forwarded.remove(id);refresh()
+    }}
     suspend fun forward(message: MailItem,senderId: String): ComposeDraft=withContext(Dispatchers.IO){coordinator.data{
         val accounts=db.accounts()
         val sender=accounts.find{it.id==senderId}?:error("Ящик отправителя не найден.")
         require(sender.enabled){"Включите ящик отправителя в меню."}
-        val origin=accounts.find{it.id==message.accountId}?:error("Исходный ящик не найден.")
+        require(accounts.any{it.id==message.accountId}){"Исходный ящик не найден."}
         val draft=ComposeDraft(accountId=sender.id,subject=if(message.subject.startsWith("Fwd:",true))message.subject else "Fwd: ${message.subject}",
-            body="\n\n──── Пересланное письмо ────\nОт: ${message.sender} <${message.senderEmail}>\nКому: ${message.recipients}\nТема: ${message.subject}\n\n${message.body}")
-        val sources=message.attachments.map { attachment->
-            ForwardSource(attachment.name,attachment.mime,attachment.size.toLong()) {
-                attachmentCache.prepare(message,attachment){output->require(origin.enabled){"Включите исходный ящик для загрузки вложений."};gateway.attachment(origin,vault.open(origin.id,origin.secret),message,attachment,output)}.inputStream()
+            body="\n\n──── Пересланное письмо ────\nОт: ${message.sender} <${message.senderEmail}>\nКому: ${message.recipients}\nТема: ${message.subject}\n\n${message.body}",
+            forwarding=ForwardRules.plan(message,accounts.first{it.id==message.accountId}))
+        db.putMessage(draft.toMessage(sender,"drafts"));refresh()
+        if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
+        draft
+    }}
+    // Called only under the short data lock. Text/sender edits and parallel file results are retained.
+    private fun updateForward(id: String,change: (ForwardPlan)->ForwardPlan): ForwardPlan? {
+        val m=db.message(id)?.takeIf{it.localFolder=="drafts"}?:return null
+        val changed=m.forwarding?.let(change)?:return null
+        val live=forwardProgress.value[id]?.files.orEmpty().associateBy{it.key}
+        val plan=changed.copy(files=changed.files.map{f->if(f.status==ForwardStatus.DOWNLOADING)f.copy(bytes=maxOf(f.bytes,live[f.key]?.bytes?:0))else f})
+        db.putMessage(m.copy(forwarding=plan));forwardProgress.update{it+(id to plan)};refresh()
+        return plan
+    }
+    suspend fun removeForwardFile(id: String,key: String)=withContext(Dispatchers.IO){coordinator.data{
+        updateForward(id){it.copy(files=it.files.filterNot{file->file.key==key})}
+    }}
+    suspend fun retryForward(id: String)=withContext(Dispatchers.IO){coordinator.data{
+        val plan=updateForward(id){it.copy(files=it.files.map{f->if(f.status==ForwardStatus.ERROR)f.copy(status=ForwardStatus.WAITING,bytes=0,error="")else f})}
+        if(plan?.active==true)ForwardWorker.enqueue(context,id,androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE)
+    }}
+    suspend fun forwardFailed(id: String,error: String)=withContext(Dispatchers.IO){coordinator.data{
+        updateForward(id){it.copy(files=it.files.map{f->if(f.status==ForwardStatus.WAITING || f.status==ForwardStatus.DOWNLOADING)f.copy(status=ForwardStatus.ERROR,error=error)else f})}
+    }}
+    private data class ForwardRead(val plan: ForwardPlan,val file: ForwardFile,val account: MailAccount?,val version: Long)
+    suspend fun prepareForward(id: String)=withContext(Dispatchers.IO){forwardLocks.computeIfAbsent(id){Mutex()}.withLock{
+        val initial=coordinator.data{
+            db.message(id)?.takeIf{it.localFolder=="drafts"}?.forwarding?.also{p->forwardProgress.update{it+(id to p)}}
+        }?:return@withLock
+        val budget=ForwardBudget(initial.files.mapNotNull{f->f.prepared?.let{f.key to it.size}}.toMap())
+        try {
+            supervisorScope {
+                initial.files.filter{it.status==ForwardStatus.WAITING || it.status==ForwardStatus.DOWNLOADING}.map{file->async {
+                    forwardTransfers.withPermit{
+                        val read=coordinator.data{
+                            val plan=updateForward(id){p->p.copy(files=p.files.map{if(it.key==file.key)it.copy(status=ForwardStatus.DOWNLOADING,bytes=0,error="")else it})}?:return@data null
+                            val task=plan.files.find{it.key==file.key}?:return@data null
+                            ForwardRead(plan,task,db.accounts().find{it.id==plan.accountId},coordinator.version(plan.accountId))
+                        }?:return@withPermit
+                        try {
+                            val coroutine=currentCoroutineContext()
+                            var lastProgress=0L
+                            val source=read.plan.sourceMessage()
+                            val attachment=read.file.path?.let{Attachment(it,read.file.name,read.file.mime,read.file.size.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())}
+                            if(attachment!=null)require(read.account!=null && (read.plan.sourceKey.isEmpty() || read.plan.sourceKey==ForwardRules.sourceKey(read.account))){"Параметры исходного сервера изменены. Создайте пересылку из обновлённого письма."}
+                            val cached=attachment?.let{attachmentCache.existing(source,it)}
+                            val prepared=runInterruptible(Dispatchers.IO){
+                                forwarded.prepareFile(id,file.key,file.name,file.mime,file.size,cached=cached,progress={bytes->
+                                    coroutine.ensureActive()
+                                    val keys=forwardProgress.value[id]?.files.orEmpty().map{it.key}.toSet()
+                                    check(file.key in keys){"Вложение удалено из черновика."}
+                                    budget.retain(keys)
+                                    budget.progress(file.key,bytes)
+                                    val now=System.nanoTime()
+                                    if(now-lastProgress>=200_000_000){
+                                        lastProgress=now
+                                        forwardProgress.update{all->all[id]?.let{p->all+(id to p.copy(files=p.files.map{if(it.key==file.key && it.status==ForwardStatus.DOWNLOADING)it.copy(bytes=bytes)else it}))}?:all}
+                                    }
+                                }) { output->
+                                    if(attachment!=null){
+                                        val a=read.account?:error("Исходный ящик удалён.")
+                                        require(a.enabled){"Включите исходный ящик для загрузки вложений."}
+                                        gateway.attachment(a,vault.open(a.id,a.secret),source,attachment,output)
+                                    }else (context.contentResolver.openInputStream(Uri.parse(requireNotNull(file.sourceUri)))?:error("Не удалось открыть ${file.name}"))
+                                        .use{it.copyTo(output,64*1024)}
+                                }
+                            }
+                            coordinator.data{
+                                require(read.file.path==null || coordinator.version(read.plan.accountId)==read.version){"Исходный ящик изменён. Повторите подготовку вложения."}
+                                updateForward(id){p->p.copy(files=p.files.map{if(it.key==file.key)it.copy(status=ForwardStatus.READY,prepared=prepared,bytes=prepared.size,error="")else it})}
+                            }
+                        }catch(e: CancellationException){throw e}catch(e: Exception){
+                            budget.remove(file.key)
+                            coordinator.data{updateForward(id){p->p.copy(files=p.files.map{if(it.key==file.key)it.copy(status=ForwardStatus.ERROR,bytes=0,error=friendlyError(e))else it})}}
+                        }
+                    }
+                }}.awaitAll()
             }
-        }+message.outgoing.map { file->
-            ForwardSource(file.name,file.mime,file.size) {context.contentResolver.openInputStream(Uri.parse(file.uri))?:error("Не удалось открыть ${file.name}")}
+        } finally {
+            withContext(kotlinx.coroutines.NonCancellable){coordinator.data{
+                if(db.message(id)?.localFolder!="drafts"){forwardProgress.update{it-id};if(db.message(id)==null)forwarded.remove(id)}
+            }}
         }
-        val ready=draft.copy(attachments=forwarded.prepare(draft.id,sources))
-        db.putMessage(ready.toMessage(sender,"drafts"));refresh();ready
     }}
     suspend fun send(draft: ComposeDraft)=withContext(Dispatchers.IO){coordinator.data{
-        MailRules.validateDraft(draft)?.let { error(it) }
+        val current=draft.copy(forwarding=db.message(draft.id)?.forwarding?:draft.forwarding)
+        MailRules.validateDraft(current)?.let { error(it) }
+        val ready=ForwardRules.sending(current)
         val a=db.accounts().find { it.id==draft.accountId }?:error("Ящик отправителя не найден.")
         require(a.enabled){"Включите ящик отправителя в меню."}
-        db.putMessage(draft.toMessage(a,"drafts").copy(delivery="sending"));refresh()
+        db.putMessage(current.toMessage(a,"drafts").copy(delivery="sending"));refresh()
         try {
-            gateway.send(a,vault.open(a.id,a.secret),draft)
-            db.putMessage(draft.toMessage(a,"sent").copy(delivery="accepted"));refresh()
+            gateway.send(a,vault.open(a.id,a.secret),ready)
+            db.putMessage(ready.toMessage(a,"sent").copy(delivery="accepted"));forwardProgress.update{it-draft.id};refresh()
         } catch(e: Exception) {
-            db.putMessage(draft.toMessage(a,"drafts").copy(delivery=if(e is DeliveryUncertainException)"uncertain" else "failed"));refresh();throw e
+            db.putMessage(current.toMessage(a,"drafts").copy(delivery=if(e is DeliveryUncertainException)"uncertain" else "failed"));forwardProgress.update{it-draft.id};refresh();throw e
         }
     }}
     suspend fun download(message: MailItem,file: Attachment,uri: Uri)=withContext(Dispatchers.IO){coordinator.data{
@@ -419,6 +517,6 @@ class MailRepository(private val context: Context) {
         attachmentCache.opened(cached,file)
     }}
     private fun ComposeDraft.toMessage(a: MailAccount,folder: String)=MailItem(id,accountId,sender=a.senderName,senderEmail=a.email,recipients=to,
-        subject=subject,body=body,date=System.currentTimeMillis(),localFolder=folder,outgoing=attachments)
+        subject=subject,body=body,date=System.currentTimeMillis(),localFolder=folder,outgoing=attachments,forwarding=forwarding)
 }
 
