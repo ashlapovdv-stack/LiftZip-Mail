@@ -114,6 +114,8 @@ class MailRepository(private val context: Context) {
         db.applyInbox(previous,merged)
         refresh(arrived,state.value.messages.filterNot{it.accountId==id && SyncRules.remoteInbox(it)}+merged.map(MailContent::preview))
     }
+    /** Resolve a notification before routing, independently of the list's snapshot collector. */
+    suspend fun cachedMessage(id: String): MailItem?=withContext(Dispatchers.IO){db.message(id)?.let{it.copy(previewOnly=!it.contentCached)}}
     suspend fun message(id: String): MailItem?=withContext(Dispatchers.IO){coordinator.content(id){
         val cached=db.message(id)?:return@content null
         if(cached.contentCached)return@content cached

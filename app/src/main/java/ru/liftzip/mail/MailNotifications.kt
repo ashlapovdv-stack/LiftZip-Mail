@@ -45,8 +45,8 @@ class MailNotifications(private val context: Context) {
         }
     }
     private fun openApp(id: String?=null)=PendingIntent.getActivity(context,0,Intent(context,MainActivity::class.java)
-        .setData(Uri.parse("liftzip-mail://open/"+Uri.encode(id?:"inbox"))).putExtra(MESSAGE_EXTRA,id).putExtra("mail-open-inbox",id==null)
-        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        .setAction(Intent.ACTION_VIEW).setData(Uri.parse(NotificationNavigation.uri(id))).putExtra(MESSAGE_EXTRA,id).putExtra("mail-open-inbox",id==null)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     private fun dismissIntent(ids: Collection<String>)=PendingIntent.getBroadcast(context,0,Intent(context,MailNotificationDismissReceiver::class.java)
         .setData(Uri.parse("liftzip-mail://dismiss/"+Uri.encode(ids.sorted().joinToString("|"))))
         .putStringArrayListExtra("ids",ArrayList(ids)),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)

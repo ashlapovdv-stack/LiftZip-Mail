@@ -71,12 +71,20 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
         work {
             repo.load()
-            mutable.update { it.copy(loaded=true,notificationAccess=MailNotifications.access(getApplication())) }
+            val snapshot=repo.snapshot.value
+            mutable.update { it.copy(loaded=true,accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
+                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,
+                notificationAccess=MailNotifications.access(getApplication())) }
             repo.notificationEnvironmentChanged()
             if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
     }
     fun search(text: String){query.value=text}
+    suspend fun notificationMessage(id: String)=repo.cachedMessage(id)
+    suspend fun preserveDraft(draft: ComposeDraft) {
+        if(mutable.value.busy)return
+        try{repo.saveDraft(draft)}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
+    }
     fun showUnread(enabled: Boolean,accountId: String?){unreadScope.value=UnreadScope(enabled,accountId)}
     fun openMessage(id: String) {
         opening?.cancel()

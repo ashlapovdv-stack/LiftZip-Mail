@@ -60,7 +60,7 @@ import java.util.Locale
     Text("В первую очередь загружаем текст новых и непрочитанных писем, затем последних входящих. Вложения скачиваются по запросу.",style=MaterialTheme.typography.bodySmall)
     if(s.bodyCache.pending>0)OutlinedButton(onClick=onRetryBodies){Text("Повторить загрузку текстов")}
     TextButton(onClick={
-        val report="Почта 0.4.1\nAndroid ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.MANUFACTURER}\n"+
+        val report="Почта 0.4.2\nAndroid ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.MANUFACTURER}\n"+
             "Фон: ${s.poll.backgroundMinutes} мин; ${runtime.state}; остановка ${runtime.stopReason}; попытка ${runtime.attempt}\n"+
             "Уведомления: ${access.canPost}; фон ограничен: ${access.backgroundRestricted}; экономия трафика: ${access.dataRestricted}; аккумулятор без ограничений: ${access.batteryExempt}; standby: ${access.standbyRestricted}; сеть: ${access.connected}\n"+
             "Автоматически: ${time(bg.automaticStarted)} — ${time(bg.automaticFinished)}, ${bg.automaticResult}\n"+
