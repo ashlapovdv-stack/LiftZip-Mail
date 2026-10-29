@@ -44,13 +44,13 @@ object HistoryBodies {
         around: suspend (MailItem,suspend ()->Boolean)->Boolean={_,action->action()}) {
         for(message in messages) {
             val more=around(message) item@{
-            if(!before(message))return@item false
-            val result=try {
-                val full=read(message)
-                if(full==null)ContentBatch(emptyList(),setOf(message.id)) else ContentBatch(listOf(full),emptySet())
-            }catch(e: CancellationException){throw e}
-            catch(e: Exception){ContentBatch(emptyList(),emptySet(),mapOf(message.id to describe(e)))}
-            save(result) && result.failures.isEmpty() // Reconnect before another message after an error.
+                if(!before(message))return@item false
+                val result=try {
+                    val full=read(message)
+                    if(full==null)ContentBatch(emptyList(),setOf(message.id)) else ContentBatch(listOf(full),emptySet())
+                }catch(e: CancellationException){throw e}
+                catch(e: Exception){ContentBatch(emptyList(),emptySet(),mapOf(message.id to describe(e)))}
+                save(result) && result.failures.isEmpty() // Reconnect before another message after an error.
             }
             if(!more)return
         }

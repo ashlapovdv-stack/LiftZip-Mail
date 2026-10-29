@@ -320,14 +320,14 @@ private val Paper=Color(0xFFF8F9F6)
             confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
         Scaffold(topBar={
             AnimatedVisibility(controlsVisible || selectionMode,enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()){Column{
-            if(selectionMode)TopAppBar(title={Text("Выбрано: ${selected.size}")},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
-                IconButton(onClick={checked=ArrayList(visibleIds)},enabled=!s.busy){Icon(Icons.Outlined.SelectAll,"Выбрать все загруженные письма в списке")}
-                IconButton(onClick={mark(false)},enabled=!s.busy){Icon(Icons.Outlined.MarkEmailRead,"Отметить прочитанными")}
-                IconButton(onClick={mark(true)},enabled=!s.busy){Icon(Icons.Outlined.MarkEmailUnread,"Отметить непрочитанными")}
-            }) else TopAppBar(title={Column{Text(folder.label,fontWeight=FontWeight.Bold);Text((current?.name?:"Все ящики")+if(current?.enabled==false)" · выключен" else "",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
-                navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}},actions={
-                    IconButton(onClick=onRefresh,enabled=!s.refreshing && !s.unreadRefreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
-                })
+                if(selectionMode)TopAppBar(title={Text("Выбрано: ${selected.size}")},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
+                    IconButton(onClick={checked=ArrayList(visibleIds)},enabled=!s.busy){Icon(Icons.Outlined.SelectAll,"Выбрать все загруженные письма в списке")}
+                    IconButton(onClick={mark(false)},enabled=!s.busy){Icon(Icons.Outlined.MarkEmailRead,"Отметить прочитанными")}
+                    IconButton(onClick={mark(true)},enabled=!s.busy){Icon(Icons.Outlined.MarkEmailUnread,"Отметить непрочитанными")}
+                }) else TopAppBar(title={Column{Text(folder.label,fontWeight=FontWeight.Bold);Text((current?.name?:"Все ящики")+if(current?.enabled==false)" · выключен" else "",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
+                    navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}},actions={
+                        IconButton(onClick=onRefresh,enabled=!s.refreshing && !s.unreadRefreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
+                    })
                 if(s.busy || s.refreshing || s.unreadRefreshing)LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp).semantics{contentDescription="Обновление почты"})
                 if(!s.notificationAccess.canPost)TextButton(onClick=onSettings,modifier=Modifier.fillMaxWidth()){Icon(Icons.Outlined.NotificationsOff,null);Spacer(Modifier.width(8.dp));Text("Уведомления выключены · настроить")}
                 OutlinedTextField(value=query,onValueChange={query=it},placeholder={Text("Поиск писем")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton(onClick={query=""}){Icon(Icons.Outlined.Close,"Очистить поиск")}},
