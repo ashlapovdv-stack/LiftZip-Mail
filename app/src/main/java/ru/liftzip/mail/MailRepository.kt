@@ -63,7 +63,7 @@ class MailRepository(private val context: Context) {
     private data class Request(val account: MailAccount,val version: Long,val cached: List<MailItem>,val flags: Map<String,Long>,val initialized: Boolean)
     private data class CheckReply(val inbox: InboxPage?=null,val unread: UnreadPage?=null)
     private data class HistoryRequest(val request: Request,val missing: List<MailItem>)
-    private data class HistoryReply(val page: InboxPage?=null,val contents: ContentBatch?=null)
+    private data class HistoryReply(val page: InboxPage?=null)
     private fun capture(id: String): Request? {
         val a=state.value.accounts.find{it.id==id && it.enabled}?:return null
         return Request(a,coordinator.version(id),state.value.messages.filter{it.accountId==id && SyncRules.remoteInbox(it)},flagVersions.toMap(),syncPrefs.getBoolean(id,false))
@@ -231,17 +231,22 @@ class MailRepository(private val context: Context) {
     private fun readHistory(): HistoryDownload=runCatching{
         val j=JSONObject(settings.getString("history-download","{}").orEmpty())
         val ids=j.optJSONArray("accounts")?:JSONArray()
-        HistoryDownload(j.optString("id"),List(ids.length()){ids.getString(it)},j.optString("status","idle"),j.optString("error"))
+        val issues=j.optJSONArray("issues")?:JSONArray()
+        HistoryDownload(j.optString("id"),List(ids.length()){ids.getString(it)},j.optString("status","idle"),j.optString("error"),
+            List(issues.length()){i->val issue=issues.getJSONObject(i);HistoryIssue(issue.getString("id"),issue.getString("account"),issue.optString("detail"),issue.optInt("attempts",1))},
+            j.optLong("activityAt"),j.optLong("savedAt"),j.optString("phase"),j.optString("currentAccount"),j.optLong("currentUid"))
     }.getOrDefault(HistoryDownload())
     private fun writeHistory(job: HistoryDownload) {
+        val issues=JSONArray().apply{job.issues.forEach{put(JSONObject().put("id",it.messageId).put("account",it.accountId).put("detail",it.detail).put("attempts",it.attempts))}}
         settings.edit().putString("history-download",JSONObject().put("id",job.id).put("accounts",JSONArray(job.accountIds))
-            .put("status",job.status).put("error",job.error).toString()).apply()
+            .put("status",job.status).put("error",job.error).put("issues",issues).put("activityAt",job.activityAt).put("savedAt",job.savedAt)
+            .put("phase",job.phase).put("currentAccount",job.currentAccountId).put("currentUid",job.currentUid).toString()).apply()
     }
     suspend fun startHistory(ids: List<String>): String=withContext(Dispatchers.IO){coordinator.data{
         val available=db.accounts().filter{it.enabled}.map{it.id}.toSet()
         val selected=ids.distinct().filter{it in available}
         require(selected.isNotEmpty()){"Выберите хотя бы один ящик."}
-        val job=HistoryDownload(UUID.randomUUID().toString(),selected,"running")
+        val job=HistoryDownload(UUID.randomUUID().toString(),selected,"waiting",activityAt=System.currentTimeMillis())
         writeHistory(job);refresh();job.id
     }}
     suspend fun pauseHistory()=withContext(Dispatchers.IO){coordinator.data{
@@ -258,29 +263,56 @@ class MailRepository(private val context: Context) {
                 val job=readHistory()
                 if(job.id!=id || !job.active)return@request null
                 val accounts=state.value.accounts
-                val history=accounts.associate{it.id to InboxHistory(hasOlder=SyncRules.needsHistory(it.id,state.value.messages,state.value.history[it.id]))}
+                val issues=HistoryRules.remainingIssues(job,state.value.messages)
+                val history=accounts.associate{it.id to InboxHistory(hasOlder=state.value.history[it.id]?.hasOlder!=false || HistoryRules.pendingBodies(it.id,state.value.messages,issues).isNotEmpty())}
                 val accountId=SyncRules.nextHistoryAccount(job,accounts,history,skipped)
                 if(accountId==null) {
                     val retry=SyncRules.nextHistoryAccount(job,accounts,history,emptySet())!=null
                     val disabled=accounts.any{!it.enabled && it.id in job.accountIds && history[it.id]?.hasOlder==true}
-                    writeHistory(job.copy(status=if(retry)"waiting" else if(disabled)"paused" else "done",error=if(retry)job.error else if(disabled)"Включите приостановленные ящики в меню и продолжите загрузку." else ""))
+                    writeHistory(job.copy(status=if(retry)"waiting" else if(disabled)"paused" else if(issues.isNotEmpty())"partial" else "done",issues=issues,phase="",currentUid=0,error=if(retry)job.error else if(disabled)"Включите приостановленные ящики в меню и продолжите загрузку." else ""))
                     refresh(messages=state.value.messages);stopped=HistoryStep(retry=retry);null
-                }else capture(accountId)?.let{request->HistoryRequest(request,request.cached.filter{it.localFolder=="inbox" && !it.contentCached}.take(10)).also{captured=it}}
+                }else capture(accountId)?.let{request->
+                    val missing=if(state.value.history[accountId]?.hasOlder!=false)emptyList() else HistoryRules.pendingBodies(accountId,request.cached,issues).take(10)
+                    writeHistory(job.copy(status="running",issues=issues,activityAt=System.currentTimeMillis(),phase=if(missing.isEmpty())"headers" else "bodies",currentAccountId=accountId,currentUid=0))
+                    refresh(messages=state.value.messages)
+                    HistoryRequest(request,missing).also{captured=it}
+                }
             },fetch={work->
                 val coroutine=currentCoroutineContext();val a=work.request.account
-                runInterruptible(Dispatchers.IO){
-                    if(work.missing.isNotEmpty())HistoryReply(contents=gateway.contents(a,vault.open(a.id,a.secret),work.missing){coroutine.ensureActive()})
-                    else HistoryReply(page=gateway.inbox(a,vault.open(a.id,a.secret),work.request.cached,loadOlder=true,pageSize=10,checkCancelled={coroutine.ensureActive()}))
+                if(work.missing.isEmpty()) {
+                    runInterruptible(Dispatchers.IO){HistoryReply(page=gateway.inbox(a,vault.open(a.id,a.secret),work.request.cached,loadOlder=true,pageSize=50,checkCancelled={coroutine.ensureActive()}))}
+                }else {
+                    gateway.contents(a,vault.open(a.id,a.secret),work.missing,onItem={batch->
+                        coordinator.data {
+                            val job=readHistory()
+                            if(!current(work.request) || job.id!=id || !job.active)return@data false
+                            val now=state.value.messages.filter{it.accountId==a.id && SyncRules.remoteInbox(it)}
+                            val merged=SyncRules.contentBatch(now,batch)
+                            writeHistory(HistoryRules.afterBody(job,now,batch,System.currentTimeMillis()))
+                            if(batch.missingIds.isNotEmpty())coordinator.invalidate(a.id)
+                            saveRemote(a.id,now,merged)
+                            batch.missingIds.isEmpty()
+                        }
+                    },onStart={message->
+                        coordinator.data {
+                            val job=readHistory()
+                            if(!current(work.request) || job.id!=id || !job.active)return@data false
+                            writeHistory(job.copy(activityAt=System.currentTimeMillis(),currentUid=message.uid))
+                            refresh(messages=state.value.messages);true
+                        }
+                    })
+                    HistoryReply()
                 }
             },commit={work,response->
                 val job=readHistory();val request=work.request;val a=request.account
                 if(!current(request) || job.id!=id || !job.active)return@request HistoryStep(more=true)
                 val now=state.value.messages.filter{it.accountId==a.id && SyncRules.remoteInbox(it)}
                 val page=response.page
-                val merged=if(page!=null)SyncRules.historyPage(now,page,protected(request))else SyncRules.contentBatch(now,response.contents!!)
-                if(page!=null){rememberEpoch(a.id,page.validity,page.history.total);syncPrefs.edit().putBoolean(a.id,true).putInt("count:${a.id}",page.history.total?:merged.size).putBoolean("older:${a.id}",page.history.hasOlder).apply()}
-                if(response.contents?.missingIds?.isNotEmpty()==true)coordinator.invalidate(a.id)
-                writeHistory(job.copy(status="running",error=if(skipped.isEmpty())"" else job.error))
+                if(page==null)return@request HistoryStep(more=true)
+                val merged=SyncRules.historyPage(now,page,protected(request))
+                rememberEpoch(a.id,page.validity,page.history.total)
+                syncPrefs.edit().putBoolean(a.id,true).putInt("count:${a.id}",page.history.total?:merged.size).putBoolean("older:${a.id}",page.history.hasOlder).apply()
+                writeHistory(job.copy(status="running",activityAt=System.currentTimeMillis(),savedAt=System.currentTimeMillis(),error=if(skipped.isEmpty())"" else job.error))
                 saveRemote(a.id,now,merged);HistoryStep(more=true)
             })?:stopped
         }catch(e: CancellationException){throw e}catch(e: Exception){

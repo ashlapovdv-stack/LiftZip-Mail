@@ -18,6 +18,7 @@ fun friendlyError(error: Throwable): String {
         (item as? MessagingException)?.nextException?.let{pending.add(it)}
     }
     val text=when {
+        chain.any{it is HistoryReadTimeoutException}->"Письмо читается слишком долго. Остальная почта будет сохранена, затем это письмо будет запрошено повторно."
         chain.any{it is DeliveryUncertainException}->chain.first{it is DeliveryUncertainException}.message.orEmpty()
         chain.any{it is AuthenticationFailedException}->"Не удалось войти. Проверьте полный логин и пароль ящика или приложения."
         chain.any{it is SSLException}->"Не удалось проверить защищённое соединение. Проверьте дату на телефоне и повторите без VPN."

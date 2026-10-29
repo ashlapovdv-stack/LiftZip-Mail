@@ -23,7 +23,7 @@ data class OutgoingFile(val uri: String, val name: String, val mime: String, val
 data class OpenedAttachment(val uri: String, val name: String, val mime: String) : java.io.Serializable
 data class InboxHistory(val total: Int? = null, val hasOlder: Boolean = true)
 data class InboxPage(val messages: List<MailItem>, val history: InboxHistory, val validity: Long? = messages.firstOrNull()?.validity)
-data class ContentBatch(val messages: List<MailItem>,val missingIds: Set<String>)
+data class ContentBatch(val messages: List<MailItem>,val missingIds: Set<String>,val failures: Map<String,String> = emptyMap())
 data class UnreadPage(val validity: Long,val messages: List<MailItem>,val total: Int)
 data class MailItem(
     val id: String, val accountId: String, val uid: Long = 0, val validity: Long = 0,

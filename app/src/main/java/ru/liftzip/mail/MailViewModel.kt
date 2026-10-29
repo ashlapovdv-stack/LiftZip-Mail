@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -12,7 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = emptyList(),val messages: List<MailItem> = emptyList(),val history: Map<String,InboxHistory> = emptyMap(),val defaultAccountId: String?=null,
-    val poll: PollSettings=PollSettings(),val historyDownload: HistoryDownload=HistoryDownload(),val checks: Map<String,SyncCheck> = emptyMap(),
+    val poll: PollSettings=PollSettings(),val historyDownload: HistoryDownload=HistoryDownload(),val checks: Map<String,SyncCheck> = emptyMap(),val historyWork: HistoryWorkState=HistoryWorkState.UNKNOWN,
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
     val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: String?=null)
 
@@ -28,6 +29,11 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     private val unreadScope=MutableStateFlow(UnreadScope())
     val state=mutable.asStateFlow()
     init {
+        viewModelScope.launch {
+            combine(repo.snapshot.map{it.historyDownload.id}.distinctUntilChanged(),WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(HistoryWorker.NAME)){id,infos->
+                HistoryRules.workState(infos.filter{HistoryRules.acceptsGeneration(it.tags,id)}.map{it.state.name})
+            }.distinctUntilChanged().collect{work->mutable.update{it.copy(historyWork=work)}}
+        }
         viewModelScope.launch {
             repo.snapshot.collect { snapshot->mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
                 poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks) } }
@@ -135,7 +141,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun setPoll(poll: PollSettings)=work{repo.setPoll(poll);MailWorker.schedule(getApplication());notice("Интервал проверки почты сохранён")}
     fun startHistory(ids: List<String>)=work{HistoryWorker.enqueue(getApplication(),repo.startHistory(ids));notice("Загрузка истории запущена")}
     fun resumeHistory()=startHistory(mutable.value.historyDownload.accountIds)
-    fun pauseHistory()=work{repo.pauseHistory();notice("Загрузка приостановлена. Полученные письма сохранены.")}
+    fun pauseHistory()=work{repo.pauseHistory();HistoryWorker.cancel(getApplication());notice("Загрузка приостановлена. Полученные письма сохранены.")}
     fun setDefaultAccount(id: String?)=work{repo.setDefaultAccount(id);notice("Ящик отправителя по умолчанию сохранён")}
     fun forward(message: MailItem,senderId: String,onReady: (ComposeDraft)->Unit)=work{onReady(repo.forward(message,senderId))}
     fun loadOlder(accountId: String?) = work {

@@ -6,6 +6,8 @@ import androidx.work.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(context,params) {
@@ -53,15 +55,21 @@ class HistoryWorker(context: Context,params: WorkerParameters): CoroutineWorker(
                 }
             }
             @Suppress("UNREACHABLE_CODE") Result.success()
-        }catch(e: CancellationException){throw e}catch(e: Exception){Result.retry()}
+        }catch(e: CancellationException){
+            withContext(NonCancellable){runCatching{repo.waitHistory(generation)}}
+            throw e
+        }catch(e: Exception){repo.waitHistory(generation);Result.retry()}
     }
     companion object {
+        const val NAME="mail-history"
+        fun cancel(context: Context)=WorkManager.getInstance(context).cancelUniqueWork(NAME)
         fun enqueue(context: Context,generation: String,policy: ExistingWorkPolicy=ExistingWorkPolicy.REPLACE) {
             val work=OneTimeWorkRequestBuilder<HistoryWorker>()
                 .setInputData(workDataOf("generation" to generation))
+                .addTag(HistoryRules.GENERATION_TAG+generation)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,10,TimeUnit.SECONDS).build()
-            WorkManager.getInstance(context).enqueueUniqueWork("mail-history",policy,work)
+            WorkManager.getInstance(context).enqueueUniqueWork(NAME,policy,work)
         }
     }
 }

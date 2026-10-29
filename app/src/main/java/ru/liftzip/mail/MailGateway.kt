@@ -15,6 +15,12 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.Date
 import java.util.Properties
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
 
 class DeliveryUncertainException : Exception("Сервер не подтвердил результат отправки. Проверьте почту получателя или отправленные на сервере перед повторной отправкой.")
 class MailConnectionException(val stage: String, val host: String, val port: Int, cause: Exception) : Exception(cause)
@@ -74,7 +80,6 @@ class MailGateway(private val context: Context) {
             folder.fetch(messages.toTypedArray(),FetchProfile().apply {add(FetchProfile.Item.FLAGS);add(UIDFolder.FetchProfileItem.UID)})
             val unknown=messages.filter{cachedById["${a.id}:${folder.uidValidity}:${folder.getUID(it)}"]==null}
             if(unknown.isNotEmpty())folder.fetch(unknown.toTypedArray(),FetchProfile().apply{add(FetchProfile.Item.ENVELOPE)})
-            val reader=MimeReader { Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString() }
             val items=messages.map { m->
                 checkCancelled()
                 (m as? IMAPMessage)?.setPeek(true)
@@ -82,12 +87,13 @@ class MailGateway(private val context: Context) {
                 val existing=cachedById["${a.id}:${folder.uidValidity}:$uid"]
                 if(!loadOlder && existing!=null)return@map existing.copy(localFolder="inbox",unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED))
                 val reused=existing?.takeIf{it.contentCached}
-                val content=if(reused!=null)DecodedMail(reused.body,reused.attachments) else if(loadOlder)reader.read(m)else DecodedMail("",emptyList())
-                if(existing!=null)return@map existing.copy(localFolder="inbox",body=content.text,attachments=content.attachments,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),previewOnly=reused?.previewOnly?:false,contentCached=loadOlder || reused!=null)
+                // Pagination must advance even if a particular MIME body cannot be read.
+                val content=if(reused!=null)DecodedMail(reused.body,reused.attachments) else DecodedMail("",emptyList())
+                if(existing!=null)return@map existing.copy(localFolder="inbox",body=content.text,attachments=content.attachments,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),previewOnly=reused?.previewOnly?:false,contentCached=reused!=null)
                 val from=m.from?.firstOrNull() as? InternetAddress
                 MailItem("${a.id}:${folder.uidValidity}:$uid",a.id,uid,folder.uidValidity,"INBOX",from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",content.text,
-                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=loadOlder)
+                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false)
             }
             InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1),folder.uidValidity)
         } finally { folder.close(false) }
@@ -116,25 +122,28 @@ class MailGateway(private val context: Context) {
             UnreadPage(folder.uidValidity,items,folder.messageCount)
         }finally{folder.close(false)}
     }
-    fun contents(a: MailAccount,password: String,messages: List<MailItem>,checkCancelled: ()->Unit={}): ContentBatch=store(a,password).use{store->
-        if(messages.isEmpty())return@use ContentBatch(emptyList(),emptySet())
-        val folder=store.getFolder("INBOX") as IMAPFolder
-        folder.open(Folder.READ_ONLY)
-        try {
-            require(messages.all{it.validity==folder.uidValidity}){"Папка изменилась. Обновите список писем."}
-            val reader=MimeReader{Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}
-            val missing=mutableSetOf<String>()
-            val items=messages.mapNotNull{m->
-                checkCancelled()
-                val remote=folder.getMessageByUID(m.uid)
-                if(remote==null){missing+=m.id;null}else {
-                    (remote as? IMAPMessage)?.setPeek(true)
-                    val decoded=reader.read(remote)
-                    m.copy(body=decoded.text,attachments=decoded.attachments,previewOnly=false,contentCached=true)
-                }
-            }
-            ContentBatch(items,missing)
-        }finally{folder.close(false)}
+    suspend fun contents(a: MailAccount,password: String,messages: List<MailItem>,onItem: suspend (ContentBatch)->Boolean,onStart: suspend (MailItem)->Boolean={true})=withContext(Dispatchers.IO) {
+        if(messages.isEmpty())return@withContext
+        runInterruptible{store(a,password,fast=true)}.use{connection->
+            val folder=connection.getFolder("INBOX") as IMAPFolder
+            runInterruptible{folder.open(Folder.READ_ONLY)}
+            try {
+                require(messages.all{it.validity==folder.uidValidity}){"Папка изменилась. Обновите список писем."}
+                HistoryBodies.transfer(messages,read={m->
+                    val coroutine=currentCoroutineContext()
+                    runInterruptible {
+                        val budget=MailReadBudget(checkCancelled={coroutine.ensureActive()})
+                        budget.check()
+                        val remote=folder.getMessageByUID(m.uid)
+                        if(remote==null)null else {
+                            (remote as? IMAPMessage)?.setPeek(true)
+                            val decoded=MimeReader(checkCancelled=budget::check){Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
+                            m.copy(body=decoded.text,attachments=decoded.attachments,previewOnly=false,contentCached=true)
+                        }
+                    }
+                },save=onItem,describe=::friendlyError,before=onStart)
+            }finally{withContext(NonCancellable){runInterruptible{runCatching{folder.close(false)}}}}
+        }
     }
     fun content(a: MailAccount,password: String,message: MailItem): MailItem=store(a,password).use{store->
         val folder=store.getFolder(message.remoteFolder) as IMAPFolder

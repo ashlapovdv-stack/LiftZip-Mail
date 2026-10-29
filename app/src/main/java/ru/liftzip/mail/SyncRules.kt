@@ -13,7 +13,9 @@ data class PollSettings(val foregroundMinutes: Int = 1, val backgroundMinutes: I
 
 data class HistoryDownload(
     val id: String = "", val accountIds: List<String> = emptyList(),
-    val status: String = "idle", val error: String = ""
+    val status: String = "idle", val error: String = "",
+    val issues: List<HistoryIssue> = emptyList(), val activityAt: Long = 0, val savedAt: Long = 0,
+    val phase: String = "", val currentAccountId: String = "", val currentUid: Long = 0
 ) {
     val active get() = status == "running" || status == "waiting"
 }

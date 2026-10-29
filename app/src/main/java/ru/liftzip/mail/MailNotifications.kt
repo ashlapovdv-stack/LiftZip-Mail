@@ -40,7 +40,7 @@ class MailNotifications(private val context: Context) {
         val loaded=snapshot.messages.count{it.localFolder=="inbox" && it.contentCached && it.accountId in ids}
         val total=job.accountIds.takeIf{list->list.all{snapshot.history[it]?.total!=null}}?.sumOf{snapshot.history[it]?.total?:0}
         manager.notify(101,NotificationCompat.Builder(context,"history").setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Загрузка истории почты").setContentText(if(total==null)"Загружено $loaded писем" else "Загружено $loaded из $total")
+            .setContentTitle(if(job.status=="waiting")"История почты: ожидание" else "Загрузка истории почты").setContentText(if(total==null)"Сохранены тексты $loaded писем" else "Сохранены тексты $loaded из $total")
             .setProgress(total?:0,loaded,total==null).setOnlyAlertOnce(true).setContentIntent(openApp())
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build())
     }
