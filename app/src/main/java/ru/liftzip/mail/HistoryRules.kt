@@ -40,15 +40,19 @@ object HistoryRules {
 
 /** Each completed body is committed before the next network read starts. */
 object HistoryBodies {
-    suspend fun transfer(messages: List<MailItem>,read: suspend (MailItem)->MailItem?,save: suspend (ContentBatch)->Boolean,describe: (Exception)->String,before: suspend (MailItem)->Boolean={true}) {
+    suspend fun transfer(messages: List<MailItem>,read: suspend (MailItem)->MailItem?,save: suspend (ContentBatch)->Boolean,describe: (Exception)->String,before: suspend (MailItem)->Boolean={true},
+        around: suspend (MailItem,suspend ()->Boolean)->Boolean={_,action->action()}) {
         for(message in messages) {
-            if(!before(message))return
+            val more=around(message) item@{
+            if(!before(message))return@item false
             val result=try {
                 val full=read(message)
                 if(full==null)ContentBatch(emptyList(),setOf(message.id)) else ContentBatch(listOf(full),emptySet())
             }catch(e: CancellationException){throw e}
             catch(e: Exception){ContentBatch(emptyList(),emptySet(),mapOf(message.id to describe(e)))}
-            if(!save(result) || result.failures.isNotEmpty())return // Reconnect before trying another message after an error.
+            save(result) && result.failures.isEmpty() // Reconnect before another message after an error.
+            }
+            if(!more)return
         }
     }
 }

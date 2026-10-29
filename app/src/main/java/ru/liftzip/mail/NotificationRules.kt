@@ -3,11 +3,13 @@ package ru.liftzip.mail
 data class ArrivalCursor(val validity: Long=0,val uid: Long=0,val ready: Boolean=false)
 data class ArrivalResult(val cursor: ArrivalCursor,val arrived: Set<String>)
 data class NotificationPlan(val pending: Set<String>,val dismissed: Set<String>,val messages: List<MailItem>)
-data class NotificationAccess(val permission: Boolean=true,val appEnabled: Boolean=true,val channelEnabled: Boolean=true,val backgroundRestricted: Boolean=false,val batteryExempt: Boolean=false) {
+data class NotificationAccess(val permission: Boolean=true,val appEnabled: Boolean=true,val channelEnabled: Boolean=true,val backgroundRestricted: Boolean=false,val batteryExempt: Boolean=false,
+    val powerSave: Boolean=false,val deviceIdle: Boolean=false,val dataRestricted: Boolean=false,val standbyRestricted: Boolean=false,val connected: Boolean=true) {
     val canPost get()=permission && appEnabled && channelEnabled
 }
-data class BackgroundCheck(val started: Long=0,val finished: Long=0,val result: String="",val error: String="",val newUnread: Int=0)
-data class BackgroundRuntime(val state: String="UNKNOWN",val attempt: Int=0,val nextRunAt: Long=0)
+data class BackgroundCheck(val started: Long=0,val finished: Long=0,val result: String="",val error: String="",val newUnread: Int=0,
+    val kind: String="auto",val automaticStarted: Long=0,val automaticFinished: Long=0,val automaticResult: String="")
+data class BackgroundRuntime(val state: String="UNKNOWN",val attempt: Int=0,val nextRunAt: Long=0,val stopReason: Int?=null,val testState: String="STOPPED")
 
 object NotificationRules {
     const val MAX_CHILDREN=40

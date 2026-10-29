@@ -16,9 +16,13 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
         val token=id.toString()
         return try {
             repo.load()
-            if(repo.snapshot.value.poll.backgroundMinutes==0 || repo.snapshot.value.accounts.none{it.enabled})return Result.success()
-            repo.backgroundStarted(token)
-            val result=repo.sync()
+            val test=inputData.getBoolean("background-test",false)
+            if(!test && repo.snapshot.value.poll.backgroundMinutes==0 || repo.snapshot.value.accounts.none{it.enabled})return Result.success()
+            repo.backgroundStarted(token,if(test)"test" else "auto")
+            val result=repo.sync(warmBodies=false)
+            // Use the current network window; do not wait for Android to schedule another worker.
+            val bodies=repo.prefetchBodies()
+            if(bodies.pending>0)NotificationPreviewWorker.enqueue(applicationContext)
             val retry=NotificationRules.shouldRetry(result)
             repo.backgroundFinished(token,if(retry)"retry" else "success",result.errors.joinToString("\n"),result.newUnread)
             if(retry)Result.retry()else Result.success()
@@ -31,6 +35,13 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
     }
     companion object {
         const val NAME="mail-poll"
+        const val TEST_NAME="mail-background-test"
+        fun test(context: Context){
+            val work=OneTimeWorkRequestBuilder<MailWorker>().setInputData(workDataOf("background-test" to true))
+                .setInitialDelay(10,TimeUnit.SECONDS)
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
+            WorkManager.getInstance(context).enqueueUniqueWork(TEST_NAME,ExistingWorkPolicy.KEEP,work)
+        }
         fun schedule(context: Context) {
             val minutes=context.getSharedPreferences("mail-settings",Context.MODE_PRIVATE).getInt("background-minutes",15)
             if(minutes==0){cancel(context);return}
@@ -90,20 +101,20 @@ class NotificationPreviewWorker(context: Context,params: WorkerParameters): Coro
         val repo=(applicationContext as MailApplication).repository
         return try {
             repo.load()
-            val started=SystemClock.elapsedRealtime()
-            while(repo.notificationPreviewStep()) {
-                currentCoroutineContext().ensureActive()
-                if(SystemClock.elapsedRealtime()-started>=150_000){enqueue(applicationContext);break}
+            val result=repo.prefetchBodies(120_000)
+            when{
+                result.pending==0->Result.success()
+                result.eligible->{enqueue(applicationContext,ExistingWorkPolicy.APPEND_OR_REPLACE);Result.success()}
+                else->Result.retry()
             }
-            Result.success()
         }catch(e: CancellationException){throw e}catch(_: Exception){Result.retry()}
     }
     companion object {
-        fun enqueue(context: Context) {
+        fun enqueue(context: Context,policy: ExistingWorkPolicy=ExistingWorkPolicy.KEEP) {
             val work=OneTimeWorkRequestBuilder<NotificationPreviewWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
-            WorkManager.getInstance(context).enqueueUniqueWork("mail-notification-previews",ExistingWorkPolicy.APPEND_OR_REPLACE,work)
+                .setBackoffCriteria(BackoffPolicy.LINEAR,30,TimeUnit.SECONDS).build()
+            WorkManager.getInstance(context).enqueueUniqueWork("mail-notification-previews",policy,work)
         }
     }
 }

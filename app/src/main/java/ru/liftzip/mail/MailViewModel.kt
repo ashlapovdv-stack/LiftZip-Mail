@@ -14,10 +14,10 @@ import kotlinx.coroutines.isActive
 
 data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = emptyList(),val messages: List<MailItem> = emptyList(),val history: Map<String,InboxHistory> = emptyMap(),val defaultAccountId: String?=null,
     val poll: PollSettings=PollSettings(),val historyDownload: HistoryDownload=HistoryDownload(),val checks: Map<String,SyncCheck> = emptyMap(),val historyWork: HistoryWorkState=HistoryWorkState.UNKNOWN,
-    val background: BackgroundCheck=BackgroundCheck(),val backgroundRuntime: BackgroundRuntime=BackgroundRuntime(),val notificationAccess: NotificationAccess=NotificationAccess(),
+    val background: BackgroundCheck=BackgroundCheck(),val backgroundRuntime: BackgroundRuntime=BackgroundRuntime(),val notificationAccess: NotificationAccess=NotificationAccess(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
     val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: ServiceNotice?=null,
-    val forwarding: Map<String,ForwardPlan> = emptyMap())
+    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet())
 
 private data class UnreadScope(val enabled: Boolean=false,val accountId: String?=null)
 
@@ -33,9 +33,11 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     init {
         viewModelScope.launch{repo.forwardingProgress.collect{progress->mutable.update{it.copy(forwarding=progress)}}}
         viewModelScope.launch {
-            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.NAME).collect{infos->
+            combine(WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.NAME),WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.TEST_NAME)){infos,tests->infos to tests}.collect{(infos,tests)->
                 val active=infos.firstOrNull{it.state==androidx.work.WorkInfo.State.RUNNING}?:infos.firstOrNull{!it.state.isFinished}
-                val runtime=if(active==null)BackgroundRuntime("STOPPED")else BackgroundRuntime(active.state.name,active.runAttemptCount,active.nextScheduleTimeMillis.takeIf{it<Long.MAX_VALUE}?:0)
+                val test=tests.firstOrNull{!it.state.isFinished}?:tests.firstOrNull()
+                val runtime=(if(active==null)BackgroundRuntime("STOPPED")else BackgroundRuntime(active.state.name,active.runAttemptCount,active.nextScheduleTimeMillis.takeIf{it<Long.MAX_VALUE}?:0,
+                    active.stopReason.takeIf{it!=androidx.work.WorkInfo.STOP_REASON_NOT_STOPPED})).copy(testState=test?.state?.name?:"STOPPED")
                 mutable.update{it.copy(backgroundRuntime=runtime)}
             }
         }
@@ -46,7 +48,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
         viewModelScope.launch {
             repo.snapshot.collect { snapshot->mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
-                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background) } }
+                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache) } }
         }
         viewModelScope.launch {
             combine(query,repo.snapshot){q,snapshot->q to snapshot.messages}.distinctUntilChanged().collectLatest{(text,_)->
@@ -89,6 +91,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     }
     fun openDraft(id: String,onReady: (MailItem)->Unit)=work{onReady(repo.message(id)?:error("Черновик не найден."))}
     fun visible(active: Boolean) {
+        (getApplication<Application>() as MailApplication).visible=active
         if(!active){foreground?.cancel();foreground=null;return}
         if(foreground?.isActive==true)return
         notificationEnvironmentChanged()
@@ -114,6 +117,12 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         if(!repo.testNotification())notice("Разрешите уведомления приложения и канал «Новые письма» в настройках Android.")
         else notice("Проверочное уведомление отправлено в шторку. Письмо не отправлялось.")
     }
+    fun testBackground(){MailWorker.test(getApplication());notice("Проверка запланирована. Сверните приложение; результат появится здесь после запуска задания Android.")}
+    fun restoreBackground(){
+        MailWorker.schedule(getApplication());notificationEnvironmentChanged()
+        notice("Расписание фоновой проверки восстановлено")
+    }
+    fun retryBodies(){viewModelScope.launch{try{repo.retryBodyWarmup()}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}
     fun dismissNotice(id: String){mutable.update{if(it.notice?.id==id)it.copy(notice=null)else it}}
     fun notice(text: String,error: Boolean=false){mutable.update{it.copy(notice=ServiceNotice(text,error))}}
     private fun work(action: suspend ()->Unit) {
@@ -205,6 +214,15 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             onDone()
         }
     }
-    fun download(m: MailItem,file: Attachment,uri: Uri)=work{repo.download(m,file,uri);notice("Вложение сохранено")}
-    fun openAttachment(m: MailItem,file: Attachment,onOpen: (OpenedAttachment)->Unit)=work{onOpen(repo.openAttachment(m,file))}
+    private fun attachmentWork(m: MailItem,file: Attachment,action: suspend ()->Unit){
+        val key="${m.id}|${file.path}"
+        if(key in mutable.value.attachmentBusy)return
+        mutable.update{it.copy(attachmentBusy=it.attachmentBusy+key)}
+        viewModelScope.launch{
+            try{action()}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
+            finally{mutable.update{it.copy(attachmentBusy=it.attachmentBusy-key)}}
+        }
+    }
+    fun download(m: MailItem,file: Attachment,uri: Uri)=attachmentWork(m,file){repo.download(m,file,uri);notice("Вложение сохранено")}
+    fun openAttachment(m: MailItem,file: Attachment,onOpen: (OpenedAttachment)->Unit)=attachmentWork(m,file){onOpen(repo.openAttachment(m,file))}
 }

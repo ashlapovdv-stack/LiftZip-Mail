@@ -5,11 +5,14 @@ import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -29,11 +32,16 @@ class MailNotifications(private val context: Context) {
         private val lock=Any()
         fun access(context: Context): NotificationAccess {
             val manager=context.getSystemService(NotificationManager::class.java)
+            val power=context.getSystemService(PowerManager::class.java)
+            val network=context.getSystemService(ConnectivityManager::class.java)
             return NotificationAccess(
                 permission=Build.VERSION.SDK_INT<33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED,
                 appEnabled=manager.areNotificationsEnabled(),channelEnabled=manager.getNotificationChannel(CHANNEL)?.importance!=NotificationManager.IMPORTANCE_NONE,
                 backgroundRestricted=Build.VERSION.SDK_INT>=28 && context.getSystemService(ActivityManager::class.java).isBackgroundRestricted,
-                batteryExempt=context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName))
+                batteryExempt=power.isIgnoringBatteryOptimizations(context.packageName),powerSave=power.isPowerSaveMode,deviceIdle=power.isDeviceIdleMode,
+                dataRestricted=network.isActiveNetworkMetered && network.restrictBackgroundStatus==ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED,
+                standbyRestricted=Build.VERSION.SDK_INT>=28 && runCatching{context.getSystemService(UsageStatsManager::class.java).appStandbyBucket>=45}.getOrDefault(false),
+                connected=network.activeNetwork?.let{network.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)}==true)
         }
     }
     private fun openApp(id: String?=null)=PendingIntent.getActivity(context,0,Intent(context,MainActivity::class.java)
@@ -47,12 +55,9 @@ class MailNotifications(private val context: Context) {
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return false
         return try{manager.notify(tag,id,notification);true}catch(_: SecurityException){false}
     }
-    fun previewIds(): Set<String> =synchronized(lock) {
-        val now=System.currentTimeMillis()
+    fun contentPriorityIds(): Set<String> =synchronized(lock){
         prefs.getStringSet("unread",emptySet()).orEmpty().minus(prefs.getStringSet("dismissed",emptySet()).orEmpty())
-            .filter{now-prefs.getLong("preview-error:$it",0)>=30*60_000L}.toSet()
     }
-    fun previewFailed(ids: Set<String>)=synchronized(lock){prefs.edit().apply{ids.forEach{putLong("preview-error:$it",System.currentTimeMillis())}}.apply()}
     fun dismiss(ids: Set<String>)=synchronized(lock) {
         val pending=prefs.getStringSet("unread",emptySet()).orEmpty()
         val dismissed=prefs.getStringSet("dismissed",emptySet()).orEmpty()+ids.intersect(pending)

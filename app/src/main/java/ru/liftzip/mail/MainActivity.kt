@@ -16,6 +16,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
+import androidx.compose.animation.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -165,7 +173,7 @@ private val Paper=Color(0xFFF8F9F6)
                     onHistory={historyReturn="settings";route="history"},onPoll=vm::setPoll,
                     onRemove={id->if(currentAccount==id)currentAccount=null;vm.removeAccount(id)},onDefault=vm::setDefaultAccount,
                     onNotificationPermission={if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        else context.startActivity(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName).putExtra(Settings.EXTRA_CHANNEL_ID,MailNotifications.CHANNEL))},onTestNotification=vm::testNotification,onCheck=vm::refresh)
+                        else context.startActivity(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName).putExtra(Settings.EXTRA_CHANNEL_ID,MailNotifications.CHANNEL))},onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestoreBackground=vm::restoreBackground,onRetryBodies=vm::retryBodies)
                 route=="preview" && preview!=null -> AttachmentPreviewScreen(preview!!,onBack={preview=null;route="reader"},onExternal={openExternal(preview!!)})
                 route=="compose" && draft!=null -> {
                     val editor=draft!!
@@ -179,7 +187,7 @@ private val Paper=Color(0xFFF8F9F6)
                     val summary=s.messages.find{it.id==selected}
                     val message=s.opened?.takeIf{it.id==selected}?.let{full->summary?.let{full.copy(unread=it.unread,starred=it.starred)}}?:summary
                     if(message==null)LaunchedEffect(Unit){goInbox()}
-                    else ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,ownAddresses=s.accounts.map{it.email},onBack={goInbox()},onStar={vm.star(message)},
+                    else ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,ownAddresses=s.accounts.map{it.email},attachmentBusy=s.attachmentBusy,onBack={goInbox()},onStar={vm.star(message)},
                         onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
@@ -228,6 +236,12 @@ private val Paper=Color(0xFFF8F9F6)
     var query by rememberSaveable { mutableStateOf("") }
     var checked by remember { mutableStateOf(arrayListOf<String>()) }
     var exitRequested by rememberSaveable { mutableStateOf(false) }
+    var controlsVisible by rememberSaveable{mutableStateOf(true)}
+    val density=LocalDensity.current
+    val focus=LocalFocusManager.current
+    val keyboard=LocalSoftwareKeyboardController.current
+    val chrome=remember(memory,density){InboxChromeController(controlsVisible,with(density){24.dp.toPx()},with(density){8.dp.toPx()})}
+
     LaunchedEffect(query){onSearch(query)}
     val visible=remember(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery){
         val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
@@ -237,6 +251,19 @@ private val Paper=Color(0xFFF8F9F6)
     val visibleIds=remember(visible){visible.map{it.id}}
     val selected=checked.toSet().intersect(visibleIds.toSet())
     val selectionMode=selected.isNotEmpty()
+    val forceControls by rememberUpdatedState(selectionMode)
+    val scrollControls=remember(memory,chrome,focus,keyboard){object: NestedScrollConnection{
+        override fun onPostScroll(consumed: Offset,available: Offset,source: NestedScrollSource): Offset {
+            if(source==NestedScrollSource.UserInput){
+                val wasVisible=controlsVisible
+                controlsVisible=chrome.scroll(consumed.y,forceControls)
+                if(wasVisible && !controlsVisible){focus.clearFocus();keyboard?.hide()}
+            }
+            return Offset.Zero
+        }
+    }}
+    LaunchedEffect(selectionMode,drawer.currentValue){if(selectionMode || drawer.currentValue==DrawerValue.Open){chrome.show();controlsVisible=true}}
+
     val current=s.accounts.find{it.id==accountId}
     val selectedAccounts=s.accounts.filter{if(accountId==null)it.enabled else it.id==accountId}
     val hasOlder=selectedAccounts.any{SyncRules.needsHistory(it.id,s.messages,s.history[it.id])}
@@ -278,7 +305,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close()};onAdd()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
             Spacer(Modifier.weight(1f))
             TextButton(onClick={scope.launch{drawer.close()};onSettings()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.4.0",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.4.1",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }) {
         BackHandler {
@@ -292,6 +319,7 @@ private val Paper=Color(0xFFF8F9F6)
             title={Text("Выйти из Почты?")},text={Text("Нажмите «Выйти» или кнопку Android «Назад» ещё раз. Фоновая проверка почты продолжится по настройкам.")},
             confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
         Scaffold(topBar={
+            AnimatedVisibility(controlsVisible || selectionMode,enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()){Column{
             if(selectionMode)TopAppBar(title={Text("Выбрано: ${selected.size}")},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
                 IconButton(onClick={checked=ArrayList(visibleIds)},enabled=!s.busy){Icon(Icons.Outlined.SelectAll,"Выбрать все загруженные письма в списке")}
                 IconButton(onClick={mark(false)},enabled=!s.busy){Icon(Icons.Outlined.MarkEmailRead,"Отметить прочитанными")}
@@ -300,20 +328,24 @@ private val Paper=Color(0xFFF8F9F6)
                 navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}},actions={
                     IconButton(onClick=onRefresh,enabled=!s.refreshing && !s.unreadRefreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
                 })
-        },floatingActionButton={if(!selectionMode)ExtendedFloatingActionButton(onClick=onCompose,icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})},
-            bottomBar={NavigationBar{MailFolder.entries.forEach{f->NavigationBarItem(selected=f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}}}){padding->
-            Column(Modifier.padding(padding).fillMaxSize()) {
                 if(s.busy || s.refreshing || s.unreadRefreshing)LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp).semantics{contentDescription="Обновление почты"})
                 if(!s.notificationAccess.canPost)TextButton(onClick=onSettings,modifier=Modifier.fillMaxWidth()){Icon(Icons.Outlined.NotificationsOff,null);Spacer(Modifier.width(8.dp));Text("Уведомления выключены · настроить")}
                 OutlinedTextField(value=query,onValueChange={query=it},placeholder={Text("Поиск писем")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton(onClick={query=""}){Icon(Icons.Outlined.Close,"Очистить поиск")}},
                     singleLine=true,shape=RoundedCornerShape(18.dp),modifier=Modifier.fillMaxWidth().padding(horizontal=18.dp,vertical=10.dp))
+                if(s.notificationAccess.backgroundRestricted || s.notificationAccess.dataRestricted || s.notificationAccess.standbyRestricted || s.poll.backgroundMinutes==0)
+                    TextButton(onClick=onSettings,modifier=Modifier.fillMaxWidth()){Text("Фоновая проверка ограничена · настроить")}
+                if(s.bodyCache.running && s.bodyCache.pending>0)Text("Подготавливаем тексты · осталось ${s.bodyCache.pending}",Modifier.padding(horizontal=22.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 if(s.searching && query.isNotBlank())LinearProgressIndicator(Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
                     Text(if(query.isNotBlank())"Поиск среди загруженных писем" else if(folder==MailFolder.SENT)"Отправленные с этого устройства" else "${visible.size} писем · ${visible.count{it.unread}} непрочитанных",
                         style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }}
+        },floatingActionButton={if(controlsVisible && !selectionMode)ExtendedFloatingActionButton(onClick=onCompose,icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})},
+            bottomBar={AnimatedVisibility(controlsVisible,enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()){NavigationBar{MailFolder.entries.forEach{f->NavigationBarItem(selected=f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}}}}){padding->
+            Column(Modifier.padding(padding).fillMaxSize()) {
                 PullToRefreshBox(isRefreshing=s.refreshing || s.unreadRefreshing,onRefresh={if(!s.refreshing && !s.unreadRefreshing)onRefresh()},indicator={},modifier=Modifier.weight(1f)) {
-                    LazyColumn(Modifier.fillMaxSize(),state=memory.list,contentPadding=PaddingValues(bottom=100.dp)) {
+                    LazyColumn(Modifier.fillMaxSize().nestedScroll(scrollControls),state=memory.list,contentPadding=PaddingValues(bottom=if(controlsVisible)100.dp else 12.dp)) {
                         if(visible.isEmpty())item(key="empty") {Box(Modifier.fillMaxWidth().padding(vertical=30.dp),contentAlignment=Alignment.Center) {
                             Column(horizontalAlignment=Alignment.CenterHorizontally,modifier=Modifier.padding(24.dp)) {
                                 Icon(folderIcon(folder),null,Modifier.size(48.dp),tint=MaterialTheme.colorScheme.outline)
@@ -378,7 +410,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     HorizontalDivider(Modifier.padding(start=75.dp),color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.45f))
 }
 
-@Composable private fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,onBack: ()->Unit,onStar: ()->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit) {
+@Composable private fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit) {
     val conversation=remember(m.body){ConversationText.parse(m.body)}
     Scaffold(topBar={TopAppBar(title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}})}) { padding->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal=22.dp)) {
@@ -396,11 +428,13 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             else SelectionContainer { Text(conversation.current.ifBlank{"В письме нет доступного текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=27.sp,modifier=Modifier.fillMaxWidth().padding(vertical=14.dp)) }
             if(!m.previewOnly && conversation.messages.isNotEmpty())ConversationHistory(m.id,conversation,ownAddresses)
             m.attachments.forEach { file->
-                OutlinedCard(onClick={onOpenAttachment(file)},modifier=Modifier.fillMaxWidth().padding(vertical=5.dp),enabled=!busy) {
+                val preparing="${m.id}|${file.path}" in attachmentBusy
+                OutlinedCard(onClick={onOpenAttachment(file)},modifier=Modifier.fillMaxWidth().padding(vertical=5.dp),enabled=!busy && !preparing) {
                     Row(Modifier.padding(start=15.dp,top=10.dp,bottom=10.dp,end=5.dp),verticalAlignment=Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Description,null)
-                        Column(Modifier.weight(1f).padding(horizontal=12.dp)){Text(file.name,maxLines=2,overflow=TextOverflow.Ellipsis);Text((if(file.size>0)"${(file.size/1024).coerceAtLeast(1)} КБ · " else "")+"Нажмите, чтобы открыть",style=MaterialTheme.typography.labelSmall)}
-                        IconButton(onClick={onDownload(file)},enabled=!busy){Icon(Icons.Outlined.Download,"Сохранить ${file.name}")}
+                        Column(Modifier.weight(1f).padding(horizontal=12.dp)){Text(file.name,maxLines=2,overflow=TextOverflow.Ellipsis);Text((if(file.size>0)"${(file.size/1024).coerceAtLeast(1)} КБ · " else "")+(if(preparing)"Загружаем…" else "Нажмите, чтобы открыть"),style=MaterialTheme.typography.labelSmall)}
+                        if(preparing)CircularProgressIndicator(Modifier.padding(12.dp).size(20.dp),strokeWidth=2.dp)
+                        else IconButton(onClick={onDownload(file)},enabled=!busy){Icon(Icons.Outlined.Download,"Сохранить ${file.name}")}
                     }
                 }
             }
@@ -556,7 +590,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     }
 }
 
-@Composable private fun SettingsScreen(s: UiState,onBack: ()->Unit,onAdd: ()->Unit,onEdit: (String)->Unit,onHistory: ()->Unit,onPoll: (PollSettings)->Unit,onRemove: (String)->Unit,onDefault: (String?)->Unit,onNotificationPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit) {
+@Composable private fun SettingsScreen(s: UiState,onBack: ()->Unit,onAdd: ()->Unit,onEdit: (String)->Unit,onHistory: ()->Unit,onPoll: (PollSettings)->Unit,onRemove: (String)->Unit,onDefault: (String?)->Unit,onNotificationPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit,onTestBackground: ()->Unit,onRestoreBackground: ()->Unit,onRetryBodies: ()->Unit) {
     val context=LocalContext.current
     var removal by remember { mutableStateOf<MailAccount?>(null) }
     removal?.let{a->AlertDialog(onDismissRequest={removal=null},title={Text("Отключить ящик?")},text={Text("${a.email}\n\nЛокальные письма и черновики будут удалены с этого устройства. Письма на почтовом сервере сохранятся.")},
@@ -584,24 +618,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             PollPicker("Когда приложение открыто",s.poll.foregroundMinutes,PollSettings.foregroundChoices,!s.busy){onPoll(s.poll.copy(foregroundMinutes=it))}
             PollPicker("В фоне",s.poll.backgroundMinutes,PollSettings.backgroundChoices,!s.busy){onPoll(s.poll.copy(backgroundMinutes=it))}
             Text("При возвращении в приложение проверяем почту сразу. В фоне Android допускает периодическую проверку от 15 минут и может откладывать её при энергосбережении. Для немедленной проверки потяните список вниз.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Уведомления и фон",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
-            val access=s.notificationAccess
-            Text(when{!access.permission->"Уведомления не разрешены приложению.";!access.appEnabled->"Уведомления приложения выключены в Android.";!access.channelEnabled->"Канал «Новые письма» выключен в Android.";else->"Уведомления о новых письмах разрешены."},color=if(access.canPost)MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
-            OutlinedButton(onClick=onNotificationPermission){Text(if(access.canPost)"Настройки уведомлений Android" else "Разрешить уведомления")}
-            if(!access.canPost)TextButton(onClick={context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))}){Text("Открыть системные настройки уведомлений")}
-            OutlinedButton(onClick=onTestNotification,enabled=!s.busy){Text("Проверочное уведомление")}
-            if(access.backgroundRestricted)Text("Android ограничивает фоновую работу приложения.",color=MaterialTheme.colorScheme.error)
-            Text(if(access.batteryExempt)"Приложение исключено из оптимизации аккумулятора." else "Энергосбережение может откладывать проверку при выключенном экране.",style=MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick={context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+context.packageName)))}){Text("Фоновая работа и аккумулятор Android")}
-            val bg=s.background
-            fun time(value: Long)=if(value<=0)"ещё не было" else SimpleDateFormat("d MMM, HH:mm:ss",Locale.forLanguageTag("ru")).format(Date(value))
-            Text("Фоновый запуск: "+time(bg.started),style=MaterialTheme.typography.bodySmall)
-            Text("Результат: "+when(bg.result){"running"->"проверка выполняется";"success"->"успешно, новых непрочитанных: ${bg.newUnread}";"retry"->"ошибка, запланирован повтор";"stopped"->"задание остановлено";else->"фоновая проверка ещё не завершалась"},style=MaterialTheme.typography.bodySmall)
-            if(bg.finished>0)Text("Завершение: "+time(bg.finished),style=MaterialTheme.typography.bodySmall)
-            if(bg.error.isNotBlank())Text(bg.error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
-            Text("Планировщик: "+when(s.backgroundRuntime.state){"RUNNING"->"выполнение";"ENQUEUED","BLOCKED"->"ожидание запуска";"STOPPED"->"активного задания нет";else->"проверяем состояние"},style=MaterialTheme.typography.bodySmall)
-            if(s.backgroundRuntime.nextRunAt>0)Text("Расчётное время следующего запуска: "+time(s.backgroundRuntime.nextRunAt)+". Android может выполнить позже.",style=MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick=onCheck,enabled=!s.refreshing && !s.unreadRefreshing){Text("Проверить почту сейчас")}
+            BackgroundSettings(s,onNotificationPermission,onTestNotification,onCheck,onTestBackground,onRestoreBackground,onRetryBodies)
 
             Text("История писем",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
             OutlinedButton(onClick=onHistory,modifier=Modifier.fillMaxWidth()){Icon(Icons.Outlined.Download,null);Spacer(Modifier.width(8.dp));Text("Загрузить всю историю")}
@@ -616,7 +633,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             HorizontalDivider(Modifier.padding(vertical=8.dp))
             Text("Хранение и синхронизация",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
             Text("Поиск работает по загруженным письмам. Черновики и отправленные из этого приложения хранятся на устройстве.\n\nВложения открываются нажатием на файл; значок загрузки сохраняет копию. PDF и изображения можно смотреть внутри приложения. Для других форматов используется установленная программа.\n\nПароли защищены Android Keystore. Резервное копирование почтовых данных отключено. Внешний сервер приложения не используется.",style=MaterialTheme.typography.bodyMedium)
-            Text("Тестовая сборка · 0.4.0",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Тестовая сборка · 0.4.1",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(24.dp))
         }
     }

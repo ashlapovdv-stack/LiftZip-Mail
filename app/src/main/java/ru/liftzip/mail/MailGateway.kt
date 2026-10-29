@@ -124,7 +124,8 @@ class MailGateway(private val context: Context) {
             UnreadPage(folder.uidValidity,items,folder.messageCount)
         }finally{folder.close(false)}
     }
-    suspend fun contents(a: MailAccount,password: String,messages: List<MailItem>,onItem: suspend (ContentBatch)->Boolean,onStart: suspend (MailItem)->Boolean={true})=withContext(Dispatchers.IO) {
+    suspend fun contents(a: MailAccount,password: String,messages: List<MailItem>,onItem: suspend (ContentBatch)->Boolean,onStart: suspend (MailItem)->Boolean={true},
+        around: suspend (MailItem,suspend ()->Boolean)->Boolean={_,action->action()})=withContext(Dispatchers.IO) {
         if(messages.isEmpty())return@withContext
         runInterruptible{store(a,password,fast=true)}.use{connection->
             val folder=connection.getFolder("INBOX") as IMAPFolder
@@ -143,18 +144,19 @@ class MailGateway(private val context: Context) {
                             m.copy(body=decoded.text,attachments=decoded.attachments,previewOnly=false,contentCached=true)
                         }
                     }
-                },save=onItem,describe=::friendlyError,before=onStart)
+                },save=onItem,describe=::friendlyError,before=onStart,around=around)
             }finally{withContext(NonCancellable){runInterruptible{runCatching{folder.close(false)}}}}
         }
     }
-    fun content(a: MailAccount,password: String,message: MailItem): MailItem=store(a,password).use{store->
+    fun content(a: MailAccount,password: String,message: MailItem,checkCancelled: ()->Unit={}): MailItem=store(a,password).use{store->
         val folder=store.getFolder(message.remoteFolder) as IMAPFolder
         folder.open(Folder.READ_ONLY)
         try {
             require(folder.uidValidity==message.validity){"Папка изменилась. Обновите список писем."}
             val remote=folder.getMessageByUID(message.uid)?:error("Письмо перемещено или удалено на сервере.")
             (remote as? IMAPMessage)?.setPeek(true)
-            val decoded=MimeReader{Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
+            val budget=MailReadBudget(checkCancelled=checkCancelled)
+            val decoded=MimeReader(checkCancelled=budget::check){Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
             message.copy(body=decoded.text,attachments=decoded.attachments,previewOnly=false,contentCached=true)
         }finally{folder.close(false)}
     }

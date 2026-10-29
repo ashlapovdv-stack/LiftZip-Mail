@@ -3,14 +3,12 @@ package ru.liftzip.mail
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.CheckCircleOutline
-import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import java.util.UUID
 
@@ -19,7 +17,7 @@ data class ServiceNotice(val text: String,val error: Boolean=false,val id: Strin
 class NoticeVisuals(val notice: ServiceNotice): SnackbarVisuals {
     override val message=notice.text
     override val actionLabel: String?=null
-    override val withDismissAction=true
+    override val withDismissAction=false
     override val duration=SnackbarDuration.Long
 }
 
@@ -31,15 +29,12 @@ class NoticeVisuals(val notice: ServiceNotice): SnackbarVisuals {
         val error=(data.visuals as? NoticeVisuals)?.notice?.error==true
         val colors=MaterialTheme.colorScheme
         SwipeToDismissBox(state=swipe,backgroundContent={}) {
-            Snackbar(shape=RoundedCornerShape(20.dp),modifier=Modifier.fillMaxWidth(),
+            Snackbar(shape=RoundedCornerShape(20.dp),modifier=Modifier.fillMaxWidth().semantics{
+                customActions=listOf(CustomAccessibilityAction("Скрыть сообщение"){data.dismiss();true})
+            },
                 containerColor=if(error)colors.errorContainer else colors.secondaryContainer,
-                contentColor=if(error)colors.onErrorContainer else colors.onSecondaryContainer,
-                dismissActionContentColor=if(error)colors.onErrorContainer else colors.onSecondaryContainer,
-                dismissAction={IconButton(onClick={data.dismiss()}){Icon(Icons.Outlined.Close,"Скрыть сообщение")}}) {
-                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                    Icon(if(error)Icons.Outlined.ErrorOutline else Icons.Outlined.CheckCircleOutline,null,Modifier.size(22.dp))
-                    Text(data.visuals.message,style=MaterialTheme.typography.bodyMedium)
-                }
+                contentColor=if(error)colors.onErrorContainer else colors.onSecondaryContainer) {
+                Text(data.visuals.message,style=MaterialTheme.typography.bodyMedium)
             }
         }
     }
