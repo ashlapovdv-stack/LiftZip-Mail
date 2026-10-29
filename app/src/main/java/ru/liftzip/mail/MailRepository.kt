@@ -184,13 +184,16 @@ class MailRepository(private val context: Context) {
                 rememberEpoch(id,validity,total)
                 val edit=syncPrefs.edit().putInt("count:$id",total?:merged.size).putLong("checked:$id",System.currentTimeMillis())
                     .putLong("duration:$id",(System.nanoTime()-started)/1_000_000).remove("error:$id")
-                    .putLong("alert-validity:$id",arrival.cursor.validity).putLong("alert-uid:$id",arrival.cursor.uid).putBoolean("alert-ready:$id",arrival.cursor.ready)
                 if(page!=null) {
                     val oldIds=captured.cached.filter{it.localFolder=="inbox"}.map{it.id}.toSet()
                     val expanded=now.any{it.localFolder=="inbox" && it.id !in oldIds}
                     edit.putBoolean(id,true).putBoolean("older:$id",if(expanded && previousEpoch==validity)state.value.history[id]?.hasOlder?:page.history.hasOlder else page.history.hasOlder)
                 }else if(previousEpoch!=null && previousEpoch!=validity)edit.putBoolean(id,false).putBoolean("older:$id",true)
-                edit.apply();saveRemote(id,now,merged,arrived);SyncResult(arrived.size,emptyList())
+                edit.apply();saveRemote(id,now,merged,arrived)
+                // Commit the cursor only after the mail and pending notification were saved.
+                // An interrupted save must leave this UID eligible for a later retry.
+                syncPrefs.edit().putLong("alert-validity:$id",arrival.cursor.validity).putLong("alert-uid:$id",arrival.cursor.uid).putBoolean("alert-ready:$id",arrival.cursor.ready).apply()
+                SyncResult(arrived.size,emptyList())
             })?:SyncResult(0,emptyList())
         }catch(e: TimeoutCancellationException){checkFailed(request,SocketTimeoutException(),started)}
         catch(e: CancellationException){throw e}catch(e: Exception){checkFailed(request,e,started)}
@@ -338,7 +341,7 @@ class MailRepository(private val context: Context) {
     suspend fun dismissNotifications(ids: Set<String>)=withContext(Dispatchers.IO){coordinator.data{notifications.dismiss(ids);refresh(messages=state.value.messages)}}
     suspend fun testNotification(): Boolean=withContext(Dispatchers.IO){notifications.test()}
     suspend fun backgroundStarted(token: String)=withContext(Dispatchers.IO){coordinator.data{
-        settings.edit().putString("poll-token",token).putLong("poll-start",System.currentTimeMillis()).putString("poll-result","running").putString("poll-error","").apply()
+        settings.edit().putString("poll-token",token).putLong("poll-start",System.currentTimeMillis()).putLong("poll-end",0).putInt("poll-arrived",0).putString("poll-result","running").putString("poll-error","").apply()
         refresh(messages=state.value.messages)
     }}
     suspend fun backgroundFinished(token: String,result: String,error: String="",newUnread: Int=0)=withContext(Dispatchers.IO){coordinator.data{
