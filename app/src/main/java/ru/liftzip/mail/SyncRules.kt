@@ -75,7 +75,7 @@ object SyncRules {
         return cached.filter{it.validity==page.validity && it.id !in ids}.map{it.copy(unread=false)}+page.messages
     }
     fun pendingNotifications(previous: Set<String>, arrived: Set<String>, messages: List<MailItem>): Set<String> {
-        val unread = messages.asSequence().filter { it.localFolder == "inbox" && it.unread }.map { it.id }.toSet()
+        val unread = messages.asSequence().filter { remoteInbox(it) && it.unread }.map { it.id }.toSet()
         return (previous + arrived).intersect(unread)
     }
 

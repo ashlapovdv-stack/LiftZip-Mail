@@ -14,6 +14,7 @@ import kotlinx.coroutines.isActive
 
 data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = emptyList(),val messages: List<MailItem> = emptyList(),val history: Map<String,InboxHistory> = emptyMap(),val defaultAccountId: String?=null,
     val poll: PollSettings=PollSettings(),val historyDownload: HistoryDownload=HistoryDownload(),val checks: Map<String,SyncCheck> = emptyMap(),val historyWork: HistoryWorkState=HistoryWorkState.UNKNOWN,
+    val background: BackgroundCheck=BackgroundCheck(),val backgroundRuntime: BackgroundRuntime=BackgroundRuntime(),val notificationAccess: NotificationAccess=NotificationAccess(),
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
     val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: String?=null)
 
@@ -30,13 +31,20 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     val state=mutable.asStateFlow()
     init {
         viewModelScope.launch {
+            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.NAME).collect{infos->
+                val active=infos.firstOrNull{it.state==androidx.work.WorkInfo.State.RUNNING}?:infos.firstOrNull{!it.state.isFinished}
+                val runtime=if(active==null)BackgroundRuntime("STOPPED")else BackgroundRuntime(active.state.name,active.runAttemptCount,active.nextScheduleTimeMillis.takeIf{it<Long.MAX_VALUE}?:0)
+                mutable.update{it.copy(backgroundRuntime=runtime)}
+            }
+        }
+        viewModelScope.launch {
             combine(repo.snapshot.map{it.historyDownload.id}.distinctUntilChanged(),WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(HistoryWorker.NAME)){id,infos->
                 HistoryRules.workState(infos.filter{HistoryRules.acceptsGeneration(it.tags,id)}.map{it.state.name})
             }.distinctUntilChanged().collect{work->mutable.update{it.copy(historyWork=work)}}
         }
         viewModelScope.launch {
             repo.snapshot.collect { snapshot->mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
-                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks) } }
+                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background) } }
         }
         viewModelScope.launch {
             combine(query,repo.snapshot){q,snapshot->q to snapshot.messages}.distinctUntilChanged().collectLatest{(text,_)->
@@ -59,7 +67,8 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
         work {
             repo.load()
-            mutable.update { it.copy(loaded=true) }
+            mutable.update { it.copy(loaded=true,notificationAccess=MailNotifications.access(getApplication())) }
+            repo.notificationEnvironmentChanged()
             if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
     }
@@ -80,12 +89,28 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun visible(active: Boolean) {
         if(!active){foreground?.cancel();foreground=null;return}
         if(foreground?.isActive==true)return
+        notificationEnvironmentChanged()
         foreground=viewModelScope.launch {
             state.map{Triple(it.loaded,it.poll.foregroundMinutes,it.accounts.filter{a->a.enabled}.map{a->a.id})}.distinctUntilChanged().collectLatest { (loaded,minutes,ids)->
                 if(!loaded || ids.isEmpty())return@collectLatest
                 while(isActive){check(false);delay(minutes*60_000L)}
             }
         }
+    }
+    fun notificationEnvironmentChanged() {
+        viewModelScope.launch {
+            mutable.update{it.copy(notificationAccess=MailNotifications.access(getApplication()))}
+            if(!mutable.value.loaded)return@launch
+            try{repo.notificationEnvironmentChanged()}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e))}
+        }
+    }
+    fun notificationOpened(id: String) {
+        viewModelScope.launch {try{repo.dismissNotifications(setOf(id))}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e))}}
+    }
+    fun testNotification()=work {
+        notificationEnvironmentChanged()
+        if(!repo.testNotification())notice("Разрешите уведомления приложения и канал «Новые письма» в настройках Android.")
+        else notice("Проверочное уведомление отправлено в шторку. Письмо не отправлялось.")
     }
     fun dismissNotice(){mutable.update{it.copy(notice=null)}}
     fun notice(text: String){mutable.update{it.copy(notice=text)}}

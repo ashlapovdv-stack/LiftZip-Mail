@@ -13,23 +13,34 @@ import java.util.concurrent.TimeUnit
 class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(context,params) {
     override suspend fun doWork(): Result {
         val repo=(applicationContext as MailApplication).repository
+        val token=id.toString()
         return try {
             repo.load()
-            if(repo.snapshot.value.poll.backgroundMinutes==0)return Result.success()
-            repo.sync()
-            Result.success()
-        }catch(e: CancellationException){throw e}catch(e: Exception){Result.retry()}
+            if(repo.snapshot.value.poll.backgroundMinutes==0 || repo.snapshot.value.accounts.none{it.enabled})return Result.success()
+            repo.backgroundStarted(token)
+            val result=repo.sync()
+            val retry=NotificationRules.shouldRetry(result)
+            repo.backgroundFinished(token,if(retry)"retry" else "success",result.errors.joinToString("\n"),result.newUnread)
+            if(retry)Result.retry()else Result.success()
+        }catch(e: CancellationException){
+            withContext(NonCancellable){runCatching{repo.backgroundFinished(token,"stopped")}}
+            throw e
+        }catch(e: Exception){
+            repo.backgroundFinished(token,"retry",friendlyError(e));Result.retry()
+        }
     }
     companion object {
+        const val NAME="mail-poll"
         fun schedule(context: Context) {
             val minutes=context.getSharedPreferences("mail-settings",Context.MODE_PRIVATE).getInt("background-minutes",15)
             if(minutes==0){cancel(context);return}
             val work=PeriodicWorkRequestBuilder<MailWorker>(minutes.coerceAtLeast(15).toLong(),TimeUnit.MINUTES)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
             // UPDATE applies a changed interval instead of retaining the old request forever.
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork("mail-poll",ExistingPeriodicWorkPolicy.UPDATE,work)
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(NAME,ExistingPeriodicWorkPolicy.UPDATE,work)
         }
-        fun cancel(context: Context)=WorkManager.getInstance(context).cancelUniqueWork("mail-poll")
+        fun cancel(context: Context)=WorkManager.getInstance(context).cancelUniqueWork(NAME)
     }
 }
 
@@ -70,6 +81,29 @@ class HistoryWorker(context: Context,params: WorkerParameters): CoroutineWorker(
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,10,TimeUnit.SECONDS).build()
             WorkManager.getInstance(context).enqueueUniqueWork(NAME,policy,work)
+        }
+    }
+}
+
+class NotificationPreviewWorker(context: Context,params: WorkerParameters): CoroutineWorker(context,params) {
+    override suspend fun doWork(): Result {
+        val repo=(applicationContext as MailApplication).repository
+        return try {
+            repo.load()
+            val started=SystemClock.elapsedRealtime()
+            while(repo.notificationPreviewStep()) {
+                currentCoroutineContext().ensureActive()
+                if(SystemClock.elapsedRealtime()-started>=150_000){enqueue(applicationContext);break}
+            }
+            Result.success()
+        }catch(e: CancellationException){throw e}catch(_: Exception){Result.retry()}
+    }
+    companion object {
+        fun enqueue(context: Context) {
+            val work=OneTimeWorkRequestBuilder<NotificationPreviewWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
+            WorkManager.getInstance(context).enqueueUniqueWork("mail-notification-previews",ExistingWorkPolicy.APPEND_OR_REPLACE,work)
         }
     }
 }

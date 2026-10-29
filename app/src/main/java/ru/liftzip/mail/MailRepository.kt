@@ -26,7 +26,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 data class MailSnapshot(val accounts: List<MailAccount> = emptyList(), val messages: List<MailItem> = emptyList(), val history: Map<String,InboxHistory> = emptyMap(), val defaultAccountId: String? = null,
-    val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap())
+    val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck())
 data class SyncResult(val newUnread: Int, val errors: List<String>)
 
 class MailApplication : Application() {
@@ -55,18 +55,23 @@ class MailRepository(private val context: Context) {
             a.id to InboxHistory(if(syncPrefs.contains("count:${a.id}"))syncPrefs.getInt("count:${a.id}",0) else null,syncPrefs.getBoolean("older:${a.id}",true))
         },settings.getString("default-sender",null)?.takeIf{id->accounts.any{it.id==id}},
             PollSettings.normalized(settings.getInt("foreground-minutes",1),settings.getInt("background-minutes",15)),readHistory(),
-            accounts.associate{it.id to SyncCheck(syncPrefs.getLong("checked:${it.id}",0),syncPrefs.getString("error:${it.id}","").orEmpty(),syncPrefs.getLong("duration:${it.id}",0))})
-        notifications.reconcile(SyncRules.activeMessages(state.value.messages,accounts,null),arrived)
+            accounts.associate{it.id to SyncCheck(syncPrefs.getLong("checked:${it.id}",0),syncPrefs.getString("error:${it.id}","").orEmpty(),syncPrefs.getLong("duration:${it.id}",0))},
+            BackgroundCheck(settings.getLong("poll-start",0),settings.getLong("poll-end",0),settings.getString("poll-result","").orEmpty(),settings.getString("poll-error","").orEmpty(),settings.getInt("poll-arrived",0)))
+        notifications.reconcile(SyncRules.activeMessages(state.value.messages,accounts,null),arrived,accounts){id->db.message(id)?.body?.take(3000)}
+        if(arrived.isNotEmpty())NotificationPreviewWorker.enqueue(context)
         notifications.history(state.value)
     }
     suspend fun load()=withContext(Dispatchers.IO){coordinator.data{refresh()}}
-    private data class Request(val account: MailAccount,val version: Long,val cached: List<MailItem>,val flags: Map<String,Long>,val initialized: Boolean)
+    private data class Request(val account: MailAccount,val version: Long,val cached: List<MailItem>,val flags: Map<String,Long>,val cursor: ArrivalCursor)
     private data class CheckReply(val inbox: InboxPage?=null,val unread: UnreadPage?=null)
     private data class HistoryRequest(val request: Request,val missing: List<MailItem>)
     private data class HistoryReply(val page: InboxPage?=null)
     private fun capture(id: String): Request? {
         val a=state.value.accounts.find{it.id==id && it.enabled}?:return null
-        return Request(a,coordinator.version(id),state.value.messages.filter{it.accountId==id && SyncRules.remoteInbox(it)},flagVersions.toMap(),syncPrefs.getBoolean(id,false))
+        val cached=state.value.messages.filter{it.accountId==id && SyncRules.remoteInbox(it)}
+        val cursor=if(syncPrefs.contains("alert-validity:$id"))ArrivalCursor(syncPrefs.getLong("alert-validity:$id",0),syncPrefs.getLong("alert-uid:$id",0),syncPrefs.getBoolean("alert-ready:$id",false))
+            else ArrivalCursor(cached.firstOrNull()?.validity?:syncPrefs.getLong("validity:$id",0),cached.maxOfOrNull{it.uid}?:0,syncPrefs.getBoolean(id,false))
+        return Request(a,coordinator.version(id),cached,flagVersions.toMap(),cursor)
     }
     private fun current(request: Request)=state.value.accounts.any{it.id==request.account.id && it.enabled} && coordinator.version(request.account.id)==request.version
     private fun protected(request: Request)=flagVersions.keys.filter{(flagVersions[it]?:0)!=(request.flags[it]?:0)}.toSet()
@@ -112,7 +117,7 @@ class MailRepository(private val context: Context) {
         val secret=password.ifEmpty{vault.open(old.id,old.secret)}
         gateway.verify(account,secret)
         val reset=!SyncRules.sameInbox(old,account)
-        if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("older:${old.id}").apply()
+        if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").apply()
         coordinator.invalidate(old.id)
         db.updateAccount(account.copy(secret=vault.seal(old.id,secret),enabled=old.enabled),reset)
         val history=readHistory()
@@ -170,13 +175,16 @@ class MailRepository(private val context: Context) {
                 val page=response.inbox
                 val unreadPage=response.unread
                 val merged=if(page!=null)SyncRules.checkedPage(captured.cached,now,page,guarded) else SyncRules.unreadPage(captured.cached,now,unreadPage!!,guarded)
-                val arrived=if(page==null)emptySet() else SyncRules.newUnreadIds(captured.cached.filter{it.localFolder=="inbox"},page.messages,captured.initialized)
                 val validity=page?.validity?:unreadPage!!.validity
+                val observedIds=(page?.messages?:unreadPage!!.messages).map{it.id}.toSet()
+                val arrival=NotificationRules.arrivals(captured.cursor,validity?:0,merged.filter{it.id in observedIds},complete=page!=null)
+                val arrived=arrival.arrived
                 val total=page?.history?.total?:unreadPage?.total
                 val previousEpoch=now.firstOrNull()?.validity
                 rememberEpoch(id,validity,total)
                 val edit=syncPrefs.edit().putInt("count:$id",total?:merged.size).putLong("checked:$id",System.currentTimeMillis())
                     .putLong("duration:$id",(System.nanoTime()-started)/1_000_000).remove("error:$id")
+                    .putLong("alert-validity:$id",arrival.cursor.validity).putLong("alert-uid:$id",arrival.cursor.uid).putBoolean("alert-ready:$id",arrival.cursor.ready)
                 if(page!=null) {
                     val oldIds=captured.cached.filter{it.localFolder=="inbox"}.map{it.id}.toSet()
                     val expanded=now.any{it.localFolder=="inbox" && it.id !in oldIds}
@@ -311,7 +319,7 @@ class MailRepository(private val context: Context) {
                 if(page==null)return@request HistoryStep(more=true)
                 val merged=SyncRules.historyPage(now,page,protected(request))
                 rememberEpoch(a.id,page.validity,page.history.total)
-                syncPrefs.edit().putBoolean(a.id,true).putInt("count:${a.id}",page.history.total?:merged.size).putBoolean("older:${a.id}",page.history.hasOlder).apply()
+                syncPrefs.edit().putInt("count:${a.id}",page.history.total?:merged.size).putBoolean("older:${a.id}",page.history.hasOlder).apply()
                 writeHistory(job.copy(status="running",activityAt=System.currentTimeMillis(),savedAt=System.currentTimeMillis(),error=if(skipped.isEmpty())"" else job.error))
                 saveRemote(a.id,now,merged);HistoryStep(more=true)
             })?:stopped
@@ -323,6 +331,44 @@ class MailRepository(private val context: Context) {
             HistoryStep(more=true,failedAccount=captured?.request?.account?.id)
         }
     }
+    suspend fun notificationEnvironmentChanged()=withContext(Dispatchers.IO){coordinator.data{
+        refresh(messages=state.value.messages)
+        if(notifications.previewIds().isNotEmpty() && MailNotifications.access(context).canPost)NotificationPreviewWorker.enqueue(context)
+    }}
+    suspend fun dismissNotifications(ids: Set<String>)=withContext(Dispatchers.IO){coordinator.data{notifications.dismiss(ids);refresh(messages=state.value.messages)}}
+    suspend fun testNotification(): Boolean=withContext(Dispatchers.IO){notifications.test()}
+    suspend fun backgroundStarted(token: String)=withContext(Dispatchers.IO){coordinator.data{
+        settings.edit().putString("poll-token",token).putLong("poll-start",System.currentTimeMillis()).putString("poll-result","running").putString("poll-error","").apply()
+        refresh(messages=state.value.messages)
+    }}
+    suspend fun backgroundFinished(token: String,result: String,error: String="",newUnread: Int=0)=withContext(Dispatchers.IO){coordinator.data{
+        if(settings.getString("poll-token",null)!=token)return@data
+        settings.edit().putLong("poll-end",System.currentTimeMillis()).putString("poll-result",result).putString("poll-error",error).putInt("poll-arrived",newUnread).apply()
+        refresh(messages=state.value.messages)
+    }}
+    suspend fun notificationPreviewStep(): Boolean=coordinator.request(prepare={
+        if(!MailNotifications.access(context).canPost)return@request null
+        val ids=notifications.previewIds()
+        val candidates=state.value.messages.filter{it.id in ids && !it.contentCached && SyncRules.remoteInbox(it)}.sortedByDescending{it.date}
+        val account=state.value.accounts.firstOrNull{it.enabled && candidates.any{m->m.accountId==it.id}}?:return@request null
+        capture(account.id)?.let{it to candidates.filter{m->m.accountId==account.id}.take(5)}
+    },fetch={(request,missing)->
+        val account=request.account
+        try {
+            gateway.contents(account,vault.open(account.id,account.secret),missing,onItem={batch->
+                coordinator.data {
+                    if(!current(request))return@data false
+                    val now=state.value.messages.filter{it.accountId==account.id && SyncRules.remoteInbox(it)}
+                    val merged=SyncRules.contentBatch(now,batch)
+                    if(batch.failures.isNotEmpty())notifications.previewFailed(batch.failures.keys)
+                    if(batch.missingIds.isNotEmpty())coordinator.invalidate(account.id)
+                    saveRemote(account.id,now,merged)
+                    batch.missingIds.isEmpty()
+                }
+            },onStart={m->coordinator.data{current(request) && m.id in notifications.previewIds()}})
+        }catch(e: CancellationException){throw e}catch(_: Exception){notifications.previewFailed(missing.map{it.id}.toSet())}
+        true
+    },commit={_,more->more})?:false
     suspend fun saveDraft(draft: ComposeDraft)=withContext(Dispatchers.IO){coordinator.data{
         val a=db.accounts().find { it.id==draft.accountId }?:error("Выберите ящик отправителя.")
         db.putMessage(draft.toMessage(a,"drafts").copy(delivery=if(draft.previousDeliveryUncertain)"uncertain" else ""));refresh()
