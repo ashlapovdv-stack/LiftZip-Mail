@@ -4,13 +4,21 @@ import android.content.Context
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.OutputStream
+import java.nio.file.Files
 import java.security.MessageDigest
 
-class AttachmentCache(private val context: Context) {
-    private val root get() = File(context.cacheDir,"attachments")
+class AttachmentCache(private val root: File,private val uriFor: (File)->String) {
+    constructor(context: Context):this(File(context.cacheDir,"attachments"),{file->FileProvider.getUriForFile(context,"${context.packageName}.attachments",file).toString()})
     private fun hash(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
     fun existing(message: MailItem,attachment: Attachment): File? =
         File(File(File(root,hash(message.accountId)),hash("${message.id}|${attachment.path}")),AttachmentRules.safeName(attachment.name)).takeIf{it.isFile}
+    /** Share a durable forward with the preview cache without an extra copy. Optional on filesystems without hard links. */
+    fun remember(message: MailItem,attachment: Attachment,source: File) {
+        val target=File(File(File(root,hash(message.accountId)),hash("${message.id}|${attachment.path}")),AttachmentRules.safeName(attachment.name))
+        if(target.isFile)return
+        target.parentFile!!.mkdirs()
+        runCatching{Files.createLink(target.toPath(),source.toPath())}
+    }
 
     fun prepare(message: MailItem, attachment: Attachment, fetch: (OutputStream)->Unit): File {
         val parent=File(File(root,hash(message.accountId)),hash("${message.id}|${attachment.path}"))
@@ -29,7 +37,7 @@ class AttachmentCache(private val context: Context) {
     }
 
     fun opened(file: File, attachment: Attachment) = OpenedAttachment(
-        FileProvider.getUriForFile(context,"${context.packageName}.attachments",file).toString(),
+        uriFor(file),
         attachment.name,AttachmentRules.mime(attachment.name,attachment.mime)
     )
 

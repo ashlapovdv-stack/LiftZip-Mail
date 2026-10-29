@@ -34,6 +34,7 @@ class NoticeVisuals(val notice: ServiceNotice): SnackbarVisuals {
             Snackbar(shape=RoundedCornerShape(20.dp),modifier=Modifier.fillMaxWidth(),
                 containerColor=if(error)colors.errorContainer else colors.secondaryContainer,
                 contentColor=if(error)colors.onErrorContainer else colors.onSecondaryContainer,
+                dismissActionContentColor=if(error)colors.onErrorContainer else colors.onSecondaryContainer,
                 dismissAction={IconButton(onClick={data.dismiss()}){Icon(Icons.Outlined.Close,"Скрыть сообщение")}}) {
                 Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                     Icon(if(error)Icons.Outlined.ErrorOutline else Icons.Outlined.CheckCircleOutline,null,Modifier.size(22.dp))

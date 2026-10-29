@@ -24,7 +24,7 @@ object ConversationText {
         repeat(32) {
             val lines=peel(remaining.replace("\r\n","\n").replace('\r','\n').trim().split('\n'))
             val header=header(lines)
-            val text=lines.drop(header?.lines?:0).joinToString("\n").trim()
+            val text=peel(lines.drop(header?.lines?:0).dropWhile{it.isBlank()}).joinToString("\n").trim()
             val nested=ReplyText.split(text)
             messages+=QuotedMessage(header?.sender,header?.date,if(nested.canCollapse)nested.current else text,header?.attribution)
             if(!nested.canCollapse)return QuotedConversation(parts.current,messages,body)

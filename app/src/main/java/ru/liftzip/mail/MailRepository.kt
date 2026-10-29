@@ -129,6 +129,7 @@ class MailRepository(private val context: Context) {
         val reset=!SyncRules.sameInbox(old,account)
         if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("unread:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").apply()
         coordinator.invalidate(old.id)
+        if(reset)attachmentCache.removeAccount(old.id)
         db.updateAccount(account.copy(secret=vault.seal(old.id,secret),enabled=old.enabled),reset)
         val history=readHistory()
         if(reset && old.id in history.accountIds && history.active)writeHistory(history.copy(status="paused",error="Настройки ящика изменены. Продолжите загрузку истории."))
@@ -475,6 +476,8 @@ class MailRepository(private val context: Context) {
                             }
                             coordinator.data{
                                 require(read.file.path==null || coordinator.version(read.plan.accountId)==read.version){"Исходный ящик изменён. Повторите подготовку вложения."}
+                                if(attachment!=null && db.message(id)?.forwarding?.files?.any{it.key==file.key}==true)
+                                    forwarded.existing(id,file.key,file.name)?.let{attachmentCache.remember(source,attachment,it)}
                                 updateForward(id){p->p.copy(files=p.files.map{if(it.key==file.key)it.copy(status=ForwardStatus.READY,prepared=prepared,bytes=prepared.size,error="")else it})}
                             }
                         }catch(e: CancellationException){throw e}catch(e: Exception){

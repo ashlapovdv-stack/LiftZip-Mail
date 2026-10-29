@@ -21,12 +21,16 @@ class ForwardAttachments(private val root: File, private val uriFor: (File)->Str
         val key=MessageDigest.getInstance("SHA-256").digest(id.toByteArray()).joinToString(""){"%02x".format(it)}
         return File(root,key)
     }
+    private fun destination(draftId: String,key: String,name: String): File {
+        val safeKey=MessageDigest.getInstance("SHA-256").digest(key.toByteArray()).joinToString(""){"%02x".format(it)}
+        return File(File(directory(draftId),safeKey),AttachmentRules.safeName(name))
+    }
+    fun existing(draftId: String,key: String,name: String): File? = destination(draftId,key,name).takeIf{it.isFile}
 
     fun prepareFile(draftId: String,key: String,name: String,mime: String,size: Long,
         cached: File? = null, progress: (Long)->Unit = {}, write: (OutputStream)->Unit): OutgoingFile {
         require(size<=20L*1024*1024){"Вложение больше 20 МБ."}
-        val safeKey=MessageDigest.getInstance("SHA-256").digest(key.toByteArray()).joinToString(""){"%02x".format(it)}
-        val target=File(File(directory(draftId),safeKey),AttachmentRules.safeName(name))
+        val target=destination(draftId,key,name)
         target.parentFile!!.mkdirs()
         target.parentFile!!.listFiles()?.filter{it!=target && it.name.endsWith(".part")}?.forEach{it.delete()}
         fun checked(bytes: Long) {
