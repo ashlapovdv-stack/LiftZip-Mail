@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(context,params) {
     override suspend fun doWork(): Result {
         val repo=(applicationContext as MailApplication).repository
-        val token=id.toString()
+        val token="$id:${java.util.UUID.randomUUID()}"
         return try {
             repo.load()
             val test=inputData.getBoolean("background-test",false)
@@ -110,7 +110,7 @@ class NotificationPreviewWorker(context: Context,params: WorkerParameters): Coro
         }catch(e: CancellationException){throw e}catch(_: Exception){Result.retry()}
     }
     companion object {
-        fun enqueue(context: Context,policy: ExistingWorkPolicy=ExistingWorkPolicy.KEEP) {
+        fun enqueue(context: Context,policy: ExistingWorkPolicy=ExistingWorkPolicy.APPEND_OR_REPLACE) {
             val work=OneTimeWorkRequestBuilder<NotificationPreviewWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.LINEAR,30,TimeUnit.SECONDS).build()

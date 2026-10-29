@@ -1,8 +1,24 @@
 package ru.liftzip.mail
 
+import java.util.PriorityQueue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 data class BodyFailure(val attempts: Int,val retryAt: Long,val error: String)
 data class BodyCacheStatus(val running: Boolean=false,val pending: Int=0,val saved: Int=0,val finished: Long=0,val error: String="")
 data class BodyWarmupResult(val saved: Int,val pending: Int,val eligible: Boolean)
+
+/** A request arriving while a scan finishes is retained; bursts need just one extra scan. */
+class BodyWarmupSignals {
+    private val requests=Channel<Unit>(Channel.CONFLATED)
+    fun request(){requests.trySend(Unit)}
+    suspend fun collect(visible: ()->Boolean,prepare: suspend ()->BodyWarmupResult,onError: (Exception)->Unit={}) {
+        for(signal in requests){
+            if(!visible())continue
+            try{do{if(!prepare().eligible)break}while(visible())}
+            catch(e: CancellationException){throw e}catch(e: Exception){onError(e)}
+        }
+    }
+}
 
 /** Message storage is the durable queue. Notification permission and dismissal never gate caching. */
 object ContentCacheRules {
@@ -11,10 +27,18 @@ object ContentCacheRules {
     fun rank(message: MailItem,priority: Set<String>)=when{message.id in priority->0;message.unread->1;else->2}
     fun pending(messages: List<MailItem>,accounts: List<MailAccount>,priority: Set<String> = emptySet()): List<MailItem> {
         val active=accounts.filter{it.enabled}.map{it.id}.toSet()
-        val inbox=messages.filter{it.accountId in active && SyncRules.remoteInbox(it)}
-        val recent=inbox.groupBy{it.accountId}.values.flatMap{it.sortedByDescending{m->m.date}.take(RECENT_PER_ACCOUNT)}.map{it.id}.toSet()
-        return inbox.filter{!it.contentCached && (it.unread || it.id in priority || it.id in recent)}
-            .sortedWith(compareBy<MailItem>{rank(it,priority)}.thenByDescending{it.date}.thenBy{it.id})
+        val byDate=compareBy<MailItem>{it.date}.thenBy{it.uid}.thenBy{it.id}
+        val recent=mutableMapOf<String,PriorityQueue<MailItem>>()
+        val missing=linkedMapOf<String,MailItem>()
+        for(m in messages){
+            if(m.accountId !in active || !SyncRules.remoteInbox(m))continue
+            val window=recent.getOrPut(m.accountId){PriorityQueue(RECENT_PER_ACCOUNT,byDate)}
+            if(window.size<RECENT_PER_ACCOUNT)window.add(m)
+            else if(byDate.compare(m,window.peek())>0){window.poll();window.add(m)}
+            if(!m.contentCached && (m.unread || m.id in priority))missing[m.id]=m
+        }
+        recent.values.forEach{window->window.filter{!it.contentCached}.forEach{missing[it.id]=it}}
+        return missing.values.sortedWith(compareBy<MailItem>{rank(it,priority)}.thenByDescending{it.date}.thenByDescending{it.uid}.thenBy{it.id})
     }
     fun eligible(pending: List<MailItem>,failures: Map<String,BodyFailure>,now: Long)=pending.filter{(failures[it.id]?.retryAt?:0)<=now}
     fun batches(pending: List<MailItem>,priority: Set<String>,served: Map<String,Int>): List<List<MailItem>> = pending.groupBy{it.accountId}.entries

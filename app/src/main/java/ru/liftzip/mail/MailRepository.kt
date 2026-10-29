@@ -35,18 +35,13 @@ data class SyncResult(val newUnread: Int, val errors: List<String>)
 class MailApplication : Application() {
     val repository by lazy { MailRepository(this) }
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.IO)
-    private var warmup: kotlinx.coroutines.Job?=null
+    private val warmup=BodyWarmupSignals()
     @Volatile var visible=false
-    override fun onCreate(){super.onCreate();scope.launchSafe{
+    override fun onCreate(){super.onCreate();scope.launchSafe{warmup.collect({visible},{repository.prefetchBodies(45_000)})};scope.launchSafe{
         repository.load()
         if(repository.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(this@MailApplication)else MailWorker.cancel(this@MailApplication)
     }}
-    @Synchronized fun warmBodies(){
-        if(!visible || warmup?.isActive==true)return
-        warmup=scope.launchSafe{
-            do{val result=repository.prefetchBodies(45_000);if(!result.eligible)break}while(visible)
-        }
-    }
+    fun warmBodies(){if(visible)warmup.request()}
     private fun kotlinx.coroutines.CoroutineScope.launchSafe(action: suspend ()->Unit)=launch {
         try{action()}catch(e: CancellationException){throw e}catch(_: Exception){/* Durable work retries separately. */}
     }
@@ -418,6 +413,7 @@ class MailRepository(private val context: Context) {
     }
     /** Same pipeline is used in the polling worker and while visible; only one pipeline owns a batch. */
     suspend fun prefetchBodies(budgetMs: Long=120_000): BodyWarmupResult=withContext(Dispatchers.IO){bodyMutex.withLock{
+        if(coordinator.data{ContentCacheRules.pending(state.value.messages,state.value.accounts,notifications.contentPriorityIds()).isEmpty()})return@withLock BodyWarmupResult(0,0,false)
         val deadline=System.nanoTime()+budgetMs*1_000_000
         val served=mutableMapOf<String,Int>();var round=0;var saved=0
         coordinator.data{bodyCache=bodyCache.copy(running=true);refresh(messages=state.value.messages)}

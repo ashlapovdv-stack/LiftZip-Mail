@@ -71,6 +71,36 @@ class ContentWarmupTest {
         assertEquals(301_000L,f.retryAt)
         assertEquals(20,f.attempts)
     }
+    @Test fun aLargeCachedHistoryKeepsOnlyTheNewestHundredReadTextsQueued() {
+        val messages=(1L..10_000L).map{mail(it,unread=false,cached=it<=9_900)}
+        val pending=ContentCacheRules.pending(messages.shuffled(kotlin.random.Random(1)),listOf(account()))
+        assertEquals((9_901L..10_000L).toList().reversed(),pending.map{it.uid})
+    }
+    @Test fun aRequestArrivingAsTheCurrentScanFinishesIsNotLost()=runBlocking {
+        val signals=BodyWarmupSignals();val next=CompletableDeferred<Unit>();var calls=0
+        val job=launch{signals.collect({true},{
+            calls++;if(calls==1)signals.request()else next.complete(Unit)
+            BodyWarmupResult(0,0,false)
+        })}
+        signals.request();withTimeout(3000){next.await()};assertEquals(2,calls);job.cancelAndJoin()
+    }
+    @Test fun aBurstDuringLoadingAddsOnlyOneFollowUpScan()=runBlocking {
+        val signals=BodyWarmupSignals();val first=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>();val second=CompletableDeferred<Unit>();var calls=0
+        val job=launch{signals.collect({true},{
+            calls++;if(calls==1){first.complete(Unit);release.await()}else second.complete(Unit)
+            BodyWarmupResult(0,0,false)
+        })}
+        signals.request();first.await();repeat(100){signals.request()};release.complete(Unit)
+        withTimeout(3000){second.await()};yield();assertEquals(2,calls);job.cancelAndJoin()
+    }
+    @Test fun aFailedScanDoesNotKillFutureWarmupRequests()=runBlocking {
+        val signals=BodyWarmupSignals();val failed=CompletableDeferred<Unit>();val recovered=CompletableDeferred<Unit>();var calls=0
+        val job=launch{signals.collect({true},{
+            calls++;if(calls==1)throw IOException("network")
+            recovered.complete(Unit);BodyWarmupResult(1,0,false)
+        },{failed.complete(Unit)})}
+        signals.request();failed.await();signals.request();withTimeout(3000){recovered.await()};assertEquals(2,calls);job.cancelAndJoin()
+    }
     @Test fun bodyGateIncludesSavingSoReaderAndWarmupCannotDownloadTheSameMessageTwice()=runBlocking {
         val gate=MailboxCoordinator();var full: MailItem?=null;val reads=AtomicInteger();val entered=CompletableDeferred<Unit>();val allowSave=CompletableDeferred<Unit>()
         val work=async(Dispatchers.Default){HistoryBodies.transfer(listOf(mail()),read={reads.incrementAndGet();entered.complete(Unit);mail(cached=true)},save={
