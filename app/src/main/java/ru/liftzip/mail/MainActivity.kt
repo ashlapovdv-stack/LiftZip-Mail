@@ -179,7 +179,7 @@ private val Paper=Color(0xFFF8F9F6)
                     val summary=s.messages.find{it.id==selected}
                     val message=s.opened?.takeIf{it.id==selected}?.let{full->summary?.let{full.copy(unread=it.unread,starred=it.starred)}}?:summary
                     if(message==null)LaunchedEffect(Unit){goInbox()}
-                    else ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,onBack={goInbox()},onStar={vm.star(message)},
+                    else ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,ownAddresses=s.accounts.map{it.email},onBack={goInbox()},onStar={vm.star(message)},
                         onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
@@ -378,7 +378,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     HorizontalDivider(Modifier.padding(start=75.dp),color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.45f))
 }
 
-@Composable private fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,onBack: ()->Unit,onStar: ()->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit) {
+@Composable private fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,onBack: ()->Unit,onStar: ()->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit) {
     val conversation=remember(m.body){ConversationText.parse(m.body)}
     Scaffold(topBar={TopAppBar(title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}})}) { padding->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal=22.dp)) {
@@ -394,7 +394,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             HorizontalDivider(Modifier.padding(vertical=10.dp))
             if(m.previewOnly)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             else SelectionContainer { Text(conversation.current.ifBlank{"В письме нет доступного текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=27.sp,modifier=Modifier.fillMaxWidth().padding(vertical=14.dp)) }
-            if(!m.previewOnly && conversation.messages.isNotEmpty())ConversationHistory(m.id,conversation,listOfNotNull(account?.email))
+            if(!m.previewOnly && conversation.messages.isNotEmpty())ConversationHistory(m.id,conversation,ownAddresses)
             m.attachments.forEach { file->
                 OutlinedCard(onClick={onOpenAttachment(file)},modifier=Modifier.fillMaxWidth().padding(vertical=5.dp),enabled=!busy) {
                     Row(Modifier.padding(start=15.dp,top=10.dp,bottom=10.dp,end=5.dp),verticalAlignment=Alignment.CenterVertically) {

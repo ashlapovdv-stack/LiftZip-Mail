@@ -188,7 +188,7 @@ class MailGateway(private val context: Context) {
             (part as? IMAPMessage)?.setPeek(true)
             if(attachment.path!="root")attachment.path.split('.').forEach { part=(part.content as Multipart).getBodyPart(it.toInt()) }
             part.inputStream.use { input->
-                val bytes=ByteArray(8192);var total=0L
+                val bytes=ByteArray(64*1024);var total=0L
                 while(true){val n=input.read(bytes);if(n<0)break;total+=n;require(total<=25L*1024*1024){"В этой версии вложение ограничено 25 МБ."};out.write(bytes,0,n)}
             }
         } finally { folder.close(false) }

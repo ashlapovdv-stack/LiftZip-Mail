@@ -98,4 +98,9 @@ class ForwardPreparationTest {
     @Test fun individualLimitIsCheckedEvenWithUnknownSize() {
         assertThrows(IllegalArgumentException::class.java){ForwardBudget().progress("a",21L*1024*1024)}
     }
+    @Test fun removingACompletedFileReleasesItsBudgetForOtherFiles() {
+        val budget=ForwardBudget(mapOf("removed" to 20L*1024*1024))
+        budget.retain(setOf("remaining"))
+        budget.progress("remaining",20L*1024*1024)
+    }
 }

@@ -94,4 +94,14 @@ class ForwardAttachmentsTest {
         assertEquals(listOf(2L,5L),progress)
         assertEquals(5L,ready.size)
     }
+    @Test fun stalePartialsFromAnInterruptedProcessAreRemovedOnNextAttempt() {
+        val root=temporary.newFolder()
+        val storage=store(root)
+        val first=storage.prepareFile("draft","one","a.txt","text/plain",-1){it.write(byteArrayOf(1))}
+        val folder=File(URI(first.uri)).parentFile!!
+        val partial=File(folder,"a.txt.interrupted.part").apply{writeText("Old partial")}
+        val reused=storage.prepareFile("draft","one","a.txt","text/plain",-1){fail("File already ready")}
+        assertEquals(first,reused)
+        assertFalse(partial.exists())
+    }
 }

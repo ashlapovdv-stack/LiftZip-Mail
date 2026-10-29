@@ -27,6 +27,8 @@ class ForwardAttachments(private val root: File, private val uriFor: (File)->Str
         require(size<=20L*1024*1024){"Вложение больше 20 МБ."}
         val safeKey=MessageDigest.getInstance("SHA-256").digest(key.toByteArray()).joinToString(""){"%02x".format(it)}
         val target=File(File(directory(draftId),safeKey),AttachmentRules.safeName(name))
+        target.parentFile!!.mkdirs()
+        target.parentFile!!.listFiles()?.filter{it!=target && it.name.endsWith(".part")}?.forEach{it.delete()}
         fun checked(bytes: Long) {
             if(Thread.currentThread().isInterrupted)throw InterruptedIOException()
             require(bytes<=20L*1024*1024){"Вложение больше 20 МБ."}
@@ -36,7 +38,6 @@ class ForwardAttachments(private val root: File, private val uriFor: (File)->Str
             checked(target.length())
             return OutgoingFile(uriFor(target),name,AttachmentRules.mime(name,mime),target.length())
         }
-        target.parentFile!!.mkdirs()
         // Unique partials also keep a cancelled worker from overwriting a later attempt.
         val partial=File(target.parentFile,target.name+".${UUID.randomUUID()}.part")
         try {
