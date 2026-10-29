@@ -37,7 +37,7 @@ class MailNotifications(private val context: Context) {
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return
         manager.createNotificationChannel(NotificationChannel("history","Загрузка истории",NotificationManager.IMPORTANCE_LOW).apply{setShowBadge(false)})
         val ids=job.accountIds.toSet()
-        val loaded=snapshot.messages.count{it.localFolder=="inbox" && it.accountId in ids}
+        val loaded=snapshot.messages.count{it.localFolder=="inbox" && it.contentCached && it.accountId in ids}
         val total=job.accountIds.takeIf{list->list.all{snapshot.history[it]?.total!=null}}?.sumOf{snapshot.history[it]?.total?:0}
         manager.notify(101,NotificationCompat.Builder(context,"history").setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Загрузка истории почты").setContentText(if(total==null)"Загружено $loaded писем" else "Загружено $loaded из $total")

@@ -18,10 +18,11 @@ import androidx.compose.ui.unit.dp
 
 @Composable fun HistoryScreen(s: UiState,onBack: ()->Unit,onStart: (List<String>)->Unit,onPause: ()->Unit,onResume: ()->Unit) {
     val job=s.historyDownload
-    var selected by rememberSaveable{mutableStateOf(ArrayList(job.accountIds.ifEmpty{s.accounts.map{it.id}}))}
-    val available=s.accounts.map{it.id}.toSet()
+    var selected by rememberSaveable{mutableStateOf<List<String>>(job.accountIds.ifEmpty{s.accounts.filter{it.enabled}.map{it.id}})}
+    val available=s.accounts.filter{it.enabled}.map{it.id}.toSet()
     val chosen=selected.filter{it in available}
     val counts=remember(s.messages){s.messages.filter{it.localFolder=="inbox"}.groupingBy{it.accountId}.eachCount()}
+    val contents=remember(s.messages){s.messages.filter{it.localFolder=="inbox" && it.contentCached}.groupingBy{it.accountId}.eachCount()}
     Scaffold(topBar={TopAppBar(title={Text("Загрузка истории")},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}})}){padding->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
             Text("Загрузить все входящие",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
@@ -32,17 +33,19 @@ import androidx.compose.ui.unit.dp
             }
             s.accounts.forEach{a->
                 val loaded=counts[a.id]?:0
+                val saved=contents[a.id]?:0
                 val history=s.history[a.id]
                 val total=history?.total
                 OutlinedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
-                        Row(Modifier.fillMaxWidth().clickable(enabled=!job.active && !s.busy){selected=ArrayList(if(a.id in chosen)chosen-a.id else chosen+a.id)},verticalAlignment=Alignment.CenterVertically) {
-                            Checkbox(checked=a.id in if(job.active)job.accountIds else chosen,onCheckedChange=null)
-                            Column(Modifier.weight(1f).padding(start=8.dp)){Text(a.name,fontWeight=FontWeight.SemiBold);Text(a.email,style=MaterialTheme.typography.bodySmall)}
+                        Row(Modifier.fillMaxWidth().clickable(enabled=a.enabled && !job.active && !s.busy){selected=ArrayList(if(a.id in chosen)chosen-a.id else chosen+a.id)},verticalAlignment=Alignment.CenterVertically) {
+                            Checkbox(checked=a.id in if(job.active)job.accountIds else chosen,onCheckedChange=null,enabled=a.enabled)
+                            Column(Modifier.weight(1f).padding(start=8.dp)){Text(a.name,fontWeight=FontWeight.SemiBold);Text(a.email,style=MaterialTheme.typography.bodySmall);if(!a.enabled)Text("Синхронизация выключена",style=MaterialTheme.typography.labelSmall)}
                         }
                         Text(if(total==null)"Загружено $loaded писем · всего пока неизвестно" else "Загружено $loaded из $total",style=MaterialTheme.typography.bodySmall,modifier=Modifier.padding(vertical=8.dp))
-                        if(total!=null && total>0)LinearProgressIndicator(progress={loaded.toFloat().div(total).coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth())
-                        if(history?.hasOlder==false)Text("Все входящие загружены",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(top=6.dp))
+                        Text("Текст сохранён у $saved писем",style=MaterialTheme.typography.bodySmall,modifier=Modifier.padding(bottom=8.dp))
+                        if(total!=null && total>0)LinearProgressIndicator(progress={saved.toFloat().div(total).coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth())
+                        if(!SyncRules.needsHistory(a.id,s.messages,history))Text("Все входящие загружены",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary,modifier=Modifier.padding(top=6.dp))
                     }
                 }
             }

@@ -15,14 +15,15 @@ data class MailAccount(
     val username: String = email, val provider: Provider, val imapHost: String,
     val imapPort: Int = 993, val imapStartTls: Boolean = false,
     val smtpHost: String, val smtpPort: Int = 465, val smtpStartTls: Boolean = false,
-    val secret: String = "", val senderName: String = name
+    val secret: String = "", val senderName: String = name, val enabled: Boolean = true
 )
 
 data class Attachment(val path: String, val name: String, val mime: String, val size: Int)
 data class OutgoingFile(val uri: String, val name: String, val mime: String, val size: Long) : java.io.Serializable
 data class OpenedAttachment(val uri: String, val name: String, val mime: String) : java.io.Serializable
 data class InboxHistory(val total: Int? = null, val hasOlder: Boolean = true)
-data class InboxPage(val messages: List<MailItem>, val history: InboxHistory)
+data class InboxPage(val messages: List<MailItem>, val history: InboxHistory, val validity: Long? = messages.firstOrNull()?.validity)
+data class ContentBatch(val messages: List<MailItem>,val missingIds: Set<String>)
 data class UnreadPage(val validity: Long,val messages: List<MailItem>,val total: Int)
 data class MailItem(
     val id: String, val accountId: String, val uid: Long = 0, val validity: Long = 0,
@@ -41,7 +42,8 @@ data class ComposeDraft(
 
 enum class MailFolder(val label: String, val key: String) {
     INBOX("Входящие", "inbox"), UNREAD("Непрочитанные", "unread"), STARRED("Избранное", "starred"),
-    SENT("Отправленные", "sent"), DRAFTS("Черновики", "drafts")
+    SENT("Отправленные", "sent"), DRAFTS("Черновики", "drafts");
+    val navigationLabel get()=when(this){UNREAD->"Непроч.";SENT->"Отправл.";else->label}
 }
 
 object MailRules {

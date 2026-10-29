@@ -54,7 +54,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         work {
             repo.load()
             mutable.update { it.copy(loaded=true) }
-            if(repo.snapshot.value.accounts.isNotEmpty())MailWorker.schedule(getApplication())
+            if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
     }
     fun search(text: String){query.value=text}
@@ -75,7 +75,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         if(!active){foreground?.cancel();foreground=null;return}
         if(foreground?.isActive==true)return
         foreground=viewModelScope.launch {
-            state.map{Triple(it.loaded,it.poll.foregroundMinutes,it.accounts.map{a->a.id})}.distinctUntilChanged().collectLatest { (loaded,minutes,ids)->
+            state.map{Triple(it.loaded,it.poll.foregroundMinutes,it.accounts.filter{a->a.enabled}.map{a->a.id})}.distinctUntilChanged().collectLatest { (loaded,minutes,ids)->
                 if(!loaded || ids.isEmpty())return@collectLatest
                 while(isActive){check(false);delay(minutes*60_000L)}
             }
@@ -105,8 +105,17 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     }
     fun removeAccount(id: String)=work{
         repo.removeAccount(id)
-        if(repo.snapshot.value.accounts.isEmpty())MailWorker.cancel(getApplication())
+        if(repo.snapshot.value.accounts.none{it.enabled})MailWorker.cancel(getApplication())
         notice("Ящик отключён от приложения. Письма на сервере сохранены.")
+    }
+    fun setAccountEnabled(id: String,enabled: Boolean) {
+        viewModelScope.launch {
+            try {
+                repo.setAccountEnabled(id,enabled)
+                if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
+                if(enabled)check(false)
+            }catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e))}
+        }
     }
     fun refresh() {check(true)}
     private fun check(manual: Boolean) {
@@ -114,7 +123,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         checking=viewModelScope.launch {
             mutable.update{it.copy(refreshing=true)}
             try {
-                val result=repo.sync()
+                val result=repo.sync(if(manual)unreadScope.value.accountId else null)
                 val scope=unreadScope.value
                 val errors=result.errors.toMutableList()
                 if(scope.enabled && !mutable.value.unreadRefreshing)errors+=repo.syncUnread(scope.accountId).errors
@@ -136,7 +145,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         notice(if(result.errors.isNotEmpty())result.errors.joinToString("\n") else if(added>0)"Загружено ещё $added писем" else "Более старых писем нет")
     }
     fun read(m: MailItem){
-        if(!m.unread)return
+        if(!m.unread || mutable.value.accounts.none{it.id==m.accountId && it.enabled})return
         viewModelScope.launch { try{val result=repo.markRead(setOf(m.id),unread=false);if(result.errors.isNotEmpty())notice(result.errors.joinToString("\n"))}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e))} }
     }
     fun markRead(ids: Set<String>,unread: Boolean,onChanged: (Set<String>)->Unit)=work{

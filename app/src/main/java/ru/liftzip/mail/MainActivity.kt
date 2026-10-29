@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -110,7 +111,7 @@ private val Paper=Color(0xFFF8F9F6)
     fun compose(value: ComposeDraft?=null){
         val senderId=SenderRules.forNewMessage(s.accounts,s.defaultAccountId,currentAccount)
         val a=s.accounts.firstOrNull { it.id==senderId }
-        if(a==null){route="add";return}
+        if(a==null){if(s.accounts.isEmpty())route="add" else vm.notice("Включите ящик переключателем в меню.");return}
         draft=value?:ComposeDraft(accountId=a.id);route="compose"
     }
     LaunchedEffect(s.notice){s.notice?.let { snack.showSnackbar(it,duration=SnackbarDuration.Long);vm.dismissNotice() }}
@@ -164,8 +165,8 @@ private val Paper=Color(0xFFF8F9F6)
                 else -> {
                     val memoryKey="${currentAccount?:"all"}:${folder.name}"
                     val memory=inboxMemory.getOrPut(memoryKey){InboxMemory()}
-                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,memory,onAccount={currentAccount=it},onFolder={folder=it},onAdd={route="add"},
-                    onSettings={route="settings"},onHistory={historyReturn="inbox";route="history"},onRefresh=vm::refresh,onLoadOlder={vm.loadOlder(currentAccount)},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onSearch=vm::search,onOpen={m->
+                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,memory,onAccount={currentAccount=it},onEnable=vm::setAccountEnabled,onFolder={folder=it},onAdd={route="add"},
+                    onSettings={route="settings"},onRefresh=vm::refresh,onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onSearch=vm::search,onOpen={m->
                         selected=m.id
                         if(m.localFolder=="drafts")vm.openDraft(m.id){full->if(route=="inbox" && selected==full.id)compose(ComposeDraft(full.id,full.accountId,full.recipients,full.subject,full.body,full.outgoing,previousDeliveryUncertain=full.delivery in listOf("sending","uncertain")))}
                         else route="reader"
@@ -190,26 +191,28 @@ private val Paper=Color(0xFFF8F9F6)
     }
 }
 
-@Composable private fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,memory: InboxMemory,onAccount: (String?)->Unit,onFolder: (MailFolder)->Unit,
-    onAdd: ()->Unit,onSettings: ()->Unit,onHistory: ()->Unit,onRefresh: ()->Unit,onLoadOlder: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
+@Composable private fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,memory: InboxMemory,onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,
+    onAdd: ()->Unit,onSettings: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
     onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit) {
     val drawer=rememberDrawerState(DrawerValue.Closed)
     val scope=rememberCoroutineScope()
     var query by rememberSaveable { mutableStateOf("") }
     var checked by remember { mutableStateOf(arrayListOf<String>()) }
     LaunchedEffect(query){onSearch(query)}
-    val visible=remember(s.messages,accountId,folder,query,s.searchIds,s.searchQuery){
-        val source=if(query.isBlank())s.messages else s.messages.filter{s.searchQuery==query && it.id in s.searchIds}
+    val visible=remember(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery){
+        val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
+        val source=if(query.isBlank())active else active.filter{s.searchQuery==query && it.id in s.searchIds}
         MailRules.filter(source,accountId,folder,"")
     }
     val visibleIds=remember(visible){visible.map{it.id}}
     val selected=checked.toSet().intersect(visibleIds.toSet())
     val selectionMode=selected.isNotEmpty()
     val current=s.accounts.find{it.id==accountId}
-    val selectedAccounts=s.accounts.filter{accountId==null || it.id==accountId}
-    val hasOlder=selectedAccounts.any{s.history[it.id]?.hasOlder!=false}
+    val selectedAccounts=s.accounts.filter{if(accountId==null)it.enabled else it.id==accountId}
+    val hasOlder=selectedAccounts.any{SyncRules.needsHistory(it.id,s.messages,s.history[it.id])}
     val total=selectedAccounts.takeIf{accounts->accounts.all{s.history[it.id]?.total!=null}}?.sumOf{s.history[it.id]?.total?:0}
-    val loaded=s.messages.count{it.localFolder=="inbox" && (accountId==null || it.accountId==accountId)}
+    val selectedIds=selectedAccounts.map{it.id}.toSet()
+    val loaded=s.messages.count{it.localFolder=="inbox" && it.accountId in selectedIds}
     fun toggle(id: String){checked=ArrayList(if(id in selected)selected-id else selected+id)}
     fun mark(unread: Boolean){onMarkRead(selected,unread){updated->checked=ArrayList(checked.filter{it !in updated})}}
     BackHandler(enabled=selectionMode){checked=arrayListOf()}
@@ -231,13 +234,16 @@ private val Paper=Color(0xFFF8F9F6)
         ModalDrawerSheet {
             Column(Modifier.padding(24.dp)){Text("Почта",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Ваши почтовые ящики",style=MaterialTheme.typography.bodySmall)}
             NavigationDrawerItem(label={Text("Все ящики")},selected=accountId==null,icon={Icon(Icons.Outlined.AllInbox,null)},modifier=Modifier.padding(horizontal=12.dp),onClick={onAccount(null);scope.launch{drawer.close()}})
-            s.accounts.forEach{a->NavigationDrawerItem(label={Column{Text(a.name);Text(a.email,style=MaterialTheme.typography.labelSmall)}},selected=a.id==accountId,
-                icon={AccountMark(a)},modifier=Modifier.padding(horizontal=12.dp),onClick={onAccount(a.id);scope.launch{drawer.close()}})}
+            s.accounts.forEach{a->Row(Modifier.fillMaxWidth().padding(end=12.dp),verticalAlignment=Alignment.CenterVertically) {
+                NavigationDrawerItem(label={Column{Text(a.name,maxLines=1,overflow=TextOverflow.Ellipsis);Text(a.email,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelSmall);if(!a.enabled)Text("Синхронизация выключена",style=MaterialTheme.typography.labelSmall)}},selected=a.id==accountId,
+                    icon={AccountMark(a)},modifier=Modifier.weight(1f).padding(start=12.dp,end=4.dp),onClick={onAccount(a.id);scope.launch{drawer.close()}})
+                Switch(checked=a.enabled,onCheckedChange={onEnable(a.id,it)},modifier=Modifier.semantics{contentDescription="Синхронизация ящика ${a.name}"})
+            }}
             Spacer(Modifier.height(16.dp));HorizontalDivider(Modifier.padding(horizontal=24.dp))
             TextButton(onClick={scope.launch{drawer.close()};onAdd()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
             Spacer(Modifier.weight(1f))
             TextButton(onClick={scope.launch{drawer.close()};onSettings()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Lift-Zip Почта · 0.3",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Lift-Zip Почта · 0.3.1",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }) {
         Scaffold(topBar={
@@ -245,14 +251,14 @@ private val Paper=Color(0xFFF8F9F6)
                 IconButton(onClick={checked=ArrayList(visibleIds)},enabled=!s.busy){Icon(Icons.Outlined.SelectAll,"Выбрать все загруженные письма в списке")}
                 IconButton(onClick={mark(false)},enabled=!s.busy){Icon(Icons.Outlined.MarkEmailRead,"Отметить прочитанными")}
                 IconButton(onClick={mark(true)},enabled=!s.busy){Icon(Icons.Outlined.MarkEmailUnread,"Отметить непрочитанными")}
-            }) else TopAppBar(title={Column{Text(folder.label,fontWeight=FontWeight.Bold);Text(current?.name?:"Все ящики",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
+            }) else TopAppBar(title={Column{Text(folder.label,fontWeight=FontWeight.Bold);Text((current?.name?:"Все ящики")+if(current?.enabled==false)" · выключен" else "",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
                 navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}},actions={
                     IconButton(onClick=onRefresh,enabled=!s.refreshing && !s.unreadRefreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
                 })
         },floatingActionButton={if(!selectionMode)ExtendedFloatingActionButton(onClick=onCompose,icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})},
-            bottomBar={NavigationBar{MailFolder.entries.forEach{f->NavigationBarItem(selected=f==folder,onClick={onFolder(f)},icon={Icon(folderIcon(f),null)},label={Text(f.label,fontSize=10.sp)},alwaysShowLabel=true)}}}){padding->
+            bottomBar={NavigationBar{MailFolder.entries.forEach{f->NavigationBarItem(selected=f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}}}){padding->
             Column(Modifier.padding(padding).fillMaxSize()) {
-                if(s.busy)LinearProgressIndicator(Modifier.fillMaxWidth())
+                if(s.busy || s.refreshing || s.unreadRefreshing)LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp).semantics{contentDescription="Обновление почты"})
                 OutlinedTextField(value=query,onValueChange={query=it},placeholder={Text("Поиск писем")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton(onClick={query=""}){Icon(Icons.Outlined.Close,"Очистить поиск")}},
                     singleLine=true,shape=RoundedCornerShape(18.dp),modifier=Modifier.fillMaxWidth().padding(horizontal=18.dp,vertical=10.dp))
                 if(s.searching && query.isNotBlank())LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -260,10 +266,7 @@ private val Paper=Color(0xFFF8F9F6)
                     Text(if(query.isNotBlank())"Поиск среди загруженных писем" else if(folder==MailFolder.SENT)"Отправленные с этого устройства" else "${visible.size} писем · ${visible.count{it.unread}} непрочитанных",
                         style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if(folder==MailFolder.INBOX || folder==MailFolder.UNREAD)TextButton(onClick=onHistory,modifier=Modifier.padding(horizontal=10.dp)) {
-                    Icon(Icons.Outlined.Download,null,Modifier.size(18.dp));Spacer(Modifier.width(8.dp));Text(if(s.historyDownload.active)"История загружается · посмотреть" else "Загрузить всю историю")
-                }
-                PullToRefreshBox(isRefreshing=s.refreshing || s.unreadRefreshing,onRefresh=onRefresh,modifier=Modifier.weight(1f)) {
+                PullToRefreshBox(isRefreshing=s.refreshing || s.unreadRefreshing,onRefresh={if(!s.refreshing && !s.unreadRefreshing)onRefresh()},indicator={},modifier=Modifier.weight(1f)) {
                     LazyColumn(Modifier.fillMaxSize(),state=memory.list,contentPadding=PaddingValues(bottom=100.dp)) {
                         if(visible.isEmpty())item(key="empty") {Box(Modifier.fillMaxWidth().padding(vertical=30.dp),contentAlignment=Alignment.Center) {
                             Column(horizontalAlignment=Alignment.CenterHorizontally,modifier=Modifier.padding(24.dp)) {
@@ -277,10 +280,7 @@ private val Paper=Color(0xFFF8F9F6)
                         if(folder==MailFolder.INBOX)item(key="history-footer") {
                             Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=20.dp),horizontalAlignment=Alignment.CenterHorizontally) {
                                 Text(if(total==null)"Загружено $loaded писем" else "Загружено $loaded из $total",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                                if(hasOlder) {
-                                    OutlinedButton(onClick=onLoadOlder,enabled=!s.busy && !s.historyDownload.active,modifier=Modifier.padding(top=10.dp)){Icon(Icons.Outlined.ExpandMore,null);Spacer(Modifier.width(8.dp));Text("Загрузить ещё 100")}
-                                    TextButton(onClick=onHistory){Text("Загрузить всю историю")}
-                                }else Text("Все входящие загружены",Modifier.padding(top=8.dp),style=MaterialTheme.typography.labelSmall)
+                                if(!hasOlder)Text("Все входящие загружены",Modifier.padding(top=8.dp),style=MaterialTheme.typography.labelSmall)
                             }
                         }
                     }
@@ -455,7 +455,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             if(d.previousDeliveryUncertain)InfoCard("Результат прошлой отправки неизвестен. Проверьте доставку перед повтором.")
             Box(Modifier.padding(horizontal=8.dp)) {
                 TextButton(onClick={senderMenu=true},enabled=!s.busy){Text("От: ${s.accounts.find{it.id==d.accountId}?.email.orEmpty()}");Icon(Icons.Outlined.ExpandMore,null)}
-                DropdownMenu(expanded=senderMenu,onDismissRequest={senderMenu=false}){s.accounts.forEach{a->DropdownMenuItem(text={Text(a.email)},onClick={onChange(d.copy(accountId=a.id));senderMenu=false})}}
+                DropdownMenu(expanded=senderMenu,onDismissRequest={senderMenu=false}){s.accounts.forEach{a->DropdownMenuItem(text={Text(a.email+if(a.enabled)"" else " · выключен")},enabled=a.enabled,onClick={onChange(d.copy(accountId=a.id));senderMenu=false})}}
             }
             OutlinedTextField(d.to,{onChange(d.copy(to=it))},label={Text("Кому")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
             OutlinedTextField(d.subject,{onChange(d.copy(subject=it))},label={Text("Тема")},modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
@@ -491,7 +491,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                         IconButton(onClick={removal=a},enabled=!s.busy){Icon(Icons.Outlined.LinkOff,"Отключить ящик")}
                     }
                     val check=s.checks[a.id]
-                    Text(if(check?.time!=null && check.time>0)"Успешная проверка: "+SimpleDateFormat("d MMM, HH:mm",Locale("ru")).format(Date(check.time)) else "Успешная проверка ещё не выполнена",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=8.dp))
+                    Text(if(!a.enabled)"Синхронизация выключена" else if(check?.time!=null && check.time>0)"Успешная проверка: "+SimpleDateFormat("d MMM, HH:mm",Locale("ru")).format(Date(check.time)) else "Успешная проверка ещё не выполнена",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=8.dp))
+                    if(a.enabled && check!=null && check.durationMs>0)Text("Последний запрос: "+String.format(Locale("ru"),"%.1f с",check.durationMs/1000.0),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     if(check?.error?.isNotEmpty()==true)Text(check.error,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(top=5.dp))
                 }
             }}
@@ -515,7 +516,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             HorizontalDivider(Modifier.padding(vertical=8.dp))
             Text("Хранение и синхронизация",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
             Text("Поиск работает по загруженным письмам. Черновики и отправленные из этого приложения хранятся на устройстве.\n\nВложения открываются нажатием на файл; значок загрузки сохраняет копию. PDF и изображения можно смотреть внутри приложения. Для других форматов используется установленная программа.\n\nПароли защищены Android Keystore. Резервное копирование почтовых данных отключено. Внешний сервер приложения не используется.",style=MaterialTheme.typography.bodyMedium)
-            Text("Тестовая сборка · 0.3.0",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Тестовая сборка · 0.3.1",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(24.dp))
         }
     }

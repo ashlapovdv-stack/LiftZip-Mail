@@ -20,13 +20,13 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             id=j.getString("id"), name=j.getString("name"), email=j.getString("email"), username=j.getString("username"),
             provider=Provider.valueOf(j.getString("provider")), imapHost=j.getString("imapHost"), imapPort=j.getInt("imapPort"),
             imapStartTls=j.getBoolean("imapStartTls"), smtpHost=j.getString("smtpHost"), smtpPort=j.getInt("smtpPort"),
-            smtpStartTls=j.getBoolean("smtpStartTls"), secret=j.getString("secret"), senderName=j.optString("senderName",j.getString("name"))
+            smtpStartTls=j.getBoolean("smtpStartTls"), secret=j.getString("secret"), senderName=j.optString("senderName",j.getString("name")),enabled=j.optBoolean("enabled",true)
         )) } }
     }
     @Synchronized fun putAccount(a: MailAccount) {
         val j=JSONObject().put("id",a.id).put("name",a.name).put("email",a.email).put("username",a.username)
             .put("provider",a.provider.name).put("imapHost",a.imapHost).put("imapPort",a.imapPort).put("imapStartTls",a.imapStartTls)
-            .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName)
+            .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName).put("enabled",a.enabled)
         writableDatabase.insertOrThrow("accounts",null,ContentValues().apply { put("id",a.id);put("data",j.toString()) })
     }
     @Synchronized fun updateAccount(a: MailAccount,resetInbox: Boolean) {
@@ -35,7 +35,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         try {
             val j=JSONObject().put("id",a.id).put("name",a.name).put("email",a.email).put("username",a.username)
                 .put("provider",a.provider.name).put("imapHost",a.imapHost).put("imapPort",a.imapPort).put("imapStartTls",a.imapStartTls)
-                .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName)
+                .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName).put("enabled",a.enabled)
             // UPDATE preserves the account row and its drafts/sent; REPLACE would cascade-delete them.
             require(db.update("accounts",ContentValues().apply{put("data",j.toString())},"id = ?",arrayOf(a.id))==1)
             if(resetInbox)db.delete("messages","account_id = ? AND folder IN (?, ?)",arrayOf(a.id,"inbox","unread-cache"))

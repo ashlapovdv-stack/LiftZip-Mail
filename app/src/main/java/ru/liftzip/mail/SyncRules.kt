@@ -17,11 +17,50 @@ data class HistoryDownload(
 ) {
     val active get() = status == "running" || status == "waiting"
 }
-data class SyncCheck(val time: Long = 0, val error: String = "")
+data class SyncCheck(val time: Long = 0, val error: String = "",val durationMs: Long = 0)
 data class FlagChange(val updated: Set<String>, val errors: List<String>)
 data class HistoryStep(val more: Boolean = false, val failedAccount: String? = null, val retry: Boolean = false)
 
 object SyncRules {
+    fun needsHistory(accountId: String,messages: List<MailItem>,history: InboxHistory?)=
+        history?.hasOlder!=false || messages.any{it.accountId==accountId && it.localFolder=="inbox" && !it.contentCached}
+    fun activeMessages(messages: List<MailItem>,accounts: List<MailAccount>,selected: String?): List<MailItem> {
+        if(selected!=null)return messages.filter{it.accountId==selected}
+        val ids=accounts.filter{it.enabled}.map{it.id}.toSet()
+        return messages.filter{it.accountId in ids}
+    }
+    private fun latestContent(incoming: MailItem,current: MailItem?,protectFlags: Boolean): MailItem {
+        var result=incoming
+        if(current?.contentCached==true)result=result.copy(body=current.body,attachments=current.attachments,contentCached=true,previewOnly=current.previewOnly)
+        if(current!=null && protectFlags)result=result.copy(unread=current.unread,starred=current.starred)
+        return result
+    }
+    fun checkedPage(captured: List<MailItem>,current: List<MailItem>,page: InboxPage,protected: Set<String>): List<MailItem> {
+        if(page.history.total==0)return emptyList()
+        val validity=page.validity
+        val knownWindow=captured.filter{it.localFolder=="inbox"}.map{it.id}.toSet()
+        val byId=current.associateBy{it.id}
+        val ids=page.messages.map{it.id}.toSet()
+        val keep=current.filter{it.validity==validity && it.id !in ids && (it.localFolder=="unread-cache" || it.id !in knownWindow)}
+        return keep+page.messages.map{latestContent(it,byId[it.id],it.id in protected)}
+    }
+    fun historyPage(current: List<MailItem>,page: InboxPage,protected: Set<String>): List<MailItem> {
+        if(page.history.total==0)return emptyList()
+        val ids=page.messages.map{it.id}.toSet()
+        val byId=current.associateBy{it.id}
+        return current.filter{it.validity==page.validity && it.id !in ids}+page.messages.map{latestContent(it,byId[it.id],it.id in protected)}
+    }
+    fun unreadPage(captured: List<MailItem>,current: List<MailItem>,page: UnreadPage,protected: Set<String>): List<MailItem> {
+        val ids=page.messages.map{it.id}.toSet()
+        val known=captured.map{it.id}.toSet()
+        val byId=current.associateBy{it.id}
+        return current.filter{it.validity==page.validity && it.id !in ids}.map{if(it.id in known && it.id !in protected)it.copy(unread=false)else it}+
+            page.messages.map{latestContent(it,byId[it.id],it.id in protected)}
+    }
+    fun contentBatch(current: List<MailItem>,batch: ContentBatch): List<MailItem> {
+        val byId=batch.messages.associateBy{it.id}
+        return current.filter{it.id !in batch.missingIds}.map{m->byId[m.id]?.copy(unread=m.unread,starred=m.starred,localFolder=m.localFolder)?:m}
+    }
     fun remoteInbox(message: MailItem)=message.localFolder=="inbox" || message.localFolder=="unread-cache"
     fun mergeWindow(cached: List<MailItem>,page: InboxPage): List<MailItem> {
         val validity=page.messages.firstOrNull()?.validity
@@ -40,7 +79,7 @@ object SyncRules {
 
     fun nextHistoryAccount(job: HistoryDownload, accounts: List<MailAccount>, history: Map<String, InboxHistory>, skipped: Set<String>): String? {
         if (!job.active) return null
-        val available = accounts.map { it.id }.toSet()
+        val available = accounts.filter{it.enabled}.map { it.id }.toSet()
         return job.accountIds.firstOrNull { it in available && it !in skipped && history[it]?.hasOlder != false }
     }
 
