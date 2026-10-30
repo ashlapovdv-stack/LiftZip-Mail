@@ -121,6 +121,7 @@ private val Paper=Color(0xFFF8F9F6)
     var route by rememberSaveable { mutableStateOf("inbox") }
     var currentAccount by rememberSaveable { mutableStateOf<String?>(null) }
     var folder by rememberSaveable { mutableStateOf(MailFolder.INBOX) }
+    var serverPath by rememberSaveable { mutableStateOf<String?>(null) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var notificationFallback by remember { mutableStateOf<MailItem?>(null) }
     var draft by rememberSaveable { mutableStateOf<ComposeDraft?>(null) }
@@ -170,20 +171,23 @@ private val Paper=Color(0xFFF8F9F6)
         if(s.loaded && request!=null) {
             if(route=="compose" && !s.busy)draft?.let{vm.preserveDraft(it)}
             val id=request.destination.messageId
-            if(id==null){currentAccount=null;folder=MailFolder.UNREAD;goInbox()}
+            if(id==null){serverPath=null;currentAccount=null;folder=MailFolder.UNREAD;goInbox()}
             else {
                 val message=try{vm.notificationMessage(id)}catch(e: CancellationException){throw e}catch(e: Exception){vm.notice(friendlyError(e),error=true);null}
                 currentCoroutineContext().ensureActive()
                 selected=id;notificationFallback=message
                 if(message==null)route="message-missing"
-                else {currentAccount=message.accountId;folder=MailFolder.INBOX;route="reader";vm.notificationOpened(id)}
+                else {serverPath=null;currentAccount=message.accountId;folder=MailFolder.INBOX;route="reader";vm.notificationOpened(id)}
             }
             onNotificationConsumed(request.token)
         }
     }
     LaunchedEffect(s.notice?.id){s.notice?.let { snack.showSnackbar(NoticeVisuals(it));vm.dismissNotice(it.id) }}
     LaunchedEffect(route,selected){if(route=="reader")selected?.let(vm::openMessage)}
-    LaunchedEffect(route,folder,currentAccount){vm.showUnread(route=="inbox" && folder==MailFolder.UNREAD,currentAccount)}
+    LaunchedEffect(route,folder,currentAccount,serverPath){
+        vm.showUnread(route=="inbox" && serverPath==null && folder==MailFolder.UNREAD,currentAccount)
+        if(route=="inbox")vm.showFolders(folder,currentAccount,serverPath)
+    }
     BackHandler(enabled=route!="inbox") {
         val d=draft
         if(route=="edit"){route="settings";editing=null}
@@ -208,6 +212,7 @@ private val Paper=Color(0xFFF8F9F6)
                     if(account==null)LaunchedEffect(Unit){route="settings"}
                     else key(account.id){AddAccount(s.busy,initial=account,onBack={route="settings"},onAdd={a,p->vm.editAccount(a,p){if(route=="edit" && editing==a.id){route="settings";editing=null}}})}
                 }
+                route=="actions" -> ActionsScreen(s,onBack={goInbox()},onRetry=vm::retryAction,onCancel=vm::cancelAction,onAccounts={route="settings"})
                 route=="history" -> HistoryScreen(s,onBack={route=historyReturn},onStart=vm::startHistory,onPause=vm::pauseHistory,onResume=vm::resumeHistory)
                 route=="settings" -> SettingsScreen(s,onBack={goInbox()},onAdd={route="add"},onEdit={editing=it;route="edit"},onSection={route=it},
                     onHistory={historyReturn="settings";route="history"},onRemove={id->if(currentAccount==id)currentAccount=null;vm.removeAccount(id)})
@@ -252,10 +257,11 @@ private val Paper=Color(0xFFF8F9F6)
                 }
                 s.accounts.isEmpty() -> Welcome(onAdd={route="add"})
                 else -> {
-                    val memoryKey="${currentAccount?:"all"}:${folder.name}"
+                    val memoryKey="${currentAccount?:"all"}:${folder.name}:${serverPath.orEmpty()}"
                     val memory=inboxMemory.getOrPut(memoryKey){InboxMemory()}
-                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,memory,onAccount={currentAccount=it},onEnable=vm::setAccountEnabled,onFolder={folder=it},onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
-                    onNoticeAnchor={anchor("inbox",it)},onSettings={route="settings"},onDelivery={route="delivery"},onRefresh=vm::refresh,onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onDelete=vm::deleteMessages,onSearch=vm::search,onOpen={m->
+                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,serverPath,memory,onAccount={currentAccount=it;serverPath=null},onEnable=vm::setAccountEnabled,onFolder={folder=it;serverPath=null},
+                    onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path},onQueue={route="actions"},onLoadFolder=vm::loadFolderHistory,onPauseFolder=vm::pauseFolderHistory,onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
+                    onNoticeAnchor={anchor("inbox",it)},onSettings={route="settings"},onDelivery={route="delivery"},onRefresh={if(serverPath!=null || folder in setOf(MailFolder.SENT,MailFolder.DRAFTS))vm.refreshFolders(folder,currentAccount,serverPath)else vm.refresh()},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onDelete=vm::deleteMessages,onSearch=vm::search,onOpen={m->
                         selected=m.id
                         if(FolderRules.draft(m))vm.openDraft(m.id){full->if(route=="inbox" && selected==m.id)compose(full)}
                         else route="reader"
@@ -280,7 +286,8 @@ private val Paper=Color(0xFFF8F9F6)
     }
 }
 
-@Composable private fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,memory: InboxMemory,onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,
+@Composable private fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,serverPath: String?,memory: InboxMemory,onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,
+    onServerFolder: (ServerFolder)->Unit,onQueue: ()->Unit,onLoadFolder: (String,String)->Unit,onPauseFolder: (String,String)->Unit,
     onAdd: ()->Unit,onExit: ()->Unit,onNoticeAnchor: (Float?)->Unit,onSettings: ()->Unit,onDelivery: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
     onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onDelete: (Set<String>,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit) {
     val drawer=rememberDrawerState(DrawerValue.Closed)
@@ -297,7 +304,8 @@ private val Paper=Color(0xFFF8F9F6)
     var navigationTop by remember{mutableStateOf<Float?>(null)}
     val anchorCallback by rememberUpdatedState(onNoticeAnchor)
     DisposableEffect(Unit){onDispose{anchorCallback(null)}}
-    val refreshing=s.refreshing || s.unreadRefreshing
+    val viewedFolders=s.folders.filter{(accountId==null || it.accountId==accountId) && if(serverPath!=null)it.path==serverPath else when(folder){MailFolder.SENT->it.role==FolderRole.SENT;MailFolder.DRAFTS->it.role==FolderRole.DRAFTS;else->false}}
+    val refreshing=s.refreshing || s.unreadRefreshing || viewedFolders.any{it.syncing}
     val pullState=rememberPullToRefreshState()
     var pullAccepted by remember{mutableStateOf(false)}
     var pullGestureArmed by remember{mutableStateOf(false)}
@@ -306,10 +314,10 @@ private val Paper=Color(0xFFF8F9F6)
     val chrome=remember(memory){InboxChromeController(controlsProgress.floatValue)}
 
     LaunchedEffect(query){onSearch(query)}
-    val visible=remember(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery){
+    val visible=remember(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery,serverPath){
         val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
         val source=if(query.isBlank())active else active.filter{s.searchQuery==query && it.id in s.searchIds}
-        MailRules.filter(source,accountId,folder,"")
+        if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
     }
     val visibleIds=remember(visible){visible.map{it.id}}
     val selected=checked.toSet().intersect(visibleIds.toSet())
@@ -335,8 +343,8 @@ private val Paper=Color(0xFFF8F9F6)
         val rows=s.messages.filter{it.id in ids}
         AlertDialog(onDismissRequest={deleting=null},title={Text("Удалить выбранные письма?")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Text("Выбрано писем: ${rows.size}")
-            if(rows.any(TrashRules::remote))Text("Входящие будут перемещены в Корзину на почтовом сервере.")
-            if(rows.any(TrashRules::local))Text("Локальные черновики и отправленные будут удалены с этого устройства.")
+            if(rows.any(TrashRules::remote))Text("Письма будут перемещены в Корзину на сервере после подключения к сети.")
+            if(rows.any(TrashRules::local))Text("Черновики будут удалены; удаление серверной копии выполнится при подключении к сети.")
         }},confirmButton={TextButton(onClick={deleting=null;onDelete(ids){removed->checked=ArrayList(checked.filter{it !in removed})}},enabled=rows.isNotEmpty() && !s.busy){Text("Удалить")}},dismissButton={TextButton(onClick={deleting=null}){Text("Отмена")}})
     }
     LaunchedEffect(visibleIds){checked=ArrayList(checked.filter{it in visibleIds})}
@@ -355,9 +363,10 @@ private val Paper=Color(0xFFF8F9F6)
     }
     ModalNavigationDrawer(drawerState=drawer,drawerContent={
         ModalDrawerSheet {
-            Column(Modifier.padding(24.dp)){Text("Почта",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Ваши почтовые ящики",style=MaterialTheme.typography.bodySmall)}
-            NavigationDrawerItem(label={Text("Все ящики")},selected=accountId==null,icon={Icon(Icons.Outlined.AllInbox,null)},modifier=Modifier.padding(horizontal=12.dp),onClick={onAccount(null);scope.launch{drawer.close()}})
-            s.accounts.forEach{a->Row(Modifier.fillMaxWidth().padding(end=12.dp),verticalAlignment=Alignment.CenterVertically) {
+            LazyColumn {
+            item { Column(Modifier.padding(24.dp)){Text("Почта",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Ваши почтовые ящики",style=MaterialTheme.typography.bodySmall)} }
+            item { NavigationDrawerItem(label={Text("Все ящики")},selected=accountId==null,icon={Icon(Icons.Outlined.AllInbox,null)},modifier=Modifier.padding(horizontal=12.dp),onClick={onAccount(null);scope.launch{drawer.close()}}) }
+            items(s.accounts,key={it.id}){a->Row(Modifier.fillMaxWidth().padding(end=12.dp),verticalAlignment=Alignment.CenterVertically) {
                 NavigationDrawerItem(label={Column{Text(a.name,maxLines=1,overflow=TextOverflow.Ellipsis);Text(a.email,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelSmall);if(!a.enabled)Text("Синхронизация выключена",style=MaterialTheme.typography.labelSmall)}},selected=a.id==accountId,
                     icon={AccountMark(a)},modifier=Modifier.weight(1f).padding(start=12.dp,end=4.dp),onClick={onAccount(a.id);scope.launch{drawer.close()}})
                 val unread=s.history[a.id]?.unread?:UnreadCounts.cached(s.messages,a.id)
@@ -368,11 +377,24 @@ private val Paper=Color(0xFFF8F9F6)
                 }
                 Switch(checked=a.enabled,onCheckedChange={onEnable(a.id,it)},modifier=Modifier.semantics{contentDescription="Синхронизация ящика ${a.name}"})
             }}
-            Spacer(Modifier.height(16.dp));HorizontalDivider(Modifier.padding(horizontal=24.dp))
+            item { HorizontalDivider(Modifier.padding(horizontal=24.dp,vertical=12.dp)) }
+            if(current!=null) {
+                item { Text("Папки на сервере",Modifier.padding(horizontal=24.dp,vertical=8.dp),style=MaterialTheme.typography.labelLarge) }
+                items(s.folders.filter{it.accountId==current.id},key={"folder:"+it.path}){f->
+                    NavigationDrawerItem(label={Text(f.title,maxLines=1,overflow=TextOverflow.Ellipsis)},selected=serverPath==f.path,
+                        icon={Icon(serverFolderIcon(f.role),null)},badge={f.unread?.takeIf{it>0}?.let{Text(it.toString())}},modifier=Modifier.padding(horizontal=12.dp),
+                        onClick={if(f.role==FolderRole.INBOX){onAccount(f.accountId);onFolder(MailFolder.INBOX)}else onServerFolder(f);scope.launch{drawer.close()}})
+                }
+            }
+            item { NavigationDrawerItem(label={Text("Исходящие и синхронизация")},selected=false,icon={Icon(Icons.Outlined.Outbox,null)},
+                badge={s.actions.size.takeIf{it>0}?.let{Text(it.toString())}},modifier=Modifier.padding(horizontal=12.dp),onClick={scope.launch{drawer.close()};onQueue()}) }
+            item {
             TextButton(onClick={scope.launch{drawer.close()};onAdd()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
-            Spacer(Modifier.weight(1f))
+
             TextButton(onClick={scope.launch{drawer.close()};onSettings()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
             Text("Почта · 0.5.0",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            }
         }
     }) {
         BackHandler {
@@ -397,7 +419,7 @@ private val Paper=Color(0xFFF8F9F6)
                             DropdownMenuItem(text={Text("Отметить непрочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailUnread,null)},onClick={selectionMenu=false;mark(true)})
                         }
                     }
-                }) else TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Column{Text(folder.label,fontWeight=FontWeight.Bold);Text((current?.name?:"Все ящики")+if(current?.enabled==false)" · выключен" else "",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
+                }) else TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Column{Text(viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,fontWeight=FontWeight.Bold);Text((current?.name?:"Все ящики")+if(current?.enabled==false)" · выключен" else "",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
                     navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}},actions={
                         IconButton(onClick=onRefresh,enabled=!s.refreshing && !s.unreadRefreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
                     })
@@ -410,7 +432,7 @@ private val Paper=Color(0xFFF8F9F6)
                 if(s.notificationAccess.backgroundRestricted || s.notificationAccess.dataRestricted || s.notificationAccess.standbyRestricted || s.poll.backgroundMinutes==0)
                     TextButton(onClick=onDelivery,modifier=Modifier.fillMaxWidth()){Text("Фоновая проверка ограничена · настроить")}
                 Row(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
-                    Text(if(query.isNotBlank())"Поиск среди загруженных писем" else if(folder==MailFolder.SENT)"Отправленные с этого устройства" else "${visible.size} писем · ${visible.count{it.unread}} непрочитанных",
+                    Text(if(query.isNotBlank())"Поиск среди загруженных писем" else "${visible.size} писем · ${visible.count{it.unread}} непрочитанных",
                         style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -421,7 +443,7 @@ private val Paper=Color(0xFFF8F9F6)
                         icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})
                 }
                 NavigationBar(windowInsets=WindowInsets(0,0,0,0),modifier=Modifier.onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
-                    MailFolder.entries.forEach{f->NavigationBarItem(selected=f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
+                    MailFolder.entries.forEach{f->NavigationBarItem(selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
                 }
             }
         },list={bottomPadding->
@@ -435,9 +457,18 @@ private val Paper=Color(0xFFF8F9F6)
                                 Text(if(query.isNotBlank())"Попробуйте другое слово" else "Потяните список вниз для проверки почты",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }}
+                        if(query.isBlank())items(viewedFolders,key={"folder-status:"+it.accountId+":"+it.path}){f->
+                            Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=8.dp)) {
+                                val count=s.messages.count{it.accountId==f.accountId && it.remoteFolder==f.path && FolderRules.remote(it) && !it.pendingDelete}
+                                Text((if(accountId==null)(s.accounts.find{it.id==f.accountId}?.name.orEmpty()+" · ")else "")+"Загружено $count"+(f.total?.let{" из $it"}?:""),style=MaterialTheme.typography.labelMedium)
+                                if(f.error.isNotBlank())Text(f.error,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
+                                if(f.hasOlder && !f.syncAll)TextButton(onClick={onLoadFolder(f.accountId,f.path)}){Text("Загрузить всю папку")}
+                                if(f.syncAll)TextButton(onClick={onPauseFolder(f.accountId,f.path)}){Text("История загружается · приостановить")}
+                            }
+                        }
                         items(visible,key={it.id}){m->MailRow(m,s.accounts.find{it.id==m.accountId},onOpen={if(selectionMode)toggle(m.id)else onOpen(m)},
                             onSelect={toggle(m.id)},selectionMode=selectionMode,checked=m.id in selected,onStar={onStar(m)},busy=s.busy)}
-                        if(folder==MailFolder.INBOX)item(key="history-footer") {
+                        if(folder==MailFolder.INBOX && serverPath==null)item(key="history-footer") {
                             Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=20.dp),horizontalAlignment=Alignment.CenterHorizontally) {
                                 Text(if(total==null)"Загружено $loaded писем" else "Загружено $loaded из $total",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                                 if(!hasOlder)Text("Все входящие загружены",Modifier.padding(top=8.dp),style=MaterialTheme.typography.labelSmall)
@@ -448,6 +479,8 @@ private val Paper=Color(0xFFF8F9F6)
         })
     }
 }
+
+private fun serverFolderIcon(role: FolderRole)=when(role){FolderRole.INBOX->Icons.Outlined.Inbox;FolderRole.SENT->Icons.AutoMirrored.Outlined.Send;FolderRole.DRAFTS->Icons.Outlined.Drafts;FolderRole.TRASH->Icons.Outlined.DeleteOutline;FolderRole.JUNK->Icons.Outlined.Report;FolderRole.ARCHIVE->Icons.Outlined.Archive;else->Icons.Outlined.Folder}
 
 private fun folderIcon(folder: MailFolder)=when(folder){MailFolder.INBOX->Icons.Outlined.Inbox;MailFolder.UNREAD->Icons.Outlined.MarkEmailUnread;MailFolder.STARRED->Icons.Outlined.StarOutline;MailFolder.SENT->Icons.AutoMirrored.Outlined.Send;MailFolder.DRAFTS->Icons.Outlined.Drafts}
 @Composable fun AccountMark(account: MailAccount) {
@@ -503,7 +536,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 Text(displayDate(m.date),style=MaterialTheme.typography.labelSmall)
             }
             Text("Кому: ${m.recipients}",Modifier.padding(top=12.dp,bottom=18.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            if(m.localFolder=="sent")InfoCard("Письмо принято SMTP-сервером отправителя. Эта копия хранится на устройстве.")
+            if(FolderRules.sent(m))InfoCard("Письмо принято SMTP-сервером отправителя. Эта копия хранится на устройстве.")
             HorizontalDivider(Modifier.padding(vertical=10.dp))
             if(m.previewOnly)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             else SelectionContainer { Text(conversation.current.ifBlank{"В письме нет доступного текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=27.sp,modifier=Modifier.fillMaxWidth().padding(vertical=14.dp)) }
@@ -554,7 +587,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     fun account()=MailAccount(id=initial?.id?:newId,name=name.trim(),email=email.trim(),username=user.ifBlank{email}.trim(),provider=provider,imapHost=imap,imapPort=imapPort.toIntOrNull()?:0,imapStartTls=imapTls,smtpHost=smtp,smtpPort=smtpPort.toIntOrNull()?:0,smtpStartTls=smtpTls,senderName=senderName.trim().ifBlank{name},authKind=authKind)
     fun googleReady(result: AuthorizationResult) {
         googleBusy=false
-        if(result.accessToken.isNullOrBlank() || result.grantedScopes.none{it.scopeUri==GoogleMailAuth.SCOPE})error="Google не разрешил доступ к почте. Повторите подключение."
+        if(result.accessToken.isNullOrBlank() || result.grantedScopes.none{it==GoogleMailAuth.SCOPE})error="Google не разрешил доступ к почте. Повторите подключение."
         else onAdd(account(),GoogleMailAuth.MARKER)
     }
     val googleResult=rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()){result->

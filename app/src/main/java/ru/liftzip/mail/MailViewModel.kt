@@ -17,7 +17,7 @@ data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = e
     val background: BackgroundCheck=BackgroundCheck(),val backgroundRuntime: BackgroundRuntime=BackgroundRuntime(),val notificationAccess: NotificationAccess=NotificationAccess(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
     val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: ServiceNotice?=null,
-    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true)
+    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList())
 
 private data class UnreadScope(val enabled: Boolean=false,val accountId: String?=null)
 
@@ -27,6 +27,8 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     private var foreground: Job?=null
     private var checking: Job?=null
     private var opening: Job?=null
+    private var folderOpening: Job?=null
+    private var folderView=Triple(MailFolder.INBOX,null as String?,null as String?)
     private val query=MutableStateFlow("")
     private val unreadScope=MutableStateFlow(UnreadScope())
     val state=mutable.asStateFlow()
@@ -48,7 +50,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
         viewModelScope.launch {
             repo.snapshot.collect { snapshot->mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
-                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels) } }
+                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions) } }
         }
         viewModelScope.launch {
             combine(query,repo.snapshot){q,snapshot->q to snapshot.messages}.distinctUntilChanged().collectLatest{(text,_)->
@@ -74,7 +76,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             val snapshot=repo.snapshot.value
             mutable.update { it.copy(loaded=true,accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
                 poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,
-                notificationAccess=MailNotifications.access(getApplication()),autoHidePanels=snapshot.autoHidePanels) }
+                notificationAccess=MailNotifications.access(getApplication()),autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions) }
             repo.notificationEnvironmentChanged()
             if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
@@ -106,7 +108,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         foreground=viewModelScope.launch {
             state.map{Triple(it.loaded,it.poll.foregroundMinutes,it.accounts.filter{a->a.enabled}.map{a->a.id})}.distinctUntilChanged().collectLatest { (loaded,minutes,ids)->
                 if(!loaded || ids.isEmpty())return@collectLatest
-                while(isActive){check(false);delay(minutes*60_000L)}
+                while(isActive){check(false);val view=folderView;if(view.first in setOf(MailFolder.SENT,MailFolder.DRAFTS) || view.third!=null)refreshFolders(view.first,view.second,view.third,false);delay(minutes*60_000L)}
             }
         }
     }
@@ -170,6 +172,26 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             }catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
         }
     }
+    fun showFolders(folder: MailFolder,accountId: String?,path: String?) {
+        folderView=Triple(folder,accountId,path)
+        if(path!=null || folder in setOf(MailFolder.SENT,MailFolder.DRAFTS))refreshFolders(folder,accountId,path,false)
+    }
+    fun refreshFolders(folder: MailFolder,accountId: String?,path: String?,manual: Boolean=true) {
+        if(folderOpening?.isActive==true)return
+        folderOpening=viewModelScope.launch {
+            try {
+                repo.discoverFolders(accountId)
+                val role=when(folder){MailFolder.SENT->FolderRole.SENT;MailFolder.DRAFTS->FolderRole.DRAFTS;else->null}
+                val targets=repo.snapshot.value.folders.filter{(accountId==null || it.accountId==accountId) && if(path!=null)it.path==path else it.role==role}
+                for(f in targets)repo.syncFolder(f.accountId,f.path)
+                if(manual)notice(if(targets.any{f->repo.snapshot.value.folders.any{it.accountId==f.accountId && it.path==f.path && it.error.isNotBlank()}})"Некоторые папки не обновились. Подробности указаны в папке." else "Папка обновлена")
+            }catch(e: CancellationException){throw e}catch(e: Exception){if(manual)notice(friendlyError(e),error=true)}
+        }
+    }
+    fun loadFolderHistory(accountId: String,path: String)=work{repo.loadFolderHistory(accountId,path);notice("История папки загружается в фоне")}
+    fun pauseFolderHistory(accountId: String,path: String)=work{repo.pauseFolderHistory(accountId,path);notice("Загрузка папки приостановлена")}
+    fun retryAction(id: String,confirmed: Boolean=false)=work{repo.retryAction(id,confirmed);notice("Действие возвращено в очередь")}
+    fun cancelAction(id: String)=work{repo.cancelAction(id);notice("Ожидающее действие отменено")}
     fun refresh() {check(true)}
     private fun check(manual: Boolean) {
         if(checking?.isActive==true)return

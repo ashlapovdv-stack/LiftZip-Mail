@@ -39,7 +39,7 @@ class MailApplication : Application() {
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.IO)
     private val warmup=BodyWarmupSignals()
     @Volatile var visible=false
-    override fun onCreate(){super.onCreate();scope.launchSafe{actions.collect({true},{repository.flushActions(60_000)})};scope.launchSafe{warmup.collect({visible},{repository.prefetchBodies(45_000)})};scope.launchSafe{
+    override fun onCreate(){super.onCreate();scope.launchSafe{actions.collect({true},{repository.flushActions(60_000);BodyWarmupResult(0,0,false)})};scope.launchSafe{warmup.collect({visible},{repository.prefetchBodies(45_000)})};scope.launchSafe{
         repository.load()
         if(repository.snapshot.value.accounts.any{it.enabled}) {
             MailWorker.schedule(this@MailApplication);FolderWorker.enqueue(this@MailApplication)
@@ -60,7 +60,7 @@ class MailRepository(private val context: Context) {
     private val attachmentCache=AttachmentCache(context)
     private val queueFiles=QueueFiles(context)
     private val actionMutex=Mutex()
-    private val folderMutex=Mutex()
+    private val folderLocks=ConcurrentHashMap<String,Mutex>()
     private val forwarded=ForwardAttachments(context)
     private val notifications=MailNotifications(context)
     private val settings=context.getSharedPreferences("mail-settings",Context.MODE_PRIVATE)
@@ -677,7 +677,7 @@ class MailRepository(private val context: Context) {
             }
         }
     }
-    suspend fun syncFolder(accountId: String,path: String,older: Boolean=false)=withContext(Dispatchers.IO){folderMutex.withLock {
+    suspend fun syncFolder(accountId: String,path: String,older: Boolean=false)=withContext(Dispatchers.IO){folderLocks.computeIfAbsent(accountId+"|"+path){Mutex()}.withLock {
         var folder: ServerFolder?=null
         try {
             coordinator.request(prepare={
@@ -854,7 +854,7 @@ class MailRepository(private val context: Context) {
                 throw e
             }catch(e: Exception) {
                 coordinator.data {
-                    val causes=generateSequence<Throwable>(e){it.cause}.toList()
+                    val causes=mailErrorChain(e)
                     val uncertain=causes.any{it is DeliveryUncertainException}
                     val auth=causes.any{it is GoogleMailAuthException || it is jakarta.mail.AuthenticationFailedException}
                     val permanent=e is IllegalArgumentException || e is IllegalStateException && !auth && !e.message.orEmpty().contains("подготавливаются") || e is jakarta.mail.MessagingException && causes.none{it is java.io.IOException}

@@ -122,7 +122,7 @@ import java.util.Locale
 @Composable fun AboutSettingsScreen(onBack: ()->Unit) {
     SettingsPage("О приложении",onBack) {
         Text("Почта · 0.5.0",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
-        Text("Поиск работает по загруженным письмам. Черновики и отправленные из приложения хранятся на устройстве.")
+        Text("Поиск работает по загруженным письмам. Черновики и отправленные сохраняются на устройстве и синхронизируются с папками сервера. Состояние видно в «Исходящих и синхронизации».")
         Text("Вложения открываются нажатием на файл; значок загрузки сохраняет копию. PDF и изображения можно смотреть внутри приложения. Для других форматов используется установленная программа.")
         Text("Пароли защищены Android Keystore. Резервное копирование почтовых данных отключено. Внешний сервер приложения не используется.")
         Text("Тестовая сборка",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)

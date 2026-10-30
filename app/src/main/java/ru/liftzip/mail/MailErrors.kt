@@ -7,7 +7,7 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import javax.net.ssl.SSLException
 
-fun friendlyError(error: Throwable): String {
+fun mailErrorChain(error: Throwable): List<Throwable> {
     val chain=mutableListOf<Throwable>()
     val pending=java.util.ArrayDeque<Throwable>().apply{add(error)}
     while(pending.isNotEmpty() && chain.size<32) {
@@ -17,6 +17,11 @@ fun friendlyError(error: Throwable): String {
         item.cause?.let{pending.add(it)}
         (item as? MessagingException)?.nextException?.let{pending.add(it)}
     }
+    return chain
+}
+
+fun friendlyError(error: Throwable): String {
+    val chain=mailErrorChain(error)
     val text=when {
         chain.any{it is HistoryReadTimeoutException}->"Письмо читается слишком долго. Остальная почта будет сохранена, затем это письмо будет запрошено повторно."
         chain.any{it is DeliveryUncertainException}->chain.first{it is DeliveryUncertainException}.message.orEmpty()

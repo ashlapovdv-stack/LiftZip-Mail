@@ -23,7 +23,7 @@ object GoogleMailAuth {
         try {
             val result=Tasks.await(Identity.getAuthorizationClient(context).authorize(request(email)),30,TimeUnit.SECONDS)
             require(!result.hasResolution()){"Для $email требуется повторный вход через Google. Откройте настройки этого ящика."}
-            require(result.grantedScopes.any{it.scopeUri==SCOPE}){"Google не разрешил доступ к почте. Повторите вход в настройках ящика."}
+            require(result.grantedScopes.any{it==SCOPE}){"Google не разрешил доступ к почте. Повторите вход в настройках ящика."}
             result.accessToken?.takeIf{it.isNotBlank()}?:error("Google не вернул доступ к почте. Повторите вход.")
         }catch(e: InterruptedException){Thread.currentThread().interrupt();throw e}catch(e: Exception){throw GoogleMailAuthException(problem(e,email))}
     }
