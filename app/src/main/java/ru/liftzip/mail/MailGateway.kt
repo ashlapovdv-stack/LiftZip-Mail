@@ -10,6 +10,7 @@ import jakarta.mail.internet.*
 import jakarta.mail.search.FlagTerm
 import org.eclipse.angus.mail.imap.IMAPFolder
 import org.eclipse.angus.mail.imap.IMAPMessage
+import org.eclipse.angus.mail.imap.IMAPStore
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -159,6 +160,34 @@ class MailGateway(private val context: Context) {
             val decoded=MimeReader(checkCancelled=budget::check){Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
             message.copy(body=decoded.text,attachments=decoded.attachments,previewOnly=false,contentCached=true)
         }finally{folder.close(false)}
+    }
+    suspend fun trashMany(a: MailAccount,password: String,messages: List<MailItem>,before: suspend ()->Boolean,onConfirmed: suspend (Set<Long>)->Boolean)=withContext(Dispatchers.IO) {
+        if(messages.isEmpty())return@withContext
+        runInterruptible{store(a,password)}.use{connection->
+            val imap=connection as IMAPStore
+            val method=runInterruptible{TrashRules.method(imap.hasCapability("MOVE"),imap.hasCapability("UIDPLUS"))}
+                ?:error("Сервер не поддерживает безопасное перемещение в Корзину. Письма не удалены.")
+            val target=runInterruptible {
+                val folders=connection.defaultFolder.list("*").mapNotNull{it as? IMAPFolder}
+                val name=TrashRules.destination(folders.map{TrashFolderInfo(it.fullName,it.attributes.toSet())})
+                    ?:error("Не найдена папка Корзина на сервере. Письма не удалены.")
+                connection.getFolder(name)
+            }
+            val folder=connection.getFolder(messages.first().remoteFolder) as IMAPFolder
+            require(!folder.fullName.equals(target.fullName,true)){"Письма уже находятся в Корзине."}
+            runInterruptible{folder.open(Folder.READ_WRITE)}
+            try {
+                require(messages.all{it.accountId==a.id && it.remoteFolder==folder.fullName && it.validity==folder.uidValidity}){"Папка изменилась. Обновите список писем."}
+                TrashTransfer.run(messages.map{it.uid},read={batch->runInterruptible{folder.getMessagesByUID(batch.toLongArray()).filterNotNull()}},
+                    uid={folder.getUID(it)},move={remote->runInterruptible{
+                        val chosen=remote.toTypedArray()
+                        when(method) {
+                            TrashMethod.MOVE->folder.moveMessages(chosen,target)
+                            TrashMethod.COPY_UID_EXPUNGE->{folder.copyMessages(chosen,target);folder.setFlags(chosen,Flags(Flags.Flag.DELETED),true);folder.expunge(chosen)}
+                        }
+                    }},before=before,onConfirmed=onConfirmed)
+            }finally{withContext(NonCancellable){runInterruptible{runCatching{folder.close(false)}}}}
+        }
     }
     fun flagsMany(a: MailAccount,password: String,messages: List<MailItem>,seen: Boolean): Set<Long> = store(a,password).use { store->
         if(messages.isEmpty())return@use emptySet()

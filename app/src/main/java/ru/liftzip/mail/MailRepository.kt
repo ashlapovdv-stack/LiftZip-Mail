@@ -29,7 +29,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 data class MailSnapshot(val accounts: List<MailAccount> = emptyList(), val messages: List<MailItem> = emptyList(), val history: Map<String,InboxHistory> = emptyMap(), val defaultAccountId: String? = null,
-    val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck(),val bodyCache: BodyCacheStatus=BodyCacheStatus())
+    val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),val autoHidePanels: Boolean=true)
 data class SyncResult(val newUnread: Int, val errors: List<String>)
 
 class MailApplication : Application() {
@@ -82,7 +82,7 @@ class MailRepository(private val context: Context) {
             accounts.associate{it.id to SyncCheck(syncPrefs.getLong("checked:${it.id}",0),syncPrefs.getString("error:${it.id}","").orEmpty(),syncPrefs.getLong("duration:${it.id}",0))},
             BackgroundCheck(settings.getLong("poll-start",0),settings.getLong("poll-end",0),settings.getString("poll-result","").orEmpty(),settings.getString("poll-error","").orEmpty(),settings.getInt("poll-arrived",0),
                 settings.getString("poll-kind","auto").orEmpty(),settings.getLong("poll-auto-start",0),settings.getLong("poll-auto-end",0),settings.getString("poll-auto-result","").orEmpty()),
-            bodyCache.copy(pending=ContentCacheRules.pending(items,accounts,notifications.contentPriorityIds()).size))
+            bodyCache.copy(pending=ContentCacheRules.pending(items,accounts,notifications.contentPriorityIds()).size),settings.getBoolean("auto-hide-panels",true))
         notifications.reconcile(SyncRules.activeMessages(state.value.messages,accounts,null),arrived,accounts){id->db.message(id)?.body?.take(3000)}
         notifications.history(state.value)
     }
@@ -180,6 +180,9 @@ class MailRepository(private val context: Context) {
         require(id==null || db.accounts().any{it.id==id}){"Ящик не найден."}
         settings.edit().putString("default-sender",id).apply();refresh()
     }}
+    suspend fun setAutoHidePanels(enabled: Boolean)=withContext(Dispatchers.IO){coordinator.data{
+        settings.edit().putBoolean("auto-hide-panels",enabled).apply();refresh(messages=state.value.messages)
+    }}
     suspend fun setPoll(poll: PollSettings)=withContext(Dispatchers.IO){coordinator.data{
         val p=PollSettings.normalized(poll.foregroundMinutes,poll.backgroundMinutes)
         settings.edit().putInt("foreground-minutes",p.foregroundMinutes).putInt("background-minutes",p.backgroundMinutes).apply();refresh()
@@ -275,6 +278,51 @@ class MailRepository(private val context: Context) {
             }catch(e: CancellationException){throw e}catch(e: Exception){errors+="${request.account.name}: ${friendlyError(e)}"}
         }
         FlagChange(changed,errors.distinct())
+    }
+    suspend fun deleteMessages(ids: Set<String>): DeleteResult=withContext(Dispatchers.IO) {
+        val chosen=coordinator.data{state.value.messages.filter{it.id in ids}}
+        val removed=mutableSetOf<String>();val errors=mutableListOf<String>()
+        coordinator.data {
+            val local=chosen.filter(TrashRules::local).map{it.id}.toSet()
+            removeCached(local);removed+=local
+        }
+        if(chosen.any{!TrashRules.remote(it) && !TrashRules.local(it)})errors+="Некоторые письма сейчас нельзя удалить. Дождитесь окончания отправки и повторите."
+        val groups=chosen.filter(TrashRules::remote).groupBy{Triple(it.accountId,it.remoteFolder,it.validity)}
+        for((key,group) in groups)coordinator.poll(key.first) {
+            var request=coordinator.data{capture(key.first)}
+            if(request==null){errors+="Включите ящик в боковом меню, чтобы переместить письма в Корзину.";return@poll}
+            try {
+                val a=request!!.account
+                gateway.trashMany(a,vault.open(a.id,a.secret),group,before={coordinator.data{val valid=current(request!!);if(!valid)errors+="${a.name}: настройки ящика изменились; обновите список.";valid}},onConfirmed={uids->coordinator.data {
+                    if(!current(request!!)){errors+="${a.name}: настройки ящика изменились; обновите список.";return@data false}
+                    val successful=group.filter{it.uid in uids}.map{it.id}.toSet()
+                    removeCached(successful);removed+=successful
+                    // Reject all polls/history/content captured before this acknowledged move.
+                    coordinator.invalidate(a.id);request=request!!.copy(version=coordinator.version(a.id))
+                    true
+                }})
+            }catch(e: CancellationException){throw e}catch(e: Exception){errors+="${request!!.account.name}: ${friendlyError(e)}"}
+        }
+        DeleteResult(removed,errors.distinct())
+    }
+    /** Called under the short data lock, after server acknowledgement or for local-only mail. */
+    private fun removeCached(ids: Set<String>) {
+        if(ids.isEmpty())return
+        val rows=state.value.messages.filter{it.id in ids}
+        db.removeMessages(ids)
+        rows.filter{it.localFolder=="drafts"}.forEach{ForwardWorker.cancel(context,it.id);forwarded.remove(it.id)}
+        forwardProgress.update{it.filterKeys{key->key !in ids}}
+        rows.groupBy{it.accountId}.forEach{(account,items)->
+            val remote=items.filter(TrashRules::remote)
+            if(remote.isNotEmpty()) {
+                val edit=syncPrefs.edit()
+                if(syncPrefs.contains("count:$account"))edit.putInt("count:$account",(syncPrefs.getInt("count:$account",0)-remote.size).coerceAtLeast(0))
+                if(syncPrefs.contains("unread:$account"))edit.putInt("unread:$account",TrashRules.unreadAfter(syncPrefs.getInt("unread:$account",0),remote))
+                edit.apply()
+            }
+        }
+        val job=readHistory();if(job.issues.any{it.messageId in ids})writeHistory(job.copy(issues=job.issues.filter{it.messageId !in ids}))
+        refresh(messages=state.value.messages.filter{it.id !in ids});saveBodyFailures()
     }
     private fun adjustUnreadCount(id: String,before: List<MailItem>,after: List<MailItem>) {
         if(syncPrefs.contains("unread:$id"))syncPrefs.edit().putInt("unread:$id",UnreadCounts.changed(syncPrefs.getInt("unread:$id",0),before,after)).apply()

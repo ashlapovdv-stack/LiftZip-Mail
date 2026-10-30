@@ -4,21 +4,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InboxInteractionTest {
-    @Test fun collapsedAndExpandedPanelsHaveExactEndpoints() {
-        assertEquals(0,InboxInteractionRules.panelHeight(218,0f))
-        assertEquals(218,InboxInteractionRules.panelHeight(218,1f))
-        assertEquals(0,InboxInteractionRules.panelHeight(218,-1f))
-        assertEquals(218,InboxInteractionRules.panelHeight(218,2f))
+    @Test fun scrollingViewportNeverChangesHeightAsThePanelsFade() {
+        for(step in 0..100)assertEquals(800,InboxInteractionRules.viewport(800,218,152,step/100f).listHeight)
     }
-    @Test fun bothPanelsShrinkMonotonicallyWithTheSameProgress() {
-        var top=218;var bottom=80
-        for(step in 100 downTo 0) {
-            val fraction=step/100f
-            val nextTop=InboxInteractionRules.panelHeight(218,fraction)
-            val nextBottom=InboxInteractionRules.panelHeight(80,fraction)
-            assertTrue(nextTop<=top);assertTrue(nextBottom<=bottom)
-            top=nextTop;bottom=nextBottom
+    @Test fun bottomControlsStayFixedWhileTheListCoversTheHeader() {
+        for(step in 0..100) {
+            val g=InboxInteractionRules.viewport(800,218,152,step/100f)
+            assertEquals(648,g.bottomY)
+            assertEquals(648,g.listHeight+g.listY-g.listBottomPadding)
         }
+    }
+    @Test fun reversingTheAnimationHasNoViewportResizeOrPositionJumpAtTheEndpoints() {
+        val fractions=(0..100).map{it/100f}+(100 downTo 0).map{it/100f}
+        val positions=fractions.map{InboxInteractionRules.viewport(800,218,152,it)}
+        positions.zipWithNext().forEach{(a,b)->assertTrue(kotlin.math.abs(a.listY-b.listY)<=3);assertEquals(a.listHeight,b.listHeight);assertEquals(a.bottomY,b.bottomY)}
+    }
+    @Test fun animationProgressIsClampedAtItsVisibleAndHiddenStates() {
+        assertEquals(0,InboxInteractionRules.viewport(800,218,152,-1f).listY)
+        assertEquals(218,InboxInteractionRules.viewport(800,218,152,2f).listY)
     }
     @Test fun reversingAnAccidentalPullRetractsTheHintAndReturnsToRest() {
         assertEquals(0.9f,InboxInteractionRules.pullProgress(0.9f,false,false),0f)

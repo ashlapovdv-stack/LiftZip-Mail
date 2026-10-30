@@ -18,10 +18,15 @@ class InboxChromeController(var visible: Boolean=true,private val hideDistance: 
 data class NoticeAnchor(val owner: String,val top: Float)
 
 object InboxInteractionRules {
-    fun panelHeight(height: Int,fraction: Float)=kotlin.math.round(height*fraction.coerceIn(0f,1f)).toInt().coerceIn(0,height)
+    fun viewport(height: Int,header: Int,bottom: Int,fraction: Float): InboxViewportGeometry {
+        val offset=kotlin.math.round(header*fraction.coerceIn(0f,1f)).toInt()
+        return InboxViewportGeometry(height,offset,height-bottom,offset+bottom)
+    }
     fun pullProgress(distance: Float,refreshing: Boolean,accepted: Boolean)=if(refreshing || accepted)0f else distance.coerceIn(0f,1f)
     fun noticeBottom(rootHeight: Int,route: String,anchor: NoticeAnchor?,safeBottom: Int,gap: Int): Int {
         val obstruction=anchor?.takeIf{it.owner==route && it.top>=0f && it.top<rootHeight}?.let{rootHeight-it.top.toInt()}?:0
         return maxOf(safeBottom,obstruction).coerceAtLeast(0)+gap
     }
 }
+
+data class InboxViewportGeometry(val listHeight: Int,val listY: Int,val bottomY: Int,val listBottomPadding: Int)

@@ -57,4 +57,15 @@ class MailboxCoordinatorTest {
         val result=MailboxCoordinator().request(prepare={null as String?},fetch={contacted=true;it},commit={_,value->value})
         assertNull(result);assertFalse(contacted)
     }
+    @Test fun deletingABatchPreventsAnEarlierHistoryOrPollFromResurrectingIt()=runBlocking {
+        withTimeout(5000) {
+            val c=MailboxCoordinator();val release=CompletableDeferred<Unit>();var cache=setOf("keep","deleted")
+            val old=async(start=CoroutineStart.UNDISPATCHED){c.request(prepare={c.version("a")},fetch={release.await();setOf("keep","deleted")},commit={version,page->if(version==c.version("a"))cache=page})}
+            c.data{cache=cache-"deleted";c.invalidate("a")}
+            release.complete(Unit);old.await();assertEquals(setOf("keep"),cache)
+            c.request(prepare={c.version("a")},fetch={setOf("keep","new")},commit={version,page->if(version==c.version("a"))cache=page})
+            assertEquals(setOf("keep","new"),cache)
+        }
+    }
+
 }

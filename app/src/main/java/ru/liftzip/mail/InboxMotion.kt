@@ -12,18 +12,33 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
-/** Both panels use the same tween, including their space in Scaffold. No separate springs. */
-@Composable fun SlidingInboxPanel(fraction: ()->Float,top: Boolean,modifier: Modifier=Modifier,content: @Composable ()->Unit) {
-    Box(modifier.clipToBounds().layout{measurable,constraints->
-        val child=measurable.measure(constraints.copy(minHeight=0))
-        val height=InboxInteractionRules.panelHeight(child.height,fraction())
-        layout(child.width,height){child.placeRelative(0,if(top)height-child.height else 0)}
-    }.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){content()}
+private enum class InboxSlot { HEADER, BOTTOM, LIST }
+
+/** The list keeps its full viewport throughout the animation; only its position changes.
+ * It is drawn over the fading header. Bottom controls keep their position and only fade. */
+@Composable fun InboxViewport(fraction: ()->Float,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable ()->Unit,
+    list: @Composable (bottomPadding: Dp)->Unit) {
+    SubcomposeLayout(modifier.clipToBounds()){constraints->
+        val width=constraints.maxWidth;val height=constraints.maxHeight
+        val panelConstraints=constraints.copy(minWidth=width,minHeight=0)
+        val top=subcompose(InboxSlot.HEADER){Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){header()}}.single().measure(panelConstraints)
+        val controls=subcompose(InboxSlot.BOTTOM){Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){bottom()}}.single().measure(panelConstraints)
+        val progress=fraction().coerceIn(0f,1f)
+        val geometry=InboxInteractionRules.viewport(height,top.height,controls.height,progress)
+        val mail=subcompose(InboxSlot.LIST){list((geometry.listBottomPadding+12.dp.roundToPx()).toDp())}.single().measure(Constraints.fixed(width,geometry.listHeight))
+        layout(width,height) {
+            if(progress>0.001f)top.placeRelative(0,0)
+            mail.placeRelative(0,geometry.listY)
+            if(progress>0.001f)controls.placeRelative(0,geometry.bottomY)
+        }
+    }
 }
 
 /** Appears only before release. Refresh itself uses the thin, reserved toolbar progress strip. */

@@ -70,6 +70,10 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         },SQLiteDatabase.CONFLICT_REPLACE)
     }
     @Synchronized fun removeMessage(id: String) { writableDatabase.delete("messages","id = ?",arrayOf(id)) }
+    @Synchronized fun removeMessages(ids: Set<String>) {
+        val db=writableDatabase;db.beginTransaction()
+        try{ids.forEach{db.delete("messages","id = ?",arrayOf(it))};db.setTransactionSuccessful()}finally{db.endTransaction()}
+    }
     @Synchronized fun replaceInbox(accountId: String,items: List<MailItem>) {
         val db=writableDatabase
         db.beginTransaction()
