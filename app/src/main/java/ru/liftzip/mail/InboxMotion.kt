@@ -21,14 +21,16 @@ import androidx.compose.ui.unit.dp
 
 private enum class InboxSlot { HEADER, BOTTOM, LIST }
 
-/** The list keeps its full viewport throughout the animation; only its position changes.
+/** The list keeps its full viewport throughout the drag; only its position changes.
  * It is drawn over the fading header. Bottom controls keep their position and only fade. */
-@Composable fun InboxViewport(fraction: ()->Float,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable ()->Unit,
+@Composable fun InboxViewport(fraction: ()->Float,onHeaderMeasured: (Float)->Unit,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable ()->Unit,
     list: @Composable (bottomPadding: Dp)->Unit) {
     SubcomposeLayout(modifier.clipToBounds()){constraints->
         val width=constraints.maxWidth;val height=constraints.maxHeight
         val panelConstraints=constraints.copy(minWidth=width,minHeight=0)
         val top=subcompose(InboxSlot.HEADER){Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){header()}}.single().measure(panelConstraints)
+        // This only updates the input controller's range; rendering uses this measurement directly.
+        onHeaderMeasured(top.height.toFloat())
         val controls=subcompose(InboxSlot.BOTTOM){Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){bottom()}}.single().measure(panelConstraints)
         val progress=fraction().coerceIn(0f,1f)
         val geometry=InboxInteractionRules.viewport(height,top.height,controls.height,progress)

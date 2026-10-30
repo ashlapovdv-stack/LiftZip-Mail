@@ -1,17 +1,21 @@
 package ru.liftzip.mail
 
-/** Receives user input before layout, so resizing panels cannot generate a direction reversal. */
-class InboxChromeController(var visible: Boolean=true,private val hideDistance: Float=24f,private val showDistance: Float=8f) {
-    private var distance=0f
-    fun show(){visible=true;distance=0f}
-    fun scroll(delta: Float,forced: Boolean=false): Boolean {
-        if(forced){show();return true}
-        if(delta==0f)return visible
-        if(delta*distance<0)distance=0f
-        distance+=delta
-        if(visible && distance<=-hideDistance){visible=false;distance=0f}
-        else if(!visible && distance>=showDistance){visible=true;distance=0f}
-        return visible
+/** Drag position, with no clock, threshold, spring, or release-time snapping. */
+class InboxChromeController(initialFraction: Float=1f) {
+    var fraction=initialFraction.takeIf{it.isFinite()}?.coerceIn(0f,1f)?:1f
+        private set
+    private var headerHeight=0f
+    fun measureHeader(height: Float){headerHeight=height.takeIf{it.isFinite() && it>0f}?:0f}
+    fun show(){fraction=1f}
+    /** Consume only the movement used to shift the list's viewport. LazyColumn gets the rest,
+     * otherwise the same drag would move the rows twice as far as the finger. */
+    fun scroll(delta: Float,forced: Boolean=false,userInput: Boolean=true): Float {
+        if(forced){show();return 0f}
+        if(!userInput || !delta.isFinite() || delta==0f || headerHeight<=0f)return 0f
+        val before=fraction*headerHeight
+        val consumed=delta.coerceIn(-before,headerHeight-before)
+        fraction=((before+consumed)/headerHeight).coerceIn(0f,1f)
+        return consumed
     }
 }
 

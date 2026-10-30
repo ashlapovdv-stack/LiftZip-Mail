@@ -17,9 +17,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.animation.*
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -288,8 +285,7 @@ private val Paper=Color(0xFFF8F9F6)
     var exitRequested by rememberSaveable { mutableStateOf(false) }
     var deleting by remember{mutableStateOf<Set<String>?>(null)}
     var selectionMenu by remember{mutableStateOf(false)}
-    var controlsVisible by rememberSaveable{mutableStateOf(true)}
-    val density=LocalDensity.current
+    var controlsFraction by rememberSaveable{mutableFloatStateOf(1f)}
     val focus=LocalFocusManager.current
     val keyboard=LocalSoftwareKeyboardController.current
     var fabTop by remember{mutableStateOf<Float?>(null)}
@@ -300,7 +296,7 @@ private val Paper=Color(0xFFF8F9F6)
     val pullState=rememberPullToRefreshState()
     var pullAccepted by remember{mutableStateOf(false)}
     LaunchedEffect(refreshing,pullState.distanceFraction){if(!refreshing && pullState.distanceFraction<0.02f)pullAccepted=false}
-    val chrome=remember(memory,density){InboxChromeController(controlsVisible,with(density){24.dp.toPx()},with(density){8.dp.toPx()})}
+    val chrome=remember(memory){InboxChromeController(controlsFraction)}
 
     LaunchedEffect(query){onSearch(query)}
     val visible=remember(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery){
@@ -311,21 +307,20 @@ private val Paper=Color(0xFFF8F9F6)
     val visibleIds=remember(visible){visible.map{it.id}}
     val selected=checked.toSet().intersect(visibleIds.toSet())
     val selectionMode=selected.isNotEmpty()
-    val chromeFraction=animateFloatAsState(if(controlsVisible || selectionMode || !s.autoHidePanels)1f else 0f,animationSpec=tween(280,easing=FastOutSlowInEasing),label="Inbox controls")
+    val chromeFraction=if(selectionMode || !s.autoHidePanels)1f else controlsFraction
     val forceControls by rememberUpdatedState(selectionMode || !s.autoHidePanels)
     LaunchedEffect(selectionMode){if(!selectionMode)selectionMenu=false}
-    SideEffect{anchorCallback(if(chromeFraction.value>0.02f)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null)}
+    SideEffect{anchorCallback(if(chromeFraction>0.02f)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null)}
     val scrollControls=remember(memory,chrome,focus,keyboard){object: NestedScrollConnection{
         override fun onPreScroll(available: Offset,source: NestedScrollSource): Offset {
-            if(source==NestedScrollSource.UserInput && (memory.list.canScrollBackward || memory.list.canScrollForward)){
-                val wasVisible=controlsVisible
-                controlsVisible=chrome.scroll(available.y,forceControls || available.y>0 && !memory.list.canScrollBackward)
-                if(wasVisible && !controlsVisible){focus.clearFocus();keyboard?.hide()}
-            }
-            return Offset.Zero
+            val before=chrome.fraction
+            val consumed=chrome.scroll(available.y,forced=forceControls,userInput=source==NestedScrollSource.UserInput)
+            controlsFraction=chrome.fraction
+            if(before==1f && controlsFraction<1f){focus.clearFocus();keyboard?.hide()}
+            return Offset(0f,consumed)
         }
     }}
-    LaunchedEffect(selectionMode,drawer.currentValue,s.autoHidePanels){if(selectionMode || !s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsVisible=true}}
+    LaunchedEffect(selectionMode,drawer.currentValue,s.autoHidePanels){if(selectionMode || !s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsFraction=1f}}
 
     val current=s.accounts.find{it.id==accountId}
     val selectedAccounts=s.accounts.filter{if(accountId==null)it.enabled else it.id==accountId}
@@ -376,7 +371,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close()};onAdd()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
             Spacer(Modifier.weight(1f))
             TextButton(onClick={scope.launch{drawer.close()};onSettings()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.4.3",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.4.4",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }) {
         BackHandler {
@@ -389,7 +384,7 @@ private val Paper=Color(0xFFF8F9F6)
         if(exitRequested)AlertDialog(onDismissRequest=onExit,properties=DialogProperties(dismissOnClickOutside=false),
             title={Text("Выйти из Почты?")},text={Text("Нажмите «Выйти» или кнопку Android «Назад» ещё раз. Фоновая проверка почты продолжится по настройкам.")},
             confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
-        InboxViewport(fraction={chromeFraction.value},modifier=Modifier.fillMaxSize().safeDrawingPadding(),header={
+        InboxViewport(fraction={chromeFraction},onHeaderMeasured=chrome::measureHeader,modifier=Modifier.fillMaxSize().safeDrawingPadding(),header={
             Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
                 if(selectionMode)TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Text("Выбрано: ${selected.size}",maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
                     IconButton(onClick={deleting=selected.toSet()},enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить выбранные письма")}
