@@ -23,6 +23,7 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
             // Use the current network window; do not wait for Android to schedule another worker.
             val bodies=repo.prefetchBodies()
             if(bodies.pending>0)NotificationPreviewWorker.enqueue(applicationContext)
+            FolderWorker.enqueue(applicationContext);StorageWorker.enqueue(applicationContext)
             val retry=NotificationRules.shouldRetry(result)
             repo.backgroundFinished(token,if(retry)"retry" else "success",result.errors.joinToString("\n"),result.newUnread)
             if(retry)Result.retry()else Result.success()

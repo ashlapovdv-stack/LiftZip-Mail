@@ -191,7 +191,7 @@ private val Paper=Color(0xFFF8F9F6)
     BackHandler(enabled=route!="inbox") {
         val d=draft
         if(route=="edit"){route="settings";editing=null}
-        else if(route in setOf("delivery","sender","advanced","diagnostics","about","appearance"))route="settings"
+        else if(route in setOf("delivery","sender","advanced","diagnostics","about","appearance","storage"))route="settings"
         else if(route=="history")route=historyReturn
         else if(route=="preview"){preview=null;route="reader"}
         else if(route=="compose" && d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}
@@ -216,10 +216,11 @@ private val Paper=Color(0xFFF8F9F6)
                 route=="history" -> HistoryScreen(s,onBack={route=historyReturn},onStart=vm::startHistory,onPause=vm::pauseHistory,onResume=vm::resumeHistory)
                 route=="settings" -> SettingsScreen(s,onBack={goInbox()},onAdd={route="add"},onEdit={editing=it;route="edit"},onSection={route=it},
                     onHistory={historyReturn="settings";route="history"},onRemove={id->if(currentAccount==id)currentAccount=null;vm.removeAccount(id)})
-                route=="delivery" -> DeliverySettingsScreen(s,onBack={route="settings"},onPoll=vm::setPoll,onPermission={
+                route=="delivery" -> DeliverySettingsScreen(s,onBack={route="settings"},onPoll=vm::setPoll,onFastMail=vm::setFastMail,onPermission={
                     if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                     else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
                 },onDiagnostics={route="diagnostics"})
+                route=="storage" -> StorageSettingsScreen(s,onBack={route="settings"},onInspect=vm::storageStatus,onLimit=vm::setCacheLimit,onClear=vm::clearCache)
                 route=="appearance" -> AppearanceSettingsScreen(s,onBack={route="settings"},onAutoHide=vm::setAutoHidePanels)
                 route=="sender" -> SenderSettingsScreen(s,onBack={route="settings"},onDefault=vm::setDefaultAccount)
                 route=="advanced" -> AdvancedSettingsScreen(onBack={route="settings"},onSection={route=it})

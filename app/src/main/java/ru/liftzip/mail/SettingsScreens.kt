@@ -58,6 +58,7 @@ import java.util.Locale
         val sender=s.accounts.find{it.id==s.defaultAccountId}
         SettingsLink("Отправитель по умолчанию",sender?.email?:"Ящик открытой папки"){onSection("sender")}
         SettingsLink("Загрузить всю историю","Все или выбранные ящики",onHistory)
+        SettingsLink("Хранение","Кэш писем и вложений"){onSection("storage")}
         SettingsLink("Дополнительно","Диагностика и сведения о приложении"){onSection("advanced")}
     }
 }
@@ -69,7 +70,7 @@ import java.util.Locale
     }
 }
 
-@Composable fun DeliverySettingsScreen(s: UiState,onBack: ()->Unit,onPoll: (PollSettings)->Unit,onPermission: ()->Unit,onDiagnostics: ()->Unit) {
+@Composable fun DeliverySettingsScreen(s: UiState,onBack: ()->Unit,onPoll: (PollSettings)->Unit,onFastMail: (Boolean)->Unit,onPermission: ()->Unit,onDiagnostics: ()->Unit) {
     val context=LocalContext.current
     SettingsPage("Получение и уведомления",onBack) {
         Text("Проверка новой почты",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
@@ -77,6 +78,15 @@ import java.util.Locale
         PollPicker("В фоне",s.poll.backgroundMinutes,PollSettings.backgroundChoices,!s.busy){onPoll(s.poll.copy(backgroundMinutes=it))}
         Text("При возвращении проверяем почту сразу. Android разрешает периодическую проверку в фоне от 15 минут и может откладывать её при энергосбережении.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider(Modifier.padding(vertical=6.dp))
+        ListItem(headlineContent={Text("Быстрое получение")},supportingContent={Text("Ожидание новых писем через IMAP IDLE с тихим постоянным уведомлением")},trailingContent={Switch(checked=s.fastMail.enabled,onCheckedChange=onFastMail)})
+        if(s.fastMail.enabled) {
+            Text(if(s.fastMail.running)"Быстрый режим работает" else if(s.fastMail.starting)"Запускается…" else "Быстрый режим остановлен",style=MaterialTheme.typography.bodyMedium)
+            s.accounts.filter{it.enabled}.forEach{a->Text(a.name+": "+(s.fastMail.accounts[a.id]?:"Ожидание подключения"),style=MaterialTheme.typography.bodySmall)}
+            if(s.fastMail.error.isNotBlank())Text(s.fastMail.error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
+            if(!s.fastMail.running && !s.fastMail.starting)OutlinedButton(onClick={onFastMail(true)}){Text("Возобновить быстрый режим")}
+        }
+        Text("Режим использует больше энергии. Android 15 и новее ограничивает такую работу в фоне шестью часами; после остановки остаётся проверка по расписанию. При открытии приложения быстрый режим возобновляется. Сеть, энергосбережение и ограничения производителя могут задерживать почту.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+
         Text("Уведомления",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
         Text(if(s.notificationAccess.canPost)"Показ новых писем разрешён" else "Уведомления выключены в Android",color=if(s.notificationAccess.canPost)MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
         OutlinedButton(onClick=onPermission,modifier=Modifier.fillMaxWidth()){Text(if(s.notificationAccess.canPost)"Настроить уведомления Android" else "Разрешить уведомления")}
@@ -145,5 +155,25 @@ import java.util.Locale
             OutlinedButton(onClick={expanded=true},enabled=enabled,modifier=Modifier.fillMaxWidth()){Text(title(value),Modifier.weight(1f));Icon(Icons.Outlined.ExpandMore,null)}
             DropdownMenu(expanded=expanded,onDismissRequest={expanded=false}){choices.forEach{minutes->DropdownMenuItem(text={Text(title(minutes))},onClick={expanded=false;onChange(minutes)})}}
         }
+    }
+}
+
+@Composable fun StorageSettingsScreen(s: UiState,onBack: ()->Unit,onInspect: ()->Unit,onLimit: (Int)->Unit,onClear: ()->Unit) {
+    var expanded by remember{mutableStateOf(false)}
+    var clear by remember{mutableStateOf(false)}
+    LaunchedEffect(Unit){onInspect()}
+    fun mb(bytes: Long)=String.format(Locale.forLanguageTag("ru"),"%.1f МБ",bytes/1048576.0)
+    if(clear)AlertDialog(onDismissRequest={clear=false},title={Text("Очистить кэш?")},text={Text("Тексты серверных писем и файлы для просмотра будут загружены заново при открытии. Черновики, Исходящие и сохранённые вами файлы останутся.")},confirmButton={TextButton(onClick={clear=false;onClear()}){Text("Очистить")}},dismissButton={TextButton(onClick={clear=false}){Text("Отмена")}})
+    SettingsPage("Хранение",onBack) {
+        Text("Кэш: ${mb(s.storage.bytes)}",style=MaterialTheme.typography.titleLarge)
+        Text("Тексты: ${mb(s.storage.bodyBytes)} · ${s.storage.cachedBodies} писем\nВложения для просмотра: ${mb(s.storage.attachmentBytes)}",style=MaterialTheme.typography.bodyMedium)
+        Text("Предел кэша",style=MaterialTheme.typography.labelLarge)
+        Box {
+            OutlinedButton(onClick={expanded=true},enabled=!s.busy,modifier=Modifier.fillMaxWidth()){Text(if(s.storage.limitMb==0)"Без ограничения" else "${s.storage.limitMb} МБ",Modifier.weight(1f));Icon(Icons.Outlined.ExpandMore,null)}
+            DropdownMenu(expanded=expanded,onDismissRequest={expanded=false}){CacheRules.choices.forEach{value->DropdownMenuItem(text={Text(if(value==0)"Без ограничения" else "$value МБ")},onClick={expanded=false;onLimit(value)})}}
+        }
+        Text("60% отведено текстам, 40% — вложениям для просмотра. Недавно открытые файлы временно сохраняются сверх предела. Локальные черновики и файлы очереди хранятся отдельно и не удаляются автоматически.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(onClick={clear=true},enabled=!s.busy,modifier=Modifier.fillMaxWidth()){Text("Очистить кэш")}
+        Text("Размер показывает содержимое кэша. База данных также хранит заголовки писем и служебные данные.",style=MaterialTheme.typography.bodySmall)
     }
 }

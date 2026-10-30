@@ -17,7 +17,7 @@ data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = e
     val background: BackgroundCheck=BackgroundCheck(),val backgroundRuntime: BackgroundRuntime=BackgroundRuntime(),val notificationAccess: NotificationAccess=NotificationAccess(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
     val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: ServiceNotice?=null,
-    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList())
+    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus(),val fastMail: FastMailStatus=FastMailStatus())
 
 private data class UnreadScope(val enabled: Boolean=false,val accountId: String?=null)
 
@@ -33,6 +33,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     private val unreadScope=MutableStateFlow(UnreadScope())
     val state=mutable.asStateFlow()
     init {
+        viewModelScope.launch{(getApplication<Application>() as MailApplication).fastMail.state.collect{value->mutable.update{it.copy(fastMail=value)}}}
         viewModelScope.launch{repo.forwardingProgress.collect{progress->mutable.update{it.copy(forwarding=progress)}}}
         viewModelScope.launch {
             combine(WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.NAME),WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.TEST_NAME)){infos,tests->infos to tests}.collect{(infos,tests)->
@@ -49,8 +50,8 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             }.distinctUntilChanged().collect{work->mutable.update{it.copy(historyWork=work)}}
         }
         viewModelScope.launch {
-            repo.snapshot.collect { snapshot->mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
-                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions) } }
+            repo.snapshot.collect { snapshot->(getApplication<Application>() as MailApplication).fastMail.ensure();mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
+                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage) } }
         }
         viewModelScope.launch {
             combine(query,repo.snapshot){q,snapshot->q to snapshot.messages}.distinctUntilChanged().collectLatest{(text,_)->
@@ -76,7 +77,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             val snapshot=repo.snapshot.value
             mutable.update { it.copy(loaded=true,accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
                 poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,
-                notificationAccess=MailNotifications.access(getApplication()),autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions) }
+                notificationAccess=MailNotifications.access(getApplication()),autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage) }
             repo.notificationEnvironmentChanged()
             if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
@@ -105,6 +106,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         if(!active){foreground?.cancel();foreground=null;return}
         if(foreground?.isActive==true)return
         notificationEnvironmentChanged()
+        (getApplication<Application>() as MailApplication).fastMail.ensure()
         foreground=viewModelScope.launch {
             state.map{Triple(it.loaded,it.poll.foregroundMinutes,it.accounts.filter{a->a.enabled}.map{a->a.id})}.distinctUntilChanged().collectLatest { (loaded,minutes,ids)->
                 if(!loaded || ids.isEmpty())return@collectLatest
@@ -192,6 +194,10 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun pauseFolderHistory(accountId: String,path: String)=work{repo.pauseFolderHistory(accountId,path);notice("Загрузка папки приостановлена")}
     fun retryAction(id: String,confirmed: Boolean=false)=work{repo.retryAction(id,confirmed);notice("Действие возвращено в очередь")}
     fun cancelAction(id: String)=work{repo.cancelAction(id);notice("Ожидающее действие отменено")}
+    fun setFastMail(enabled: Boolean){(getApplication<Application>() as MailApplication).fastMail.setEnabled(enabled)}
+    fun storageStatus()=work{repo.storageStatus()}
+    fun setCacheLimit(value: Int)=work{repo.setCacheLimit(value)}
+    fun clearCache()=work{repo.trimCache(clear=true);notice("Кэш очищен. Черновики и Исходящие сохранены.")}
     fun refresh() {check(true)}
     private fun check(manual: Boolean) {
         if(checking?.isActive==true)return

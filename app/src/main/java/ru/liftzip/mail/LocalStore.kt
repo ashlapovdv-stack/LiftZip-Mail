@@ -113,7 +113,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
     private fun putMessage(db: SQLiteDatabase,m: MailItem) {
         // A flag/header update from a list preview must never overwrite the stored full body.
         val storedBody=if(m.previewOnly)db.rawQuery("SELECT data FROM messages WHERE id = ?",arrayOf(m.id)).use{c->if(c.moveToFirst())JSONObject(c.getString(0)).getString("body") else null}else null
-        val full=MailContent.forStorage(m,storedBody).let{it.copy(cacheBytes=if(it.contentCached)it.body.toByteArray(Charsets.UTF_8).size.toLong()else 0,cachedAt=it.cachedAt.takeIf{time->time>0}?:System.currentTimeMillis())}
+        val full=MailContent.forStorage(m,storedBody).let{it.copy(cacheBytes=if(it.contentCached)it.body.toByteArray(Charsets.UTF_8).size.toLong()else it.cacheBytes,cachedAt=it.cachedAt.takeIf{time->time>0}?:System.currentTimeMillis())}
         db.insertWithOnConflict("messages",null,ContentValues().apply {
             put("id",full.id); put("account_id",full.accountId); put("folder",full.localFolder); put("data",encodeMessage(full).toString());put("preview",encodeMessage(full.copy(body=full.body.take(MailContent.PREVIEW_LENGTH),previewOnly=true)).toString())
         },SQLiteDatabase.CONFLICT_REPLACE)

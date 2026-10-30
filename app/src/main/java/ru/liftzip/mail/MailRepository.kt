@@ -29,25 +29,29 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 data class MailSnapshot(val accounts: List<MailAccount> = emptyList(), val messages: List<MailItem> = emptyList(), val history: Map<String,InboxHistory> = emptyMap(), val defaultAccountId: String? = null,
-    val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList())
+    val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus())
 data class SyncResult(val newUnread: Int, val errors: List<String>)
 
 class MailApplication : Application() {
     val repository by lazy { MailRepository(this) }
+    val fastMail by lazy {FastMailController(this)}
     val processToken=UUID.randomUUID().toString()
     private val actions=BodyWarmupSignals()
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.IO)
     private val warmup=BodyWarmupSignals()
     @Volatile var visible=false
-    override fun onCreate(){super.onCreate();scope.launchSafe{actions.collect({true},{repository.flushActions(60_000);BodyWarmupResult(0,0,false)})};scope.launchSafe{warmup.collect({visible},{repository.prefetchBodies(45_000)})};scope.launchSafe{
+    override fun onCreate(){super.onCreate();runCatching{connectivity.registerDefaultNetworkCallback(networkCallback)};scope.launchSafe{actions.collect({true},{repository.flushActions(60_000);BodyWarmupResult(0,0,false)})};scope.launchSafe{warmup.collect({visible},{repository.prefetchBodies(45_000)})};scope.launchSafe{
         repository.load()
         if(repository.snapshot.value.accounts.any{it.enabled}) {
-            MailWorker.schedule(this@MailApplication);FolderWorker.enqueue(this@MailApplication)
+            MailWorker.schedule(this@MailApplication);FolderWorker.enqueue(this@MailApplication);StorageWorker.enqueue(this@MailApplication)
             if(repository.snapshot.value.actions.any{it.active}){ActionWorker.enqueue(this@MailApplication);actions.request()}
         }else MailWorker.cancel(this@MailApplication)
     }}
     fun flushActions(){actions.request()}
     fun warmBodies(){if(visible)warmup.request()}
+    private val connectivity by lazy{getSystemService(android.net.ConnectivityManager::class.java)}
+    private val networkCallback=object: android.net.ConnectivityManager.NetworkCallback(){override fun onAvailable(network: android.net.Network){scope.launchSafe{repository.load();repository.networkAvailable()}}}
+
     private fun kotlinx.coroutines.CoroutineScope.launchSafe(action: suspend ()->Unit)=launch {
         try{action()}catch(e: CancellationException){throw e}catch(_: Exception){/* Durable work retries separately. */}
     }
@@ -58,6 +62,8 @@ class MailRepository(private val context: Context) {
     private val vault=SecretVault()
     private val gateway=MailGateway(context)
     private val attachmentCache=AttachmentCache(context)
+    private val previews=PreviewStorage(context)
+    private var storage=StorageStatus(limitMb=CacheRules.normalized(context.getSharedPreferences("mail-settings",Context.MODE_PRIVATE).getInt("cache-limit-mb",250)))
     private val queueFiles=QueueFiles(context)
     private val actionMutex=Mutex()
     private val folderLocks=ConcurrentHashMap<String,Mutex>()
@@ -92,7 +98,7 @@ class MailRepository(private val context: Context) {
             accounts.associate{it.id to SyncCheck(syncPrefs.getLong("checked:${it.id}",0),syncPrefs.getString("error:${it.id}","").orEmpty(),syncPrefs.getLong("duration:${it.id}",0))},
             BackgroundCheck(settings.getLong("poll-start",0),settings.getLong("poll-end",0),settings.getString("poll-result","").orEmpty(),settings.getString("poll-error","").orEmpty(),settings.getInt("poll-arrived",0),
                 settings.getString("poll-kind","auto").orEmpty(),settings.getLong("poll-auto-start",0),settings.getLong("poll-auto-end",0),settings.getString("poll-auto-result","").orEmpty()),
-            bodyCache.copy(pending=ContentCacheRules.pending(items,accounts,notifications.contentPriorityIds()).size),settings.getBoolean("auto-hide-panels",true),db.folders(),actions)
+            bodyCache.copy(pending=pendingBodies(items,accounts).size),settings.getBoolean("auto-hide-panels",true),db.folders(),actions,storage)
         notifications.reconcile(SyncRules.activeMessages(state.value.messages,accounts,null),arrived,accounts){id->db.message(id)?.body?.take(3000)}
         notifications.history(state.value)
     }
@@ -132,10 +138,13 @@ class MailRepository(private val context: Context) {
         refresh(arrived,state.value.messages.filterNot{it.accountId==id && SyncRules.remoteInbox(it)}+merged.map(MailContent::preview))
     }
     /** Resolve a notification before routing, independently of the list's snapshot collector. */
+    suspend fun watchInbox(a: MailAccount,onConnected: (Boolean)->Unit,onChanged: ()->Unit)=withContext(Dispatchers.IO) {
+        gateway.watchInbox(a,vault.open(a.id,a.secret),onConnected,onChanged)
+    }
     suspend fun cachedMessage(id: String): MailItem?=withContext(Dispatchers.IO){db.message(id)?.let{it.copy(previewOnly=!it.contentCached)}}
     suspend fun message(id: String): MailItem?=withContext(Dispatchers.IO){coordinator.content(id){
         val cached=db.message(id)?:return@content null
-        if(cached.contentCached)return@content cached
+        if(cached.contentCached){db.putMessage(cached.copy(cachedAt=System.currentTimeMillis()));return@content cached}
         coordinator.request(prepare={capture(cached.accountId)?.let{request->request to (db.message(id)?:cached)}},fetch={(request,m)->
             val coroutine=currentCoroutineContext()
             if(m.contentCached)m else runInterruptible{gateway.content(request.account,vault.open(request.account.id,request.account.secret),m){coroutine.ensureActive()}}
@@ -143,37 +152,43 @@ class MailRepository(private val context: Context) {
             require(current(request)){"Ящик приостановлен или его настройки изменились."}
             val now=state.value.messages.find{it.id==id}?:return@request null
             val result=full.copy(unread=now.unread,starred=now.starred,localFolder=now.localFolder)
-            db.putMessage(result);refresh(messages=state.value.messages.map{if(it.id==id)MailContent.preview(result)else it});result
+            db.putMessage(result.copy(cachedAt=System.currentTimeMillis()));StorageWorker.enqueue(context);refresh(messages=state.value.messages.map{if(it.id==id)MailContent.preview(result)else it});result
         })?:error("Включите ящик в меню, чтобы загрузить текст письма.")
     }}
     suspend fun search(query: String): Set<String> =withContext(Dispatchers.IO){
         val coroutine=currentCoroutineContext();db.search(query){coroutine.ensureActive()}
     }
-    suspend fun addAccount(account: MailAccount,password: String)=withContext(Dispatchers.IO){coordinator.data {
-        require(db.accounts().none { it.email.equals(account.email,true) && it.imapHost.equals(account.imapHost,true) }) { "Этот ящик уже добавлен." }
-        gateway.verify(account,password)
-        // Persist only after both incoming and outgoing authentication succeed.
-        val encrypted=account.copy(secret=vault.seal(account.id,password))
-        db.putAccount(encrypted)
-        refresh()
-    }}
-    suspend fun editAccount(account: MailAccount,password: String)=withContext(Dispatchers.IO){coordinator.data {
-        val old=db.accounts().find{it.id==account.id}?:error("Ящик не найден.")
-        require(db.accounts().none{it.id!=old.id && it.email.equals(account.email,true) && it.imapHost.equals(account.imapHost,true)}){"Этот ящик уже добавлен."}
-        require(old.email.equals(account.email,true)){"Для другого адреса добавьте отдельный ящик."}
-        MailRules.validateAccount(account,password,passwordRequired=false)?.let{error(it)}
+    suspend fun addAccount(account: MailAccount,password: String)=withContext(Dispatchers.IO) {
+        fun validate(){require(db.accounts().none{it.email.equals(account.email,true) && it.imapHost.equals(account.imapHost,true)}){"Этот ящик уже добавлен."}}
+        coordinator.data{validate()}
+        runInterruptible{gateway.verify(account,password)}
+        coordinator.data{validate();db.putAccount(account.copy(secret=vault.seal(account.id,password)));refresh()}
+        FolderWorker.enqueue(context)
+    }
+    suspend fun editAccount(account: MailAccount,password: String)=withContext(Dispatchers.IO) {
+        val (old,version)=coordinator.data {
+            val old=db.accounts().find{it.id==account.id}?:error("Ящик не найден.")
+            require(db.accounts().none{it.id!=old.id && it.email.equals(account.email,true) && it.imapHost.equals(account.imapHost,true)}){"Этот ящик уже добавлен."}
+            require(old.email.equals(account.email,true)){"Для другого адреса добавьте отдельный ящик."}
+            MailRules.validateAccount(account,password,passwordRequired=false)?.let{error(it)}
+            old to coordinator.version(old.id)
+        }
         val secret=password.ifEmpty{vault.open(old.id,old.secret)}
-        gateway.verify(account,secret)
-        val reset=!SyncRules.sameInbox(old,account)
-        if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("unread:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").apply()
-        coordinator.invalidate(old.id)
-        if(reset)attachmentCache.removeAccount(old.id)
-        db.updateAccount(account.copy(secret=vault.seal(old.id,secret),enabled=old.enabled),reset)
-        db.actions().filter{it.accountId==old.id && it.status=="auth" && it.serverKey==AuthRules.serverKey(account)}.forEach{db.putAction(it.copy(status="pending",nextAttempt=0,error=""))}
-        val history=readHistory()
-        if(reset && old.id in history.accountIds && history.active)writeHistory(history.copy(status="paused",error="Настройки ящика изменены. Продолжите загрузку истории."))
-        refresh()
-    }}
+        runInterruptible{gateway.verify(account,secret)}
+        coordinator.data {
+            require(coordinator.version(old.id)==version && db.accounts().any{it.id==old.id}){"Ящик изменён во время проверки. Повторите сохранение."}
+            val reset=!SyncRules.sameInbox(old,account)
+            if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("unread:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").apply()
+            coordinator.invalidate(old.id)
+            if(reset)attachmentCache.removeAccount(old.id)
+            db.updateAccount(account.copy(secret=vault.seal(old.id,secret),enabled=old.enabled),reset)
+            db.actions().filter{it.accountId==old.id && it.status=="auth" && it.serverKey==AuthRules.serverKey(account)}.forEach{db.putAction(it.copy(status="pending",nextAttempt=0,error=""))}
+            val history=readHistory()
+            if(reset && old.id in history.accountIds && history.active)writeHistory(history.copy(status="paused",error="Настройки ящика изменены. Продолжите загрузку истории."))
+            refresh()
+        }
+        wakeActions();FolderWorker.enqueue(context)
+    }
     suspend fun removeAccount(id: String)=withContext(Dispatchers.IO){coordinator.data{
         db.messages().filter{it.accountId==id}.forEach{ForwardWorker.cancel(context,it.id);forwardProgress.update{progress->progress-it.id};forwarded.remove(it.id)}
         coordinator.invalidate(id);db.removeAccount(id);attachmentCache.removeAccount(id)
@@ -304,9 +319,10 @@ class MailRepository(private val context: Context) {
     suspend fun deleteMessages(ids: Set<String>): DeleteResult=withContext(Dispatchers.IO) {
         val result=coordinator.data {
             val chosen=state.value.messages.filter{it.id in ids && !it.pendingDelete}
-            val remote=chosen.filter(FolderRules::remote)
-            val local=chosen.filter(TrashRules::local)
+            val remote=chosen.filter{FolderRules.remote(it) || it.uid==0L && it.localFolder=="sent"}
+            val local=chosen.filter{TrashRules.local(it) && it.localFolder!="sent"}
             val actions=remote.map{actionFor(it,ActionKind.TRASH)}.toMutableList()
+            remote.filter{it.uid==0L}.forEach{m->db.action(ActionKind.APPEND_SENT.name+":"+m.id)?.let{db.completeAction(it)}}
             local.forEach{m->
                 db.action(ActionKind.APPEND_DRAFT.name+":"+m.id)?.let{db.completeAction(it)}
                 m.sourceDraftId?.let{db.message(it)}?.let{actions+=actionFor(it,ActionKind.REMOVE_DRAFT)}
@@ -383,7 +399,7 @@ class MailRepository(private val context: Context) {
                 if(job.id!=id || !job.active)return@request null
                 val accounts=state.value.accounts
                 val issues=HistoryRules.remainingIssues(job,state.value.messages)
-                val history=accounts.associate{it.id to InboxHistory(hasOlder=state.value.history[it.id]?.hasOlder!=false || HistoryRules.pendingBodies(it.id,state.value.messages,issues).isNotEmpty())}
+                val history=accounts.associate{it.id to InboxHistory(hasOlder=state.value.history[it.id]?.hasOlder!=false || historyBodies(it.id,state.value.messages,issues).isNotEmpty())}
                 val accountId=SyncRules.nextHistoryAccount(job,accounts,history,skipped)
                 if(accountId==null) {
                     val retry=SyncRules.nextHistoryAccount(job,accounts,history,emptySet())!=null
@@ -391,7 +407,7 @@ class MailRepository(private val context: Context) {
                     writeHistory(job.copy(status=if(retry)"waiting" else if(disabled)"paused" else if(issues.isNotEmpty())"partial" else "done",issues=issues,phase="",currentUid=0,error=if(retry)job.error else if(disabled)"Включите приостановленные ящики в меню и продолжите загрузку." else ""))
                     refresh(messages=state.value.messages);stopped=HistoryStep(retry=retry);null
                 }else capture(accountId)?.let{request->
-                    val missing=if(state.value.history[accountId]?.hasOlder!=false)emptyList() else HistoryRules.pendingBodies(accountId,request.cached,issues).take(10)
+                    val missing=if(state.value.history[accountId]?.hasOlder!=false)emptyList() else historyBodies(accountId,request.cached,issues).take(10)
                     writeHistory(job.copy(status="running",issues=issues,activityAt=System.currentTimeMillis(),phase=if(missing.isEmpty())"headers" else "bodies",currentAccountId=accountId,currentUid=0))
                     refresh(messages=state.value.messages)
                     HistoryRequest(request,missing).also{captured=it}
@@ -409,7 +425,7 @@ class MailRepository(private val context: Context) {
                             val merged=SyncRules.contentBatch(now,batch)
                             writeHistory(HistoryRules.afterBody(job,now,batch,System.currentTimeMillis()))
                             if(batch.missingIds.isNotEmpty())coordinator.invalidate(a.id)
-                            saveRemote(a.id,now,merged)
+                            saveRemote(a.id,now,merged);StorageWorker.enqueue(context)
                             batch.missingIds.isEmpty()
                         }
                     },onStart={message->
@@ -444,7 +460,7 @@ class MailRepository(private val context: Context) {
     }
     suspend fun notificationEnvironmentChanged()=withContext(Dispatchers.IO){coordinator.data{
         refresh(messages=state.value.messages)
-        if(ContentCacheRules.pending(state.value.messages,state.value.accounts,notifications.contentPriorityIds()).isNotEmpty()){
+        if(pendingBodies().isNotEmpty()){
             NotificationPreviewWorker.enqueue(context);(context.applicationContext as MailApplication).warmBodies()
         }
     }}
@@ -474,7 +490,7 @@ class MailRepository(private val context: Context) {
         settings.edit().putString("body-failures",entries.toString()).apply()
     }
     suspend fun requestBodyWarmup()=withContext(Dispatchers.IO){
-        val pending=coordinator.data{ContentCacheRules.pending(state.value.messages,state.value.accounts,notifications.contentPriorityIds()).isNotEmpty()}
+        val pending=coordinator.data{pendingBodies().isNotEmpty()}
         if(pending){NotificationPreviewWorker.enqueue(context);(context.applicationContext as MailApplication).warmBodies()}
     }
     suspend fun retryBodyWarmup()=withContext(Dispatchers.IO){
@@ -483,7 +499,7 @@ class MailRepository(private val context: Context) {
     }
     /** Same pipeline is used in the polling worker and while visible; only one pipeline owns a batch. */
     suspend fun prefetchBodies(budgetMs: Long=120_000): BodyWarmupResult=withContext(Dispatchers.IO){bodyMutex.withLock{
-        if(coordinator.data{ContentCacheRules.pending(state.value.messages,state.value.accounts,notifications.contentPriorityIds()).isEmpty()})return@withLock BodyWarmupResult(0,0,false)
+        if(coordinator.data{pendingBodies().isEmpty()})return@withLock BodyWarmupResult(0,0,false)
         val deadline=System.nanoTime()+budgetMs*1_000_000
         val served=mutableMapOf<String,Int>();var round=0;var saved=0
         coordinator.data{bodyCache=bodyCache.copy(running=true);refresh(messages=state.value.messages)}
@@ -492,7 +508,7 @@ class MailRepository(private val context: Context) {
                 currentCoroutineContext().ensureActive()
                 val batches=coordinator.data{
                     val priority=notifications.contentPriorityIds()
-                    val pending=ContentCacheRules.pending(state.value.messages,state.value.accounts,priority)
+                    val pending=pendingBodies()
                     ContentCacheRules.batches(ContentCacheRules.eligible(pending,bodyFailures,System.currentTimeMillis()),priority,served)
                         .mapNotNull{messages->capture(messages.first().accountId)?.let{it to messages}}
                 }
@@ -510,7 +526,7 @@ class MailRepository(private val context: Context) {
                                 batch.failures.forEach{(id,error)->bodyFailures[id]=ContentCacheRules.failed(bodyFailures[id],System.currentTimeMillis(),"${account.name}: $error")}
                                 saved+=batch.messages.size;bodyCache=bodyCache.copy(saved=saved)
                                 if(batch.missingIds.isNotEmpty())coordinator.invalidate(account.id)
-                                saveRemote(account.id,now,merged);saveBodyFailures()
+                                saveRemote(account.id,now,merged);saveBodyFailures();StorageWorker.enqueue(context)
                                 batch.missingIds.isEmpty()
                             }
                         },onStart={m->coordinator.data{System.nanoTime()<deadline && current(request) && state.value.messages.any{it.id==m.id && !it.contentCached}}},
@@ -529,7 +545,7 @@ class MailRepository(private val context: Context) {
             }
         } finally {
             withContext(kotlinx.coroutines.NonCancellable){coordinator.data{
-                val pending=ContentCacheRules.pending(state.value.messages,state.value.accounts,notifications.contentPriorityIds())
+                val pending=pendingBodies()
                 val error=pending.mapNotNull{bodyFailures[it.id]?.error}.distinct().take(3).joinToString("\n")
                 bodyCache=BodyCacheStatus(false,pending.size,saved,System.currentTimeMillis(),error)
                 settings.edit().putInt("body-count",saved).putLong("body-end",bodyCache.finished).putString("body-error",error).apply()
@@ -537,10 +553,42 @@ class MailRepository(private val context: Context) {
             }}
         }
         coordinator.data{
-            val pending=ContentCacheRules.pending(state.value.messages,state.value.accounts,notifications.contentPriorityIds())
+            val pending=pendingBodies()
             BodyWarmupResult(saved,pending.size,ContentCacheRules.eligible(pending,bodyFailures,System.currentTimeMillis()).isNotEmpty())
         }
     }}
+    private fun historyBodies(accountId: String,messages: List<MailItem>,issues: List<HistoryIssue>): List<MailItem> {
+        val allowed=CacheRules.warmSources(state.value.messages,notifications.contentPriorityIds(),CacheRules.bodyBudget(storage.limitMb)).map{it.id}.toSet()
+        return HistoryRules.pendingBodies(accountId,messages,issues).filter{it.id in allowed}
+    }
+    private fun pendingBodies(messages: List<MailItem> = state.value.messages,accounts: List<MailAccount> = state.value.accounts): List<MailItem> {
+        val priority=notifications.contentPriorityIds()
+        val active=accounts.filter{it.enabled}.map{it.id}.toSet()
+        val source=CacheRules.warmSources(messages.filter{it.accountId in active},priority,CacheRules.bodyBudget(storage.limitMb))
+        return ContentCacheRules.pending(source,accounts,priority)
+    }
+    suspend fun storageStatus()=withContext(Dispatchers.IO){coordinator.data {
+        val cached=db.messages().filter{FolderRules.remote(it) && it.contentCached}
+        storage=storage.copy(bodyBytes=cached.sumOf{it.cacheBytes},attachmentBytes=previews.bytes(),cachedBodies=cached.size,checkedAt=System.currentTimeMillis())
+        refresh(messages=state.value.messages)
+    }}
+    suspend fun setCacheLimit(value: Int)=withContext(Dispatchers.IO) {
+        coordinator.data{storage=storage.copy(limitMb=CacheRules.normalized(value));settings.edit().putInt("cache-limit-mb",storage.limitMb).apply();refresh(messages=state.value.messages)}
+        trimCache()
+    }
+    suspend fun trimCache(clear: Boolean=false)=withContext(Dispatchers.IO) {
+        coordinator.data {
+            val protected=db.actions().map{it.messageId}.toSet()+state.value.messages.filter{it.localFolder in setOf("drafts","outbox")}.flatMap{listOfNotNull(it.sourceDraftId,it.forwarding?.messageId)}
+            val ids=CacheRules.evict(db.messages(),protected,CacheRules.bodyBudget(storage.limitMb),clear)
+            if(ids.isNotEmpty()) {
+                db.putMessages(ids.mapNotNull{db.message(it)}.map{it.copy(body=it.body.take(MailContent.PREVIEW_LENGTH),contentCached=false,previewOnly=false)})
+                bodyFailures.keys.removeAll(ids);saveBodyFailures();refresh()
+            }
+        }
+        previews.trim(CacheRules.fileBudget(storage.limitMb),clear)
+        if(clear)db.compact()
+        storageStatus()
+    }
     suspend fun saveDraft(draft: ComposeDraft)=withContext(Dispatchers.IO) {
         coordinator.data {
             val account=db.accounts().find{it.id==draft.accountId}?:error("Выберите ящик отправителя.")
@@ -698,7 +746,10 @@ class MailRepository(private val context: Context) {
                     val current=byId[m.id]
                     val reused=local?:current
                     val withBody=if(reused?.contentCached==true)m.copy(id=local?.id?:m.id,body=reused.body,attachments=reused.attachments,outgoing=reused.outgoing,contentCached=true,previewOnly=reused.previewOnly)else m
-                    if(m.id in protected(r) && current!=null)withBody.copy(unread=current.unread,starred=current.starred)else withBody
+                    if(local!=null) {
+                        if(local.unread!=m.unread || local.starred!=m.starred)db.putAction(actionFor(withBody,ActionKind.FLAGS,unread=local.unread,starred=local.starred))
+                        withBody.copy(unread=local.unread,starred=local.starred)
+                    }else if(m.id in protected(r) && current!=null)withBody.copy(unread=current.unread,starred=current.starred)else withBody
                 }
                 val ids=incoming.map{it.id}.toSet()
                 val merged=(if(older)now.filter{it.validity==page.validity && it.id !in ids}else emptyList())+incoming
@@ -745,6 +796,10 @@ class MailRepository(private val context: Context) {
     private fun actionMessage(a: MailAction)=db.decodeMessage(JSONObject(a.payload))
     private fun actionOrigin(a: MailAction)=JSONObject(a.payload).optJSONObject("_origin")?.let{db.decodeMessage(it)}
     private fun MailItem.draft()=ComposeDraft(id,accountId,recipients,subject,body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date)
+    suspend fun networkAvailable() {
+        coordinator.data{refresh(messages=state.value.messages)}
+        if(snapshot.value.accounts.any{it.enabled}){wakeActions();requestBodyWarmup()}
+    }
     suspend fun nextActionDelay(): Long?=withContext(Dispatchers.IO){coordinator.data{
         val accounts=db.accounts().filter{it.enabled}.map{it.id}.toSet()
         db.actions().filter{it.accountId in accounts && it.status=="pending"}.minOfOrNull{(it.nextAttempt-System.currentTimeMillis()).coerceAtLeast(0)}
@@ -760,7 +815,7 @@ class MailRepository(private val context: Context) {
                 val message=actionMessage(next)
                 val batch=if(next.kind in setOf(ActionKind.FLAGS,ActionKind.TRASH))db.actions().filter{a->
                     ActionRules.ready(a,accounts,now) && a.accountId==next.accountId && a.kind==next.kind && a.unread==next.unread && a.starred==next.starred &&
-                        actionMessage(a).let{it.remoteFolder==message.remoteFolder && it.validity==message.validity}
+                        actionMessage(a).let{message.uid>0 && it.uid>0 && it.remoteFolder==message.remoteFolder && it.validity==message.validity}
                 }.take(100)else listOf(next)
                 val process=(context.applicationContext as MailApplication).processToken
                 batch.map{it.copy(status=if(it.kind==ActionKind.SEND)"sending" else "running",lease=process)}.onEach{a->
@@ -795,12 +850,19 @@ class MailRepository(private val context: Context) {
                             coordinator.invalidate(account.id);refresh()
                         }
                     }
-                    ActionKind.TRASH -> gateway.trashMany(account,password,claimed.map(::actionMessage),
-                        before={coordinator.data{require(db.accounts().any{it.id==account.id && it.enabled && AuthRules.serverKey(it)==first.serverKey}){"Ящик выключен или его сервер изменился."};true}},onConfirmed={uids->coordinator.data {
-                            if(!sameActionServer(first)){claimed.forEach{db.completeAction(it)};refresh();return@data false}
-                            claimed.filter{actionMessage(it).uid in uids}.forEach{a->db.finishAction(a,remove=setOf(a.messageId))}
-                            coordinator.invalidate(account.id);refresh();true
-                        }})
+                    ActionKind.TRASH -> {
+                        val source=actionMessage(first)
+                        if(source.uid==0L) {
+                            val copies=runInterruptible{gateway.sentCopies(account,password,source)}
+                            copies.forEach{copy->gateway.trashMany(account,password,listOf(copy),before={coordinator.data{sameActionServer(first)}},onConfirmed={true})}
+                            coordinator.data{if(sameActionServer(first)){db.finishAction(first,remove=setOf(first.messageId));coordinator.invalidate(account.id)};refresh()}
+                        }else gateway.trashMany(account,password,claimed.map(::actionMessage),
+                            before={coordinator.data{require(db.accounts().any{it.id==account.id && it.enabled && AuthRules.serverKey(it)==first.serverKey}){"Ящик выключен или его сервер изменился."};true}},onConfirmed={uids->coordinator.data {
+                                if(!sameActionServer(first)){claimed.forEach{db.completeAction(it)};refresh();return@data false}
+                                claimed.filter{actionMessage(it).uid in uids}.forEach{a->db.finishAction(a,remove=setOf(a.messageId))}
+                                coordinator.invalidate(account.id);refresh();true
+                            }})
+                    }
                     ActionKind.SEND -> {
                         val source=actionMessage(first)
                         runInterruptible{gateway.send(account,password,source.draft())}
@@ -829,7 +891,10 @@ class MailRepository(private val context: Context) {
                             if(role==FolderRole.SENT) {
                                 val updated=remote.copy(unread=local?.unread?:remote.unread,starred=local?.starred?:remote.starred)
                                 val flags=if(updated.unread || updated.starred)listOf(actionFor(updated,ActionKind.FLAGS,unread=updated.unread,starred=updated.starred))else emptyList()
-                                db.finishAction(first,items=listOf(updated),enqueue=flags)
+                                if(!db.finishAction(first,items=listOf(updated),enqueue=flags) && (local==null || local.pendingDelete)) {
+                                    // A delete can race an accepted APPEND; clean up the acknowledged copy.
+                                    db.putAction(actionFor(remote,ActionKind.TRASH))
+                                }
                             }
                             else if(local?.localFolder=="drafts")db.finishAction(first,items=listOf(remote,local.copy(sourceDraftId=copyId)))
                             else {
@@ -910,7 +975,7 @@ class MailRepository(private val context: Context) {
                 attachmentCache.prepare(message,file){output->require(a.enabled){"Включите ящик для загрузки вложения."};gateway.attachment(a,vault.open(a.id,a.secret),message,file,output)}
             }},commit={request,cached->
                 require(coordinator.version(request.account.id)==request.version && state.value.accounts.any{it.id==request.account.id}){"Ящик изменён или удалён. Повторите открытие вложения."}
-                cached
+                StorageWorker.enqueue(context);cached
             })?:error("Ящик не найден.")
         }
     }

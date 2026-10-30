@@ -7,6 +7,12 @@ import jakarta.activation.DataHandler
 import jakarta.activation.DataSource
 import jakarta.mail.*
 import jakarta.mail.internet.*
+import jakarta.mail.event.*
+import org.eclipse.angus.mail.imap.IdleManager
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 import jakarta.mail.search.FlagTerm
 import jakarta.mail.search.MessageIDTerm
 import jakarta.mail.search.HeaderTerm
@@ -31,7 +37,7 @@ class ServerCopyUnconfirmedException: java.io.IOException("Сервер пока
 class MailConnectionException(val stage: String, val host: String, val port: Int, cause: Exception) : Exception(cause)
 
 class MailGateway(private val context: Context) {
-    private fun session(a: MailAccount,fast: Boolean=false): Session {
+    private fun session(a: MailAccount,fast: Boolean=false,watch: Boolean=false): Session {
         if(a.authKind==AuthKind.GOOGLE)AuthRules.validateGoogle(a)?.let{error(it)}
         val imap=if(a.imapStartTls)"imap" else "imaps"
         val p=Properties().apply {
@@ -39,6 +45,7 @@ class MailGateway(private val context: Context) {
             setProperty("mail.$imap.timeout",if(fast)"10000" else "20000")
             setProperty("mail.$imap.ssl.checkserveridentity","true")
             setProperty("mail.$imap.peek","true")
+            if(watch)setProperty("mail.$imap.usesocketchannels","true")
             setProperty("mail.$imap.partialfetch","true")
             setProperty("mail.$imap.fetchsize","65536")
             if(a.imapStartTls){setProperty("mail.imap.starttls.enable","true");setProperty("mail.imap.starttls.required","true")}
@@ -60,6 +67,38 @@ class MailGateway(private val context: Context) {
         return Session.getInstance(p).apply { debug=false }
     }
     private fun store(a: MailAccount,password: String,fast: Boolean=false): Store = session(a,fast).getStore(if(a.imapStartTls)"imap" else "imaps").apply { GoogleMailAuth.withCredential(context,a,password){connect(a.imapHost,a.imapPort,a.username,it)} }
+    suspend fun watchInbox(a: MailAccount,password: String,onConnected: (Boolean)->Unit,onChanged: ()->Unit)=withContext(Dispatchers.IO) {
+        val session=session(a,fast=true,watch=true)
+        val connection=runInterruptible{session.getStore(if(a.imapStartTls)"imap" else "imaps").apply{GoogleMailAuth.withCredential(context,a,password){connect(a.imapHost,a.imapPort,a.username,it)}}} as IMAPStore
+        var folder: IMAPFolder?=null
+        var idle: IdleManager?=null
+        val executor=Executors.newSingleThreadExecutor()
+        val problem=AtomicReference<Exception?>(null)
+        try {
+            val f=connection.getFolder("INBOX") as IMAPFolder;folder=f
+            val listener=object: ConnectionAdapter(){override fun closed(e: ConnectionEvent){problem.set(java.io.IOException("Соединение закрыто."))};override fun disconnected(e: ConnectionEvent){problem.set(java.io.IOException("Соединение прервано."))}}
+            f.addConnectionListener(listener);connection.addConnectionListener(listener)
+            runInterruptible{f.open(Folder.READ_ONLY)}
+            if(!connection.hasCapability("IDLE")) {
+                onConnected(false)
+                while(currentCoroutineContext().isActive){delay(60_000);runInterruptible{f.messageCount};onChanged()}
+            }else {
+                val manager=IdleManager(session,executor);idle=manager
+                fun changed(){onChanged();try{manager.watch(f)}catch(e: Exception){problem.set(e)}}
+                f.addMessageCountListener(object: MessageCountAdapter(){override fun messagesAdded(e: MessageCountEvent){changed()};override fun messagesRemoved(e: MessageCountEvent){changed()}})
+                f.addMessageChangedListener{changed()}
+                runInterruptible{manager.watch(f)};onConnected(true)
+                val start=android.os.SystemClock.elapsedRealtime()
+                while(currentCoroutineContext().isActive && android.os.SystemClock.elapsedRealtime()-start<20*60_000) {
+                    delay(1_000);problem.get()?.let{throw it}
+                    check(manager.isRunning){"Соединение ожидания закрыто. Переподключаемся."}
+                }
+            }
+        }finally {
+            idle?.stop();executor.shutdownNow()
+            withContext(NonCancellable+Dispatchers.IO){runCatching{folder?.forceClose()};runCatching{connection.close()}}
+        }
+    }
     fun verify(a: MailAccount,password: String) {
         try { store(a,password).use { } }
         catch(e: Exception) { throw MailConnectionException("Входящая почта IMAP",a.imapHost,a.imapPort,e) }
@@ -246,6 +285,14 @@ class MailGateway(private val context: Context) {
         }
     }
     data class ServerCopy(val folder: String,val uid: Long,val validity: Long)
+    fun sentCopies(a: MailAccount,password: String,source: MailItem): List<MailItem> = store(a,password,fast=true).use{connection->
+        val folders=connection.defaultFolder.list("*").mapNotNull{it as? IMAPFolder}.filter{FolderRules.role(it.fullName,it.attributes.toList())==FolderRole.SENT}
+        folders.flatMap{folder->
+            folder.open(Folder.READ_ONLY)
+            try{folder.search(MessageIDTerm(source.internetMessageId)).map{m->source.copy(uid=folder.getUID(m),validity=folder.uidValidity,remoteFolder=folder.fullName,localFolder="remote-sent")}}
+            finally{folder.close(false)}
+        }
+    }
     fun append(a: MailAccount,password: String,draft: ComposeDraft,role: FolderRole,revision: Long,origin: MailItem?): ServerCopy = store(a,password).use{connection->
         require(role==FolderRole.SENT || role==FolderRole.DRAFTS)
         val existing=connection.defaultFolder.list("*").mapNotNull{it as? IMAPFolder}.firstOrNull{FolderRules.role(it.fullName,it.attributes.toList())==role}

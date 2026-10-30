@@ -11,7 +11,7 @@ class AttachmentCache(private val root: File,private val uriFor: (File)->String)
     constructor(context: Context):this(File(context.cacheDir,"attachments"),{file->FileProvider.getUriForFile(context,"${context.packageName}.attachments",file).toString()})
     private fun hash(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
     fun existing(message: MailItem,attachment: Attachment): File? =
-        File(File(File(root,hash(message.accountId)),hash("${message.id}|${attachment.path}")),AttachmentRules.safeName(attachment.name)).takeIf{it.isFile}
+        File(File(File(root,hash(message.accountId)),hash("${message.id}|${attachment.path}")),AttachmentRules.safeName(attachment.name)).takeIf{it.isFile}?.also{it.setLastModified(System.currentTimeMillis())}
     /** Share a durable forward with the preview cache without an extra copy. Optional on filesystems without hard links. */
     fun remember(message: MailItem,attachment: Attachment,source: File) {
         val target=File(File(File(root,hash(message.accountId)),hash("${message.id}|${attachment.path}")),AttachmentRules.safeName(attachment.name))
@@ -30,9 +30,6 @@ class AttachmentCache(private val root: File,private val uriFor: (File)->String)
             partial.outputStream().use(fetch)
             check(partial.renameTo(result)){"Не удалось подготовить вложение для просмотра."}
         } catch(e: Exception) { partial.delete();throw e }
-        // Only this dedicated private cache is shared; old previews expire after two days.
-        val cutoff=System.currentTimeMillis()-2*24*60*60*1000L
-        root.walkBottomUp().filter{it.isFile && it!=result && it.lastModified()<cutoff}.forEach{it.delete()}
         return result
     }
 
