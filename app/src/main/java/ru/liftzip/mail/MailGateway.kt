@@ -8,6 +8,9 @@ import jakarta.activation.DataSource
 import jakarta.mail.*
 import jakarta.mail.internet.*
 import jakarta.mail.search.FlagTerm
+import jakarta.mail.search.MessageIDTerm
+import jakarta.mail.search.HeaderTerm
+import jakarta.mail.search.AndTerm
 import org.eclipse.angus.mail.imap.IMAPFolder
 import org.eclipse.angus.mail.imap.IMAPMessage
 import org.eclipse.angus.mail.imap.IMAPStore
@@ -24,10 +27,12 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 
 class DeliveryUncertainException : Exception("Сервер не подтвердил результат отправки. Проверьте почту получателя или отправленные на сервере перед повторной отправкой.")
+class ServerCopyUnconfirmedException: java.io.IOException("Сервер пока не подтвердил сохранение копии. Проверка будет повторена без повторной отправки письма.")
 class MailConnectionException(val stage: String, val host: String, val port: Int, cause: Exception) : Exception(cause)
 
 class MailGateway(private val context: Context) {
     private fun session(a: MailAccount,fast: Boolean=false): Session {
+        if(a.authKind==AuthKind.GOOGLE)AuthRules.validateGoogle(a)?.let{error(it)}
         val imap=if(a.imapStartTls)"imap" else "imaps"
         val p=Properties().apply {
             setProperty("mail.$imap.connectiontimeout",if(fast)"8000" else "15000")
@@ -38,6 +43,12 @@ class MailGateway(private val context: Context) {
             setProperty("mail.$imap.fetchsize","65536")
             if(a.imapStartTls){setProperty("mail.imap.starttls.enable","true");setProperty("mail.imap.starttls.required","true")}
             setProperty("mail.smtp.auth","true")
+            if(a.authKind==AuthKind.GOOGLE) {
+                setProperty("mail.$imap.auth.mechanisms","XOAUTH2")
+                setProperty("mail.$imap.auth.xoauth2.disable","false")
+                setProperty("mail.smtp.auth.mechanisms","XOAUTH2")
+                setProperty("mail.smtp.auth.xoauth2.disable","false")
+            }
             setProperty("mail.smtp.connectiontimeout","15000")
             setProperty("mail.smtp.timeout","30000")
             setProperty("mail.smtp.writetimeout","30000")
@@ -48,22 +59,23 @@ class MailGateway(private val context: Context) {
         }
         return Session.getInstance(p).apply { debug=false }
     }
-    private fun store(a: MailAccount,password: String,fast: Boolean=false): Store = session(a,fast).getStore(if(a.imapStartTls)"imap" else "imaps").apply { connect(a.imapHost,a.imapPort,a.username,password) }
+    private fun store(a: MailAccount,password: String,fast: Boolean=false): Store = session(a,fast).getStore(if(a.imapStartTls)"imap" else "imaps").apply { GoogleMailAuth.withCredential(context,a,password){connect(a.imapHost,a.imapPort,a.username,it)} }
     fun verify(a: MailAccount,password: String) {
         try { store(a,password).use { } }
         catch(e: Exception) { throw MailConnectionException("Входящая почта IMAP",a.imapHost,a.imapPort,e) }
-        try { session(a).getTransport("smtp").use { it.connect(a.smtpHost,a.smtpPort,a.username,password) } }
+        try { session(a).getTransport("smtp").use { transport->GoogleMailAuth.withCredential(context,a,password){transport.connect(a.smtpHost,a.smtpPort,a.username,it)} } }
         catch(e: Exception) { throw MailConnectionException("Исходящая почта SMTP",a.smtpHost,a.smtpPort,e) }
     }
     fun inbox(a: MailAccount,password: String,cached: List<MailItem> = emptyList(),loadOlder: Boolean=false,
-        pageSize: Int=InboxPaging.PAGE_SIZE,checkCancelled: ()->Unit={}): InboxPage = store(a,password,fast=!loadOlder).use { store->
-        val folder=store.getFolder("INBOX") as IMAPFolder
+        pageSize: Int=InboxPaging.PAGE_SIZE,folderPath: String="INBOX",role: FolderRole=FolderRole.INBOX,checkCancelled: ()->Unit={}): InboxPage = store(a,password,fast=!loadOlder).use { store->
+        val folder=store.getFolder(folderPath) as IMAPFolder
         folder.open(Folder.READ_ONLY)
         try {
             val count=folder.messageCount
             if(count==0)return@use InboxPage(emptyList(),InboxHistory(0,false,0),folder.uidValidity)
             // UID, unlike sequence number, survives arrivals and deletions between sessions.
-            val validCache=cached.filter{it.validity==folder.uidValidity && it.uid>0 && it.localFolder=="inbox"}
+            val sameFolder=cached.filter{it.validity==folder.uidValidity && it.uid>0 && it.remoteFolder.equals(folderPath,true)}
+            val validCache=sameFolder.filter{role!=FolderRole.INBOX || it.localFolder=="inbox"}
             val oldestUid=validCache.minOfOrNull{it.uid}
             // History pages fetch only the next batch, not all previously downloaded bodies/headers.
             val retained=if(oldestUid==null)emptyList() else if(loadOlder) {
@@ -78,24 +90,24 @@ class MailGateway(private val context: Context) {
                     ?:return@use InboxPage(emptyList(),InboxHistory(count,false),folder.uidValidity)
                 folder.getMessages(range.first,range.last).toList()
             } else retained
-            val cachedById=cached.associateBy { it.id }
+            val cachedByUid=sameFolder.associateBy { it.uid }
             folder.fetch(messages.toTypedArray(),FetchProfile().apply {add(FetchProfile.Item.FLAGS);add(UIDFolder.FetchProfileItem.UID)})
-            val unknown=messages.filter{cachedById["${a.id}:${folder.uidValidity}:${folder.getUID(it)}"]==null}
+            val unknown=messages.filter{cachedByUid[folder.getUID(it)]?.internetMessageId.isNullOrBlank()}
             if(unknown.isNotEmpty())folder.fetch(unknown.toTypedArray(),FetchProfile().apply{add(FetchProfile.Item.ENVELOPE)})
             val items=messages.map { m->
                 checkCancelled()
                 (m as? IMAPMessage)?.setPeek(true)
                 val uid=folder.getUID(m)
-                val existing=cachedById["${a.id}:${folder.uidValidity}:$uid"]
-                if(!loadOlder && existing!=null)return@map existing.copy(localFolder="inbox",unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED))
+                val existing=cachedByUid[uid]
+                if(!loadOlder && existing!=null)return@map existing.copy(internetMessageId=existing.internetMessageId.ifBlank{(m as? MimeMessage)?.messageID.orEmpty()},localFolder=FolderRules.local(role),unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED))
                 val reused=existing?.takeIf{it.contentCached}
                 // Pagination must advance even if a particular MIME body cannot be read.
                 val content=if(reused!=null)DecodedMail(reused.body,reused.attachments) else DecodedMail("",emptyList())
-                if(existing!=null)return@map existing.copy(localFolder="inbox",body=content.text,attachments=content.attachments,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),previewOnly=reused?.previewOnly?:false,contentCached=reused!=null)
+                if(existing!=null)return@map existing.copy(localFolder=FolderRules.local(role),body=content.text,attachments=content.attachments,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),previewOnly=reused?.previewOnly?:false,contentCached=reused!=null)
                 val from=m.from?.firstOrNull() as? InternetAddress
-                MailItem("${a.id}:${folder.uidValidity}:$uid",a.id,uid,folder.uidValidity,"INBOX",from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
-                    HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",content.text,
-                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false)
+                MailItem(FolderRules.id(a.id,folderPath,folder.uidValidity,uid),a.id,uid,folder.uidValidity,folderPath,from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
+                    HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:(if(role==FolderRole.DRAFTS)"" else "Без темы"),content.text,
+                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false,localFolder=FolderRules.local(role),internetMessageId=(m as? MimeMessage)?.messageID.orEmpty())
             }
             val unread=if(loadOlder)null else folder.unreadMessageCount.takeIf{it>=0}
             InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1,unread),folder.uidValidity)
@@ -108,19 +120,19 @@ class MailGateway(private val context: Context) {
             val messages=folder.search(FlagTerm(Flags(Flags.Flag.SEEN),false))
             val byId=cached.associateBy{it.id}
             if(messages.isNotEmpty())folder.fetch(messages,FetchProfile().apply{add(FetchProfile.Item.FLAGS);add(UIDFolder.FetchProfileItem.UID)})
-            val unknown=messages.filter{byId["${a.id}:${folder.uidValidity}:${folder.getUID(it)}"]==null}
+            val unknown=messages.filter{byId["${a.id}:${folder.uidValidity}:${folder.getUID(it)}"]?.internetMessageId.isNullOrBlank()}
             if(unknown.isNotEmpty())folder.fetch(unknown.toTypedArray(),FetchProfile().apply{add(FetchProfile.Item.ENVELOPE)})
             val items=messages.map{m->
                 checkCancelled()
                 val uid=folder.getUID(m)
                 val id="${a.id}:${folder.uidValidity}:$uid"
                 val existing=byId[id]
-                if(existing!=null)return@map existing.copy(unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED))
+                if(existing!=null)return@map existing.copy(internetMessageId=existing.internetMessageId.ifBlank{(m as? MimeMessage)?.messageID.orEmpty()},unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED))
                 val from=m.from?.firstOrNull() as? InternetAddress
                 MailItem(id,a.id,uid,folder.uidValidity,"INBOX",from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",existing?.body.orEmpty(),
                     (m.receivedDate?:m.sentDate)?.time?:0L,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),localFolder=existing?.localFolder?:"unread-cache",
-                    attachments=existing?.attachments.orEmpty(),previewOnly=existing?.previewOnly?:false,contentCached=existing?.contentCached?:false)
+                    attachments=existing?.attachments.orEmpty(),previewOnly=existing?.previewOnly?:false,contentCached=existing?.contentCached?:false,internetMessageId=(m as? MimeMessage)?.messageID.orEmpty())
             }
             UnreadPage(folder.uidValidity,items,folder.messageCount)
         }finally{folder.close(false)}
@@ -129,10 +141,10 @@ class MailGateway(private val context: Context) {
         around: suspend (MailItem,suspend ()->Boolean)->Boolean={_,action->action()})=withContext(Dispatchers.IO) {
         if(messages.isEmpty())return@withContext
         runInterruptible{store(a,password,fast=true)}.use{connection->
-            val folder=connection.getFolder("INBOX") as IMAPFolder
+            val folder=connection.getFolder(messages.first().remoteFolder) as IMAPFolder
             runInterruptible{folder.open(Folder.READ_ONLY)}
             try {
-                require(messages.all{it.validity==folder.uidValidity}){"Папка изменилась. Обновите список писем."}
+                require(messages.all{it.validity==folder.uidValidity && it.remoteFolder==messages.first().remoteFolder}){"Папка изменилась. Обновите список писем."}
                 HistoryBodies.transfer(messages,read={m->
                     val coroutine=currentCoroutineContext()
                     runInterruptible {
@@ -142,7 +154,7 @@ class MailGateway(private val context: Context) {
                         if(remote==null)null else {
                             (remote as? IMAPMessage)?.setPeek(true)
                             val decoded=MimeReader(checkCancelled=budget::check){Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
-                            m.copy(body=decoded.text,attachments=decoded.attachments,previewOnly=false,contentCached=true)
+                            m.copy(body=decoded.text,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true)
                         }
                     }
                 },save=onItem,describe=::friendlyError,before=onStart,around=around)
@@ -158,7 +170,7 @@ class MailGateway(private val context: Context) {
             (remote as? IMAPMessage)?.setPeek(true)
             val budget=MailReadBudget(checkCancelled=checkCancelled)
             val decoded=MimeReader(checkCancelled=budget::check){Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
-            message.copy(body=decoded.text,attachments=decoded.attachments,previewOnly=false,contentCached=true)
+            message.copy(body=decoded.text,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true,internetMessageId=message.internetMessageId.ifBlank{(remote as? MimeMessage)?.messageID.orEmpty()},recipients=message.recipients.ifBlank{HeaderText.decode((remote as? MimeMessage)?.getHeader("To",null).orEmpty())})
         }finally{folder.close(false)}
     }
     suspend fun trashMany(a: MailAccount,password: String,messages: List<MailItem>,before: suspend ()->Boolean,onConfirmed: suspend (Set<Long>)->Boolean)=withContext(Dispatchers.IO) {
@@ -189,14 +201,14 @@ class MailGateway(private val context: Context) {
             }finally{withContext(NonCancellable){runInterruptible{runCatching{folder.close(false)}}}}
         }
     }
-    fun flagsMany(a: MailAccount,password: String,messages: List<MailItem>,seen: Boolean): Set<Long> = store(a,password).use { store->
+    fun flagsMany(a: MailAccount,password: String,messages: List<MailItem>,seen: Boolean?=null,starred: Boolean?=null): Set<Long> = store(a,password).use { store->
         if(messages.isEmpty())return@use emptySet()
         val folder=store.getFolder(messages.first().remoteFolder) as IMAPFolder
         folder.open(Folder.READ_WRITE)
         try {
             require(messages.all{it.validity==folder.uidValidity}){"Папка изменилась. Обновите список писем."}
             val remote=folder.getMessagesByUID(messages.map{it.uid}.distinct().toLongArray()).filterNotNull()
-            if(remote.isNotEmpty())folder.setFlags(remote.toTypedArray(),Flags(Flags.Flag.SEEN),seen)
+            if(remote.isNotEmpty()){seen?.let{folder.setFlags(remote.toTypedArray(),Flags(Flags.Flag.SEEN),it)};starred?.let{folder.setFlags(remote.toTypedArray(),Flags(Flags.Flag.FLAGGED),it)}}
             remote.map{folder.getUID(it)}.toSet()
         } finally { folder.close(false) }
     }
@@ -224,7 +236,54 @@ class MailGateway(private val context: Context) {
             }
         } finally { folder.close(false) }
     }
-    fun send(a: MailAccount,password: String,draft: ComposeDraft) {
+    fun folders(a: MailAccount,password: String): List<ServerFolder> = store(a,password,fast=true).use{connection->
+        connection.defaultFolder.list("*").mapNotNull { folder->
+            val f=folder as? IMAPFolder?:return@mapNotNull null
+            val attrs=f.attributes.toList()
+            if(attrs.any{it.equals("\\NoSelect",true)})return@mapNotNull null
+            ServerFolder(a.id,f.fullName,f.name,FolderRules.role(f.fullName,attrs),
+                runCatching{f.messageCount.takeIf{it>=0}}.getOrNull(),runCatching{f.unreadMessageCount.takeIf{it>=0}}.getOrNull())
+        }
+    }
+    data class ServerCopy(val folder: String,val uid: Long,val validity: Long)
+    fun append(a: MailAccount,password: String,draft: ComposeDraft,role: FolderRole,revision: Long,origin: MailItem?): ServerCopy = store(a,password).use{connection->
+        require(role==FolderRole.SENT || role==FolderRole.DRAFTS)
+        val existing=connection.defaultFolder.list("*").mapNotNull{it as? IMAPFolder}.firstOrNull{FolderRules.role(it.fullName,it.attributes.toList())==role}
+        val folder=existing?:((connection.getFolder(if(role==FolderRole.SENT)"Sent" else "Drafts") as IMAPFolder).also{
+            require(it.exists() || it.create(Folder.HOLDS_MESSAGES)){"Не удалось создать серверную папку."}
+            runCatching{it.isSubscribed=true}
+        })
+        folder.open(Folder.READ_WRITE)
+        try {
+            val messageId=MessageIdentity.forDraft(draft.id,draft.internetMessageId)
+            val term=if(role==FolderRole.DRAFTS)AndTerm(MessageIDTerm(messageId),AndTerm(HeaderTerm("X-LiftZip-Draft-ID",draft.id),HeaderTerm("X-LiftZip-Draft-Revision",revision.toString())))else MessageIDTerm(messageId)
+            var savedUid=folder.search(term).maxOfOrNull{folder.getUID(it)}
+            if(savedUid==null) {
+                val message=mimeMessage(a,draft,revision.takeIf{role==FolderRole.DRAFTS})
+                message.setFlag(Flags.Flag.SEEN,true)
+                if((connection as IMAPStore).hasCapability("UIDPLUS"))savedUid=folder.appendUIDMessages(arrayOf(message))?.firstOrNull()?.uid?.takeIf{it>0}
+                else folder.appendMessages(arrayOf(message))
+                if(savedUid==null)savedUid=folder.search(term).maxOfOrNull{folder.getUID(it)}
+            }
+            val uid=savedUid?:throw ServerCopyUnconfirmedException()
+            if(role==FolderRole.DRAFTS && (connection as IMAPStore).hasCapability("UIDPLUS")) {
+                val old=folder.search(HeaderTerm("X-LiftZip-Draft-ID",draft.id)).filter{folder.getUID(it)!=uid}.toMutableList()
+                if(origin!=null && origin.remoteFolder==folder.fullName && origin.validity==folder.uidValidity && origin.uid!=uid)folder.getMessageByUID(origin.uid)?.let{m->if(old.none{folder.getUID(it)==origin.uid})old+=m}
+                if(old.isNotEmpty()){folder.setFlags(old.toTypedArray(),Flags(Flags.Flag.DELETED),true);folder.expunge(old.toTypedArray())}
+            }
+            ServerCopy(folder.fullName,uid,folder.uidValidity)
+        }finally{folder.close(false)}
+    }
+    fun removeDraft(a: MailAccount,password: String,origin: MailItem)=store(a,password).use{connection->
+        val f=connection.getFolder(origin.remoteFolder) as IMAPFolder;f.open(Folder.READ_WRITE)
+        try {
+            require(f.uidValidity==origin.validity){"Папка черновиков изменилась. Обновите список."}
+            val m=f.getMessageByUID(origin.uid)?:return@use
+            require((connection as IMAPStore).hasCapability("UIDPLUS")){"Этот сервер не поддерживает безопасную очистку старой копии черновика."}
+            f.setFlags(arrayOf(m),Flags(Flags.Flag.DELETED),true);f.expunge(arrayOf(m))
+        }finally{f.close(false)}
+    }
+    private fun mimeMessage(a: MailAccount,draft: ComposeDraft,revision: Long?=null): MimeMessage {
         // Providers may omit or misreport file length. Check actual bytes before SMTP.
         var total=0L
         draft.attachments.forEach { file->
@@ -239,11 +298,13 @@ class MailGateway(private val context: Context) {
         }
         val session=session(a)
         val message=object: MimeMessage(session) {
-            override fun updateMessageID() { setHeader("Message-ID","<${draft.id}@local.liftzip.mail>") }
+            override fun updateMessageID() { setHeader("Message-ID",MessageIdentity.forDraft(draft.id,draft.internetMessageId)) }
         }.apply {
             setFrom(InternetAddress(a.email,a.senderName,"UTF-8"))
-            setRecipients(Message.RecipientType.TO,MailRules.recipients(draft.to).map { InternetAddress(it,true) }.toTypedArray())
-            setSubject(draft.subject,"UTF-8");sentDate=Date()
+            if(revision!=null)setHeader("To",draft.to.replace('\r',' ').replace('\n',','))
+            else setRecipients(Message.RecipientType.TO,MailRules.recipients(draft.to).map { InternetAddress(it,true) }.toTypedArray())
+            setSubject(draft.subject.replace('\r',' ').replace('\n',' '),"UTF-8");sentDate=Date(draft.timestamp.takeIf{it>0}?:System.currentTimeMillis())
+            if(revision!=null){setHeader("X-LiftZip-Draft-ID",draft.id);setHeader("X-LiftZip-Draft-Revision",revision.toString());setFlag(Flags.Flag.DRAFT,true)}
             if(draft.attachments.isEmpty())setText(draft.body,"UTF-8")
             else {
                 val multi=MimeMultipart().apply { addBodyPart(MimeBodyPart().apply { setText(draft.body,"UTF-8") }) }
@@ -263,16 +324,21 @@ class MailGateway(private val context: Context) {
                             override fun getContentType()=file.mime
                             override fun getName()=file.name
                         })
-                        fileName=file.name;disposition=Part.ATTACHMENT
+                        fileName=AttachmentRules.safeName(file.name);disposition=Part.ATTACHMENT
                     })
                 }
                 setContent(multi)
             }
             saveChanges()
         }
+        return message
+    }
+    fun send(a: MailAccount,password: String,draft: ComposeDraft) {
+        val session=session(a)
+        val message=mimeMessage(a,draft)
         val transport=session.getTransport("smtp")
         try {
-            transport.connect(a.smtpHost,a.smtpPort,a.username,password)
+            GoogleMailAuth.withCredential(context,a,password){transport.connect(a.smtpHost,a.smtpPort,a.username,it)}
             try { transport.sendMessage(message,message.allRecipients) }
             catch(e: Exception){throw DeliveryUncertainException()}
         } finally {

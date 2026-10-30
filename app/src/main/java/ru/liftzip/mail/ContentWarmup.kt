@@ -31,7 +31,7 @@ object ContentCacheRules {
         val recent=mutableMapOf<String,PriorityQueue<MailItem>>()
         val missing=linkedMapOf<String,MailItem>()
         for(m in messages){
-            if(m.accountId !in active || !SyncRules.remoteInbox(m))continue
+            if(m.accountId !in active || m.pendingDelete || !SyncRules.remoteInbox(m))continue
             val window=recent.getOrPut(m.accountId){PriorityQueue(RECENT_PER_ACCOUNT,byDate)}
             if(window.size<RECENT_PER_ACCOUNT)window.add(m)
             else if(byDate.compare(m,window.peek())>0){window.poll();window.add(m)}

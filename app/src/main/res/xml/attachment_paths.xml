@@ -2,4 +2,5 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="attachments" path="attachments/" />
     <files-path name="forwarded" path="forwarded/" />
+    <files-path name="queued-attachments" path="outbox-files/" />
 </paths>

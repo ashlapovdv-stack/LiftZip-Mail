@@ -97,7 +97,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             }catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
         }
     }
-    fun openDraft(id: String,onReady: (MailItem)->Unit)=work{onReady(repo.message(id)?:error("Черновик не найден."))}
+    fun openDraft(id: String,onReady: (ComposeDraft)->Unit)=work{onReady(repo.draftForEditing(id))}
     fun visible(active: Boolean) {
         (getApplication<Application>() as MailApplication).visible=active
         if(!active){foreground?.cancel();foreground=null;return}
@@ -154,9 +154,12 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         notice(if(result.errors.isEmpty())"Настройки ящика сохранены" else "Настройки сохранены. ${result.errors.joinToString("\n")}",error=result.errors.isNotEmpty())
     }
     fun removeAccount(id: String)=work{
+        val removed=mutable.value.accounts.find{it.id==id}
         repo.removeAccount(id)
+        var revoked=true
+        if(removed?.authKind==AuthKind.GOOGLE)revoked=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{GoogleMailAuth.disconnect(getApplication(),removed.email)}.isSuccess}
         if(repo.snapshot.value.accounts.none{it.enabled})MailWorker.cancel(getApplication())
-        notice("Ящик отключён от приложения. Письма на сервере сохранены.")
+        notice(if(revoked)"Ящик отключён от приложения. Письма на сервере сохранены." else "Ящик удалён с устройства. Не удалось отозвать доступ Google; это можно сделать в настройках аккаунта Google.",error=!revoked)
     }
     fun setAccountEnabled(id: String,enabled: Boolean) {
         viewModelScope.launch {
@@ -188,7 +191,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         val result=repo.deleteMessages(ids)
         mutable.update{it.copy(opened=it.opened?.takeUnless{m->m.id in result.removed})}
         onRemoved(result.removed)
-        notice((if(result.removed.isNotEmpty())"Удалено писем: ${result.removed.size}" else if(result.errors.isEmpty())"Письма уже удалены или перемещены" else "")+
+        notice((if(result.removed.isNotEmpty())"К удалению: ${result.removed.size}" else if(result.errors.isEmpty())"Письма уже удалены или перемещены" else "")+
             (if(result.errors.isNotEmpty())(if(result.removed.isNotEmpty())"\n" else "")+result.errors.joinToString("\n")else ""),error=result.errors.isNotEmpty())
     }
     fun startHistory(ids: List<String>)=work{HistoryWorker.enqueue(getApplication(),repo.startHistory(ids));notice("Загрузка истории запущена")}
@@ -226,7 +229,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun send(draft: ComposeDraft,onDone: ()->Unit) {
         MailRules.validateDraft(draft)?.let{notice(it,error=true);return}
         work {
-            repo.send(draft);notice("Письмо принято сервером отправителя")
+            repo.send(draft);notice("Письмо в Исходящих. Отправка начнётся при подключении к сети.")
             onDone()
         }
     }

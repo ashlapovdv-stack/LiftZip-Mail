@@ -15,7 +15,7 @@ data class MailAccount(
     val username: String = email, val provider: Provider, val imapHost: String,
     val imapPort: Int = 993, val imapStartTls: Boolean = false,
     val smtpHost: String, val smtpPort: Int = 465, val smtpStartTls: Boolean = false,
-    val secret: String = "", val senderName: String = name, val enabled: Boolean = true
+    val secret: String = "", val senderName: String = name, val enabled: Boolean = true, val authKind: AuthKind = AuthKind.PASSWORD
 )
 
 data class Attachment(val path: String, val name: String, val mime: String, val size: Int)
@@ -32,14 +32,14 @@ data class MailItem(
     val unread: Boolean = false, val starred: Boolean = false, val localFolder: String = "inbox",
     val attachments: List<Attachment> = emptyList(), val outgoing: List<OutgoingFile> = emptyList(),
     val delivery: String = "", val previewOnly: Boolean = false, val contentCached: Boolean = true,
-    val forwarding: ForwardPlan? = null
+    val forwarding: ForwardPlan? = null, val internetMessageId: String="", val sourceDraftId: String?=null, val editRevision: Long=0, val pendingDelete: Boolean=false, val cacheBytes: Long=0, val cachedAt: Long=0
 )
 
 data class ComposeDraft(
     val id: String = UUID.randomUUID().toString(), val accountId: String,
     val to: String = "", val subject: String = "", val body: String = "",
     val attachments: List<OutgoingFile> = emptyList(), val previousDeliveryUncertain: Boolean = false,
-    val forwarding: ForwardPlan? = null
+    val forwarding: ForwardPlan? = null, val internetMessageId: String="",val sourceDraftId: String?=null,val timestamp: Long=0
 ) : java.io.Serializable
 
 enum class MailFolder(val label: String, val key: String) {
@@ -75,20 +75,23 @@ object MailRules {
         account.imapHost.isBlank() || account.smtpHost.isBlank() -> "Укажите адреса IMAP и SMTP."
         listOf(account.imapHost, account.smtpHost).any { it.contains('/') || it.contains(':') || it.any(Char::isWhitespace) } -> "Укажите имя сервера без https:// и номера порта."
         account.imapPort !in 1..65535 || account.smtpPort !in 1..65535 -> "Проверьте номера портов."
-        passwordRequired && password.isBlank() -> "Введите пароль почты или пароль приложения."
+        account.authKind==AuthKind.GOOGLE && AuthRules.validateGoogle(account)!=null -> AuthRules.validateGoogle(account)
+        passwordRequired && account.authKind==AuthKind.PASSWORD && password.isBlank() -> "Введите пароль почты или пароль приложения."
         else -> null
     }
     fun filter(messages: List<MailItem>, accountId: String?, folder: MailFolder, query: String): List<MailItem> {
         val terms = query.lowercase().trim().split(Regex("\\s+")).filter(String::isNotBlank)
-        return messages.filter { m ->
+        return FolderRules.display(messages).filter { m ->
             (accountId == null || m.accountId == accountId) &&
                 (when(folder) {
-                    MailFolder.STARRED -> m.starred && m.localFolder != "drafts"
-                    MailFolder.UNREAD -> m.unread && m.localFolder != "drafts"
+                    MailFolder.STARRED -> m.starred && !FolderRules.draft(m) && m.localFolder!="outbox"
+                    MailFolder.UNREAD -> FolderRules.unread(m)
+                    MailFolder.SENT -> FolderRules.sent(m)
+                    MailFolder.DRAFTS -> FolderRules.draft(m)
                     else -> m.localFolder == folder.key
                 }) &&
                 MailContent.matches(m,terms)
-        }.sortedByDescending { it.date }
+        }.sortedByDescending { it.date }.let{if(folder in setOf(MailFolder.SENT,MailFolder.DRAFTS,MailFolder.UNREAD,MailFolder.STARRED))FolderRules.deduplicate(it,folder==MailFolder.DRAFTS)else it}
     }
 }
 

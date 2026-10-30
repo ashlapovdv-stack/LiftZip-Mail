@@ -11,9 +11,9 @@ object TrashRules {
         return usable.firstOrNull{it.attributes.any{a->a.equals("\\Trash",true)}}?.name
             ?:usable.firstOrNull{it.name.lowercase() in setOf("trash","deleted messages","deleted items","корзина","удаленные","удалённые","удаленные сообщения","удалённые сообщения","[gmail]/trash","[gmail]/корзина","inbox.trash","inbox/trash") }?.name
     }
-    fun remote(m: MailItem)=SyncRules.remoteInbox(m) && m.uid>0 && m.validity>0
+    fun remote(m: MailItem)=FolderRules.remote(m)
     fun local(m: MailItem)=m.uid==0L && m.localFolder in setOf("drafts","sent") && m.delivery!="sending"
-    fun unreadAfter(count: Int,removed: List<MailItem>)=(count-removed.count{remote(it) && it.unread}).coerceAtLeast(0)
+    fun unreadAfter(count: Int,removed: List<MailItem>)=(count-removed.count{SyncRules.remoteInbox(it) && it.unread && !it.pendingDelete}).coerceAtLeast(0)
 }
 
 /** Commit only acknowledged batches. A later error never discards earlier successful work. */

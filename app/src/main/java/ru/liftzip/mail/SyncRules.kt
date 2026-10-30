@@ -27,9 +27,9 @@ object SyncRules {
     fun needsHistory(accountId: String,messages: List<MailItem>,history: InboxHistory?)=
         history?.hasOlder!=false || messages.any{it.accountId==accountId && it.localFolder=="inbox" && !it.contentCached}
     fun activeMessages(messages: List<MailItem>,accounts: List<MailAccount>,selected: String?): List<MailItem> {
-        if(selected!=null)return messages.filter{it.accountId==selected}
+        if(selected!=null)return FolderRules.display(messages).filter{it.accountId==selected}
         val ids=accounts.filter{it.enabled}.map{it.id}.toSet()
-        return messages.filter{it.accountId in ids}
+        return FolderRules.display(messages).filter{it.accountId in ids}
     }
     private fun latestContent(incoming: MailItem,current: MailItem?,protectFlags: Boolean): MailItem {
         var result=incoming

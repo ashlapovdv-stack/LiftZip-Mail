@@ -20,6 +20,8 @@ fun friendlyError(error: Throwable): String {
     val text=when {
         chain.any{it is HistoryReadTimeoutException}->"Письмо читается слишком долго. Остальная почта будет сохранена, затем это письмо будет запрошено повторно."
         chain.any{it is DeliveryUncertainException}->chain.first{it is DeliveryUncertainException}.message.orEmpty()
+        chain.any{it is ServerCopyUnconfirmedException}->chain.filterIsInstance<ServerCopyUnconfirmedException>().first().message.orEmpty()
+        chain.any{it is GoogleMailAuthException}->chain.filterIsInstance<GoogleMailAuthException>().first().message.orEmpty()
         chain.any{it is AuthenticationFailedException}->"Не удалось войти. Проверьте полный логин и пароль ящика или приложения."
         chain.any{it is SSLException}->"Не удалось проверить защищённое соединение. Проверьте дату на телефоне и повторите без VPN."
         chain.any{it is UnknownHostException}->"Не найден адрес сервера. Проверьте интернет, имя сервера и повторите без VPN."

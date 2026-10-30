@@ -15,6 +15,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.IntentSenderRequest
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.auth.api.identity.AuthorizationResult
 import androidx.compose.foundation.*
 import androidx.compose.animation.*
 import androidx.compose.ui.graphics.graphicsLayer
@@ -254,7 +257,7 @@ private val Paper=Color(0xFFF8F9F6)
                     savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,memory,onAccount={currentAccount=it},onEnable=vm::setAccountEnabled,onFolder={folder=it},onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
                     onNoticeAnchor={anchor("inbox",it)},onSettings={route="settings"},onDelivery={route="delivery"},onRefresh=vm::refresh,onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onDelete=vm::deleteMessages,onSearch=vm::search,onOpen={m->
                         selected=m.id
-                        if(m.localFolder=="drafts")vm.openDraft(m.id){full->if(route=="inbox" && selected==full.id)compose(ComposeDraft(full.id,full.accountId,full.recipients,full.subject,full.body,full.outgoing,previousDeliveryUncertain=full.delivery in listOf("sending","uncertain"),forwarding=full.forwarding))}
+                        if(FolderRules.draft(m))vm.openDraft(m.id){full->if(route=="inbox" && selected==m.id)compose(full)}
                         else route="reader"
                     })}
                 }
@@ -535,6 +538,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
 }
 
 @Composable private fun AddAccount(busy: Boolean,initial: MailAccount?=null,onBack: ()->Unit,onAdd: (MailAccount,String)->Unit) {
+    val context=LocalContext.current
+    val newId=rememberSaveable{java.util.UUID.randomUUID().toString()}
+    var authKind by rememberSaveable{mutableStateOf(initial?.authKind?:AuthKind.PASSWORD)}
+    var googleBusy by rememberSaveable{mutableStateOf(false)}
+    val formBusy=busy || googleBusy
     var provider by rememberSaveable { mutableStateOf(initial?.provider?:Provider.REG) }
     var name by rememberSaveable { mutableStateOf(initial?.name.orEmpty()) };var email by rememberSaveable { mutableStateOf(initial?.email.orEmpty()) };var user by rememberSaveable { mutableStateOf(initial?.username.orEmpty()) }
     var senderName by rememberSaveable { mutableStateOf(initial?.senderName?:"Дмитрий") }
@@ -543,37 +551,70 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var imapPort by rememberSaveable { mutableStateOf((initial?.imapPort?:993).toString()) };var smtpPort by rememberSaveable { mutableStateOf((initial?.smtpPort?:465).toString()) }
     var imapTls by rememberSaveable { mutableStateOf(initial?.imapStartTls?:false) };var smtpTls by rememberSaveable { mutableStateOf(initial?.smtpStartTls?:false) }
     var advanced by rememberSaveable { mutableStateOf(initial!=null) };var error by remember { mutableStateOf<String?>(null) }
-    Scaffold(topBar={TopAppBar(title={Text(if(initial==null)"Добавить ящик" else "Настройки ящика")},navigationIcon={IconButton(onClick=onBack,enabled=!busy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}})}) { padding->
+    fun account()=MailAccount(id=initial?.id?:newId,name=name.trim(),email=email.trim(),username=user.ifBlank{email}.trim(),provider=provider,imapHost=imap,imapPort=imapPort.toIntOrNull()?:0,imapStartTls=imapTls,smtpHost=smtp,smtpPort=smtpPort.toIntOrNull()?:0,smtpStartTls=smtpTls,senderName=senderName.trim().ifBlank{name},authKind=authKind)
+    fun googleReady(result: AuthorizationResult) {
+        googleBusy=false
+        if(result.accessToken.isNullOrBlank() || result.grantedScopes.none{it.scopeUri==GoogleMailAuth.SCOPE})error="Google не разрешил доступ к почте. Повторите подключение."
+        else onAdd(account(),GoogleMailAuth.MARKER)
+    }
+    val googleResult=rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()){result->
+        googleBusy=false
+        if(result.resultCode!=android.app.Activity.RESULT_OK || result.data==null)error="Подключение Google отменено."
+        else runCatching{Identity.getAuthorizationClient(context).getAuthorizationResultFromIntent(result.data!!)}
+            .onSuccess{googleReady(it)}.onFailure{error=GoogleMailAuth.problem(it)}
+    }
+    Scaffold(topBar={TopAppBar(title={Text(if(initial==null)"Добавить ящик" else "Настройки ящика")},navigationIcon={IconButton(onClick=onBack,enabled=!formBusy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}})}) { padding->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(22.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
             Text("Выберите почтовый сервис",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
-            FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {Provider.entries.forEach { p->FilterChip(selected=p==provider,onClick={provider=p;imap=p.imap;smtp=p.smtp;imapPort="993";smtpPort="465";imapTls=false;smtpTls=false;advanced=p==Provider.CUSTOM},label={Text(p.label)},enabled=!busy)} }
-            OutlinedTextField(name,{name=it},label={Text("Название ящика")},placeholder={Text("Например, Рабочая почта")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!busy)
-            OutlinedTextField(senderName,{senderName=it},label={Text("Имя отправителя")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!busy)
-            OutlinedTextField(email,{email=it.trim()},label={Text("Адрес почты")},singleLine=true,readOnly=initial!=null,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),modifier=Modifier.fillMaxWidth(),enabled=!busy)
+            FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {Provider.entries.forEach { p->FilterChip(selected=p==provider,onClick={provider=p;authKind=if(p==Provider.GMAIL)AuthKind.GOOGLE else AuthKind.PASSWORD;imap=p.imap;smtp=p.smtp;imapPort="993";smtpPort="465";imapTls=false;smtpTls=false;advanced=p==Provider.CUSTOM},label={Text(p.label)},enabled=!formBusy)} }
+            OutlinedTextField(name,{name=it},label={Text("Название ящика")},placeholder={Text("Например, Рабочая почта")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
+            OutlinedTextField(senderName,{senderName=it},label={Text("Имя отправителя")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
+            OutlinedTextField(email,{email=it.trim()},label={Text("Адрес почты")},singleLine=true,readOnly=initial!=null,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
             if(initial!=null)Text("Для другого адреса добавьте отдельный ящик.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            if(provider==Provider.GMAIL)FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected=authKind==AuthKind.GOOGLE,onClick={authKind=AuthKind.GOOGLE;imap="imap.gmail.com";smtp="smtp.gmail.com";user=email;imapPort="993";smtpPort="465";imapTls=false;smtpTls=false},label={Text("Через Google")},enabled=!formBusy)
+                FilterChip(selected=authKind==AuthKind.PASSWORD,onClick={authKind=AuthKind.PASSWORD},label={Text("Пароль приложения")},enabled=!formBusy)
+            }
             val appPassword=provider in listOf(Provider.MAIL,Provider.YANDEX,Provider.GMAIL)
+            if(authKind==AuthKind.PASSWORD) {
             OutlinedTextField(password,{password=it},label={Text(if(initial!=null)"Новый пароль (необязательно)" else if(appPassword)"Пароль приложения" else "Пароль почтового ящика")},singleLine=true,
                 visualTransformation=if(showPassword)VisualTransformation.None else PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),
-                trailingIcon={IconButton(onClick={showPassword=!showPassword}){Icon(if(showPassword)Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,if(showPassword)"Скрыть пароль" else "Показать пароль")}},modifier=Modifier.fillMaxWidth(),enabled=!busy)
+                trailingIcon={IconButton(onClick={showPassword=!showPassword}){Icon(if(showPassword)Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,if(showPassword)"Скрыть пароль" else "Показать пароль")}},modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
             if(initial!=null)Text("Оставьте поле пустым, чтобы сохранить действующий пароль.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            if(appPassword)InfoCard(when(provider){Provider.GMAIL->"В этой сборке Gmail подключается с паролем приложения Google при включённой двухэтапной проверке. Обычный пароль не подойдёт. Доступность паролей приложений зависит от настроек аккаунта. Вход через Google OAuth — следующий этап.";else->"Создайте отдельный пароль для почтового приложения в настройках безопасности ${provider.label}. Также разрешите доступ по IMAP."})
-            TextButton(onClick={advanced=!advanced},enabled=!busy){Text(if(advanced)"Скрыть настройки серверов" else "Настройки серверов")}
+            if(appPassword)InfoCard(when(provider){Provider.GMAIL->"Нужен отдельный пароль приложения Google. Обычный пароль аккаунта не подойдёт. Можно выбрать подключение через окно Google.";else->"Создайте отдельный пароль для почтового приложения в настройках безопасности ${provider.label}. Также разрешите доступ по IMAP."})
+            } else InfoCard("Google попросит разрешить доступ к почте. Приложение не получает пароль аккаунта. Если разрешение будет отозвано, повторите подключение здесь.")
+            TextButton(onClick={advanced=!advanced},enabled=!formBusy){Text(if(advanced)"Скрыть настройки серверов" else "Настройки серверов")}
             if(advanced) {
-                OutlinedTextField(user,{user=it},label={Text("Логин (по умолчанию — адрес почты)")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!busy)
-                OutlinedTextField(imap,{imap=it.trim()},label={Text("Сервер IMAP")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!busy)
-                OutlinedTextField(imapPort,{imapPort=it.filter(Char::isDigit)},label={Text("Порт IMAP")},singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number),modifier=Modifier.fillMaxWidth(),enabled=!busy)
-                Row(verticalAlignment=Alignment.CenterVertically){Text("IMAP: STARTTLS",Modifier.weight(1f));Switch(checked=imapTls,onCheckedChange={imapTls=it;imapPort=if(it)"143" else "993"},enabled=!busy)}
-                OutlinedTextField(smtp,{smtp=it.trim()},label={Text("Сервер SMTP")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!busy)
-                OutlinedTextField(smtpPort,{smtpPort=it.filter(Char::isDigit)},label={Text("Порт SMTP")},singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number),modifier=Modifier.fillMaxWidth(),enabled=!busy)
-                Row(verticalAlignment=Alignment.CenterVertically){Text("SMTP: STARTTLS",Modifier.weight(1f));Switch(checked=smtpTls,onCheckedChange={smtpTls=it;smtpPort=if(it)"587" else "465"},enabled=!busy)}
+                OutlinedTextField(user,{user=it},label={Text("Логин (по умолчанию — адрес почты)")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
+                OutlinedTextField(imap,{imap=it.trim()},label={Text("Сервер IMAP")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
+                OutlinedTextField(imapPort,{imapPort=it.filter(Char::isDigit)},label={Text("Порт IMAP")},singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number),modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
+                Row(verticalAlignment=Alignment.CenterVertically){Text("IMAP: STARTTLS",Modifier.weight(1f));Switch(checked=imapTls,onCheckedChange={imapTls=it;imapPort=if(it)"143" else "993"},enabled=!formBusy)}
+                OutlinedTextField(smtp,{smtp=it.trim()},label={Text("Сервер SMTP")},singleLine=true,modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
+                OutlinedTextField(smtpPort,{smtpPort=it.filter(Char::isDigit)},label={Text("Порт SMTP")},singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number),modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
+                Row(verticalAlignment=Alignment.CenterVertically){Text("SMTP: STARTTLS",Modifier.weight(1f));Switch(checked=smtpTls,onCheckedChange={smtpTls=it;smtpPort=if(it)"587" else "465"},enabled=!formBusy)}
                 Text("При выключенном STARTTLS используется TLS с начала соединения. Проверка сертификата обязательна.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
             if(initial!=null && (!initial.imapHost.equals(imap,true) || initial.username!=user.ifBlank{email}.trim() || initial.imapPort.toString()!=imapPort || initial.imapStartTls!=imapTls))InfoCard("При смене параметров IMAP или логина входящие будут загружены заново. Черновики и отправленные сохранятся.")
-            Button(onClick={val a=MailAccount(id=initial?.id?:java.util.UUID.randomUUID().toString(),name=name.trim(),email=email.trim(),username=user.ifBlank{email}.trim(),provider=provider,imapHost=imap,imapPort=imapPort.toIntOrNull()?:0,imapStartTls=imapTls,smtpHost=smtp,smtpPort=smtpPort.toIntOrNull()?:0,smtpStartTls=smtpTls,senderName=senderName.trim().ifBlank{name})
+            Button(onClick={
+                val a=account()
                 val pw=if(provider==Provider.GMAIL)password.replace(" ","") else password
-                error=MailRules.validateAccount(a,pw,passwordRequired=initial==null);if(error==null)onAdd(a,pw)},enabled=!busy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(busy)"Проверяем соединение…" else if(initial==null)"Проверить и подключить" else "Проверить и сохранить")}
+                error=MailRules.validateAccount(a,pw,passwordRequired=initial==null || initial.authKind!=authKind && authKind==AuthKind.PASSWORD)
+                if(error==null) {
+                    if(authKind==AuthKind.PASSWORD)onAdd(a,pw)
+                    else {
+                        googleBusy=true
+                        Identity.getAuthorizationClient(context).authorize(GoogleMailAuth.request(a.email)).addOnSuccessListener{result->
+                            if(result.hasResolution()) {
+                                val sender=result.pendingIntent?.intentSender
+                                if(sender==null){googleBusy=false;error="Не удалось открыть окно Google."}
+                                else googleResult.launch(IntentSenderRequest.Builder(sender).build())
+                            }else googleReady(result)
+                        }.addOnFailureListener{googleBusy=false;error=GoogleMailAuth.problem(it)}
+                    }
+                }
+            },enabled=!formBusy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(formBusy)"Подождите…" else if(authKind==AuthKind.GOOGLE)"Подключить через Google" else if(initial==null)"Проверить и подключить" else "Проверить и сохранить")}
             Text("Проверим входящую и исходящую почту без отправки писем.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(18.dp))
         }
