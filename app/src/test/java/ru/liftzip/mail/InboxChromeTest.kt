@@ -41,7 +41,7 @@ class InboxChromeTest {
             assertEquals(delta,after-before,0.001f)
         }
     }
-    @Test fun flingAndProgrammaticScrollDoNotFinishAPartialFade() {
+    @Test fun programmaticScrollDoesNotFinishAPartialFade() {
         val c=controller();c.scroll(-75f);val paused=c.fraction
         assertEquals(0f,c.scroll(-800f,userInput=false),0f)
         assertEquals(0f,c.scroll(300f,userInput=false),0f);assertEquals(paused,c.fraction,0f)
@@ -79,4 +79,15 @@ class InboxChromeTest {
         assertEquals(1f,controller(2f).fraction,0f);assertEquals(0f,controller(-1f).fraction,0f)
         assertEquals(1f,controller(Float.NaN).fraction,0f)
     }
+    @Test fun nativeFlingContinuesTheSamePixelMotionUntilTheListStops() {
+        val c=controller();c.scroll(-50f);c.beginFling(-800f)
+        assertEquals(-30f,c.scroll(-30f,userInput=false),0f);assertEquals(0.6f,c.fraction,0.00001f)
+        c.endFling();val stopped=c.fraction
+        assertEquals(0f,c.scroll(-30f,userInput=false),0f);assertEquals(stopped,c.fraction,0f)
+    }
+    @Test fun anOppositeFlingRestoresPanelsAtItsOwnSpeed() {
+        val c=controller(0.3f);c.beginFling(600f);c.scroll(20f,userInput=false)
+        assertEquals(0.4f,c.fraction,0.00001f)
+    }
+
 }

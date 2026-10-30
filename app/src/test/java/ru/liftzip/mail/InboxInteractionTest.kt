@@ -24,14 +24,14 @@ class InboxInteractionTest {
         assertEquals(218,InboxInteractionRules.viewport(800,218,152,2f).listY)
     }
     @Test fun reversingAnAccidentalPullRetractsTheHintAndReturnsToRest() {
-        assertEquals(0.9f,InboxInteractionRules.pullProgress(0.9f,false,false),0f)
-        assertEquals(0.4f,InboxInteractionRules.pullProgress(0.4f,false,false),0f)
-        assertEquals(0f,InboxInteractionRules.pullProgress(0f,false,false),0f)
+        assertEquals(0.9f,InboxInteractionRules.pullProgress(0.9f,false,false,true),0f)
+        assertEquals(0.4f,InboxInteractionRules.pullProgress(0.4f,false,false,true),0f)
+        assertEquals(0f,InboxInteractionRules.pullProgress(0f,false,false,true),0f)
     }
     @Test fun releasedRefreshHasNoPersistentOverlayEvenBeforeUiRefreshStateArrives() {
-        assertEquals(0f,InboxInteractionRules.pullProgress(1.2f,false,true),0f)
-        assertEquals(0f,InboxInteractionRules.pullProgress(1f,true,false),0f)
-        assertEquals(1f,InboxInteractionRules.pullProgress(1.2f,false,false),0f)
+        assertEquals(0f,InboxInteractionRules.pullProgress(1.2f,false,true,true),0f)
+        assertEquals(0f,InboxInteractionRules.pullProgress(1f,true,false,true),0f)
+        assertEquals(1f,InboxInteractionRules.pullProgress(1.2f,false,false,true),0f)
     }
     @Test fun snackbarBottomSitsAboveFabWithAGap() {
         val bottom=InboxInteractionRules.noticeBottom(1000,"inbox",NoticeAnchor("inbox",750f),24,12)
@@ -50,4 +50,9 @@ class InboxInteractionTest {
         assertEquals(36,InboxInteractionRules.noticeBottom(1000,"inbox",NoticeAnchor("inbox",-10f),24,12))
         assertEquals(36,InboxInteractionRules.noticeBottom(1000,"inbox",NoticeAnchor("inbox",1100f),24,12))
     }
+    @Test fun automaticRefreshNeverShowsThePullHintDuringItsReturnAnimation() {
+        assertEquals(0f,InboxInteractionRules.pullProgress(1f,true,false,false),0f)
+        for(step in 100 downTo 0)assertEquals(0f,InboxInteractionRules.pullProgress(step/100f,false,false,false),0f)
+    }
+
 }
