@@ -10,6 +10,7 @@ class MailContentTest {
         val preview=MailContent.preview(full)
         assertEquals(240,preview.body.length)
         assertEquals(full.id,preview.id)
+        assertEquals(full.body.toByteArray(Charsets.UTF_8).size.toLong(),preview.cacheBytes)
         assertTrue(preview.previewOnly)
         assertEquals(60000,full.body.length)
         assertFalse(full.previewOnly)
@@ -47,4 +48,13 @@ class MailContentTest {
         val header=mail("").copy(previewOnly=true,contentCached=false,unread=false)
         assertFalse(MailContent.forStorage(header,"").contentCached)
     }
+    @Test fun aReusedPreviewRetainsTheFullCachedSizeForStorageBudgets() {
+        val preview=MailContent.preview(mail("Большой текст ".repeat(1000)))
+        val changed=MailContent.preview(preview.copy(unread=true))
+        assertEquals(preview.cacheBytes,changed.cacheBytes)
+        assertTrue(changed.cacheBytes>changed.body.toByteArray(Charsets.UTF_8).size)
+        val evicted=mail("preview").copy(contentCached=false,cacheBytes=99_999)
+        assertEquals(99_999L,MailContent.preview(evicted).cacheBytes)
+    }
+
 }
