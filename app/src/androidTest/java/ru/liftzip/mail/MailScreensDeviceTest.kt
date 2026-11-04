@@ -6,6 +6,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.test.platform.app.InstrumentationRegistry
+import android.os.ParcelFileDescriptor
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
@@ -31,6 +33,10 @@ class MailScreensDeviceTest {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val file=File(c.filesDir,"ui-checks/$name.png");file.parentFile!!.mkdirs()
         file.outputStream().use{assertTrue(rule.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG,100,it))}
+        // Export while the target APK is still installed: Gradle can remove it after the suite.
+        val command="sh -c 'mkdir -p /data/local/tmp/liftzip-ui-checks && run-as ru.liftzip.mail cat files/ui-checks/$name.png > /data/local/tmp/liftzip-ui-checks/$name.png'"
+        ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)).use{it.readBytes()}
+
     }
     @Test fun mailboxMenusAndUnreadCountsRemainAccessible() {
         screen();rule.onNodeWithContentDescription("Непрочитанные").assertIsDisplayed()
