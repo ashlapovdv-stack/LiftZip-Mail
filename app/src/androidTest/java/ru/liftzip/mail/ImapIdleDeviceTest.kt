@@ -30,6 +30,7 @@ class ImapIdleDeviceTest {
                 assertTrue(withTimeout(15_000){connected.await()})
                 peer.arrival(2);withTimeout(10_000){events.await(1)}
                 peer.arrival(3);withTimeout(10_000){events.await(2)}
+                withTimeout(10_000){while(peer.idleCommands.get()<2)delay(10)}
                 assertTrue("Watcher should rearm IDLE",peer.idleCommands.get()>=2)
             }finally{job.cancelAndJoin()}
             peer.problem.get()?.let{throw AssertionError("Test server failed",it)}

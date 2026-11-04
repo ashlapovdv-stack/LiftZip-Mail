@@ -281,8 +281,9 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             val f=folder as? IMAPFolder?:return@mapNotNull null
             val attrs=f.attributes.toList()
             if(attrs.any{it.equals("\\NoSelect",true)})return@mapNotNull null
-            ServerFolder(a.id,f.fullName,f.name,FolderRules.role(f.fullName,attrs),
-                runCatching{f.messageCount.takeIf{it>=0}}.getOrNull(),runCatching{f.unreadMessageCount.takeIf{it>=0}}.getOrNull())
+            // LIST already gives names and roles. Avoid two STATUS round trips per folder;
+            // counts are refreshed with that folder's normal UID synchronization.
+            ServerFolder(a.id,f.fullName,f.name,FolderRules.role(f.fullName,attrs))
         }
     }
     data class ServerCopy(val folder: String,val uid: Long,val validity: Long)

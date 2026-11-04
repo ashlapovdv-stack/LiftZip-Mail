@@ -722,7 +722,7 @@ class MailRepository(private val context: Context) {
             coordinator.data {
                 if(coordinator.version(a.id)!=version || db.accounts().none{it.id==a.id && it.enabled})return@data
                 val existing=db.folders().filter{it.accountId==a.id}.associateBy{it.path}
-                db.replaceFolders(a.id,folders.map{f->existing[f.path]?.let{f.copy(validity=it.validity,hasOlder=it.hasOlder,checkedAt=it.checkedAt,syncAll=it.syncAll,syncing=false,error=it.error)}?:f})
+                db.replaceFolders(a.id,folders.map{f->existing[f.path]?.let{f.copy(total=it.total,unread=it.unread,validity=it.validity,hasOlder=it.hasOlder,checkedAt=it.checkedAt,syncAll=it.syncAll,syncing=false,error=it.error)}?:f})
                 val removed=existing.keys-folders.map{it.path}.toSet()
                 val obsolete=state.value.messages.filter{it.accountId==a.id && FolderRules.remote(it) && it.remoteFolder in removed}.map{it.id}.toSet()
                 if(obsolete.isNotEmpty())db.removeMessages(obsolete)
@@ -784,7 +784,7 @@ class MailRepository(private val context: Context) {
         coordinator.data {
             val chosen=folders.map{it.accountId to it.path}.toSet()
             val active=db.accounts().filter{it.enabled}.map{it.id}.toSet()
-            db.putFolders(db.folders().filter{it.role!=FolderRole.INBOX && it.accountId in active && (it.accountId to it.path) in chosen}.map{it.copy(syncAll=true,error="")})
+            db.putFolders(db.folders().filter{it.role!=FolderRole.INBOX && it.accountId in active && (it.accountId to it.path) in chosen}.map{it.copy(syncAll=it.hasOlder,error="")})
             refresh(messages=state.value.messages)
         };FolderWorker.enqueue(context)
     }
@@ -799,7 +799,7 @@ class MailRepository(private val context: Context) {
         coordinator.data {
             db.messages().firstOrNull{it.localFolder=="drafts" && it.sourceDraftId==m.id}?.let{return@data (db.message(it.id)?:it).draft()}
             val account=db.accounts().find{it.id==m.accountId}?:error("Ящик не найден.")
-            val draft=ComposeDraft(accountId=m.accountId,to=m.recipients,subject=m.subject,body=m.body,forwarding=ForwardRules.plan(m,account),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
+            val draft=ComposeDraft(accountId=m.accountId,to=HeaderText.editableRecipients(m.recipients),subject=m.subject,body=m.body,forwarding=ForwardRules.plan(m,account),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
             db.putMessage(draft.toMessage(account,"drafts"));refresh()
             if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
             draft
@@ -914,7 +914,7 @@ class MailRepository(private val context: Context) {
                                 val cleanup=actionFor(remote,ActionKind.REMOVE_DRAFT)
                                 if(!db.finishAction(first,enqueue=listOf(cleanup)))db.putAction(cleanup)
                             }
-                            db.putFolders(listOf(ServerFolder(account.id,copy.folder,copy.folder.substringAfterLast('/'),role,validity=copy.validity)))
+                            db.putFolders(listOf(db.folders().find{it.accountId==account.id && it.path==copy.folder}?.copy(validity=copy.validity)?:ServerFolder(account.id,copy.folder,copy.folder.substringAfterLast('/'),role,validity=copy.validity)))
                             coordinator.invalidate(account.id);refresh()
                         }
                     }

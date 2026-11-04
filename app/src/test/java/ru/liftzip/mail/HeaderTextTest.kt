@@ -31,4 +31,13 @@ class HeaderTextTest {
     @Test fun unknownCharacterSetDoesNotCrashOpeningCachedMail() {
         assertEquals("=?unknown-charset?Q?Name?=",HeaderText.decode("=?unknown-charset?Q?Name?="))
     }
+    @Test fun serverDraftEditorKeepsAllRecipientsWithQuotedCommasAndEncodedNames() {
+        val source="\"Иванов, Иван\" <ivan@example.com>, =?UTF-8?B?0JTQvNC40YLRgNC40Lk=?= <dmitry@example.com>"
+        assertEquals("ivan@example.com, dmitry@example.com",HeaderText.editableRecipients(source))
+    }
+    @Test fun anInvalidDraftRecipientIsNotSilentlyDropped() {
+        val source="good@example.com, broken <not-an-email>"
+        assertEquals(source,HeaderText.editableRecipients(source))
+    }
+
 }
