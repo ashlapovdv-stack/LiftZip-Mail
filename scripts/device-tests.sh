@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Keep native UI evidence even when an assertion fails.
+set -uo pipefail
+device_test_status=0
+bash ./gradlew --no-daemon :app:connectedDebugAndroidTest || device_test_status=$?
+mkdir -p ui-checks || exit 1
+for image in inbox drawer queue partial-panels hidden-panels mail-partial single-unread; do
+    remote_image="/data/local/tmp/liftzip-ui-checks/$image.png"
+    if adb shell test -f "$remote_image"; then
+        adb exec-out cat "$remote_image" > "ui-checks/$image.png" || device_test_status=1
+    elif [ "$device_test_status" -eq 0 ]; then
+        echo "Missing required UI image: $image" >&2
+        device_test_status=1
+    fi
+done
+exit "$device_test_status"
