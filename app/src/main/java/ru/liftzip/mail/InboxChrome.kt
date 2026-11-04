@@ -37,3 +37,24 @@ object InboxInteractionRules {
 }
 
 data class InboxViewportGeometry(val listHeight: Int,val listY: Int,val bottomY: Int,val listBottomPadding: Int)
+
+/** Space available with both panels fully visible, independent of the current fade. */
+data class InboxPanelMetrics(val viewportHeight: Int,val headerHeight: Int,val bottomHeight: Int,val edgeGap: Int=0) {
+    val contentHeight get()=(viewportHeight-headerHeight-bottomHeight-edgeGap).coerceAtLeast(0)
+}
+
+/** Lazy rows are measured incrementally. A lower bound is enough to identify a long list;
+ * short lists become definite only when every row has been observed. */
+class InboxContentMeasure(private val expectedKeys: Set<Any>) {
+    private val sizes=mutableMapOf<Any,Int>()
+    private var extent=0L
+    fun observe(totalItems: Int,available: Int,items: List<Pair<Any,Int>>): Boolean? {
+        if(totalItems!=expectedKeys.size || totalItems<=0 || available<=0 || items.isEmpty() || items.any{it.first !in expectedKeys})return null
+        for((key,size) in items) {
+            val height=size.coerceAtLeast(0)
+            extent+=height-(sizes.put(key,height)?:0)
+        }
+        if(extent>available)return true
+        return if(sizes.size==expectedKeys.size)false else null
+    }
+}

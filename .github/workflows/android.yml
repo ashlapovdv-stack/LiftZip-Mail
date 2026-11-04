@@ -60,7 +60,7 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: LiftZip-Mail-debug
-          run-id: 40983684816
+          run-id: 41849908909
           github-token: ${{ github.token }}
           path: upgrade-baseline
       - name: Free runner space for the Android userdata image
@@ -87,12 +87,16 @@ jobs:
             adb shell am force-stop ru.liftzip.mail
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb shell run-as ru.liftzip.mail ls files/upgrade-probe > upgrade-check.txt
-            adb shell dumpsys package ru.liftzip.mail | grep -F 'versionName=0.5.0' >> upgrade-check.txt
+            adb shell dumpsys package ru.liftzip.mail | grep -F 'versionName=0.5.1' >> upgrade-check.txt
             bash ./gradlew --no-daemon :app:connectedDebugAndroidTest
             mkdir -p ui-checks
             adb exec-out cat /data/local/tmp/liftzip-ui-checks/inbox.png > ui-checks/inbox.png
             adb exec-out cat /data/local/tmp/liftzip-ui-checks/drawer.png > ui-checks/drawer.png
             adb exec-out cat /data/local/tmp/liftzip-ui-checks/queue.png > ui-checks/queue.png
+            adb exec-out cat /data/local/tmp/liftzip-ui-checks/partial-panels.png > ui-checks/partial-panels.png
+            adb exec-out cat /data/local/tmp/liftzip-ui-checks/hidden-panels.png > ui-checks/hidden-panels.png
+            adb exec-out cat /data/local/tmp/liftzip-ui-checks/mail-partial.png > ui-checks/mail-partial.png
+            adb exec-out cat /data/local/tmp/liftzip-ui-checks/single-unread.png > ui-checks/single-unread.png
       - name: Save device test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -2,6 +2,11 @@
 package ru.liftzip.mail
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.runtime.State
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowDownward
@@ -22,6 +27,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,8 +61,8 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
 }
 
 /** Stable insets are read by LazyColumn in measurement, never by the screen's composition. */
-@Composable fun InboxViewport(fraction: ()->Float,onHeaderMeasured: (Float)->Unit,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable ()->Unit,
-    list: @Composable (bottomPadding: PaddingValues)->Unit) {
+@Composable fun InboxViewport(fraction: ()->Float,onHeaderMeasured: (Float)->Unit,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable (contentAlpha: ()->Float)->Unit,
+    list: @Composable (bottomPadding: PaddingValues)->Unit,onPanelsMeasured: (InboxPanelMetrics)->Unit={}) {
     val density=LocalDensity.current
     val headerHeight=remember{mutableIntStateOf(0)}
     val bottomHeight=remember{mutableIntStateOf(0)}
@@ -68,8 +74,8 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
     }}
     Layout(modifier=modifier.clipToBounds(),content={
         Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){header()}
-        Box{list(insets)}
-        Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){bottom()}
+        Box(Modifier.background(MaterialTheme.colorScheme.surface).clipToBounds()){list(insets)}
+        Box{bottom(fraction)}
     }){children,constraints->
         val width=constraints.maxWidth;val height=constraints.maxHeight
         val panelConstraints=constraints.copy(minWidth=width,minHeight=0)
@@ -77,6 +83,7 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
         val controls=children[2].measure(panelConstraints)
         headerHeight.intValue=top.height;bottomHeight.intValue=controls.height
         onHeaderMeasured(top.height.toFloat())
+        onPanelsMeasured(InboxPanelMetrics(height,top.height,controls.height,with(density){12.dp.roundToPx()}))
         val mail=children[1].measure(Constraints.fixed(width,height))
         layout(width,height) {
             val progress=fraction().coerceIn(0f,1f)
@@ -85,6 +92,29 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
             mail.placeRelative(0,geometry.listY,zIndex=1f)
             if(progress>0.001f)controls.placeRelative(0,geometry.bottomY,zIndex=2f)
         }
+    }
+}
+
+/** Each control keeps a solid neutral backplate while its contents fade. This prevents
+ * list glyphs mixing with navigation labels or the floating compose button. */
+@Composable fun InboxFadingControl(fraction: ()->Float,modifier: Modifier=Modifier,shape: Shape=RectangleShape,content: @Composable ()->Unit) {
+    Box(modifier.background(MaterialTheme.colorScheme.surface,shape)) {
+        Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){content()}
+    }
+}
+
+private data class InboxContentSample(val total: Int,val available: Int,val rows: List<Pair<Any,Int>>)
+
+/** Observes row sizes and fixed panel geometry, never scroll pixels or the fade fraction. */
+@Composable fun ObserveInboxScrollability(list: LazyListState,expectedKeys: Set<Any>,contentIdentity: Any,metrics: State<InboxPanelMetrics?>,onScrollable: (Boolean)->Unit) {
+    val width=LocalConfiguration.current.screenWidthDp
+    val measure=remember(contentIdentity,expectedKeys,width){InboxContentMeasure(expectedKeys)}
+    val changed by rememberUpdatedState(onScrollable)
+    LaunchedEffect(list,measure,metrics) {
+        snapshotFlow {
+            val layout=list.layoutInfo
+            InboxContentSample(layout.totalItemsCount,metrics.value?.contentHeight?:0,layout.visibleItemsInfo.map{it.key to it.size})
+        }.distinctUntilChanged().collect{sample->measure.observe(sample.total,sample.available,sample.rows)?.let{changed(it)}}
     }
 }
 

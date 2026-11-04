@@ -2,6 +2,7 @@
 package ru.liftzip.mail
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -10,8 +11,11 @@ import androidx.compose.material3.pulltorefresh.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
@@ -56,10 +60,10 @@ class InboxDeviceTest {
             MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={
                 SideEffect{headerCompositions.incrementAndGet()}
                 Surface{Text("Inbox",Modifier.fillMaxWidth().height(240.dp))}
-            },bottom={
+            },bottom={alpha->InboxFadingControl(alpha){
                 SideEffect{bottomCompositions.incrementAndGet()}
                 Surface{Text("Navigation",Modifier.fillMaxWidth().height(64.dp))}
-            },list={padding->
+            }},list={padding->
                 SideEffect{listCompositions.incrementAndGet()}
                 PullToRefreshBox(isRefreshing=false,onRefresh={},indicator={}) {
                     LazyColumn(Modifier.fillMaxSize().testTag("letters").nestedScroll(connection),state=listState,contentPadding=padding) {
@@ -85,7 +89,7 @@ class InboxDeviceTest {
         val progress=mutableFloatStateOf(0.5f);val controller=InboxChromeController(0.5f)
         rule.setContent {
             val fraction=remember{ {progress.floatValue} }
-            MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={Text("Header",Modifier.height(200.dp))},bottom={Text("Bottom",Modifier.height(64.dp))},list={padding->
+            MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={Text("Header",Modifier.height(200.dp))},bottom={alpha->InboxFadingControl(alpha){Text("Bottom",Modifier.height(64.dp))}},list={padding->
                 LazyColumn(Modifier.fillMaxSize().testTag("letters"),contentPadding=padding){items(30){Text("Letter $it",Modifier.height(64.dp))}}
             })}
         }
@@ -94,5 +98,59 @@ class InboxDeviceTest {
         rule.onNodeWithText("Header").assertIsNotDisplayed()
         rule.onNodeWithText("Bottom").assertIsNotDisplayed()
         rule.onNodeWithTag("letters").assertIsDisplayed()
+    }
+
+    @Test fun partialPanelsNeverMixTheirTextWithTheLettersBehindThem() {
+        val progress=mutableFloatStateOf(0.5f)
+        var density=1f
+        rule.setContent {
+            density=LocalDensity.current.density
+            val fraction=remember{ {progress.floatValue} }
+            MaterialTheme(colorScheme=lightColorScheme(surface=Color.White)) {
+                InboxViewport(fraction,{},Modifier.fillMaxSize().background(Color.White),header={
+                    Box(Modifier.fillMaxWidth().height(160.dp).background(Color.Blue))
+                },bottom={alpha->InboxFadingControl(alpha){Box(Modifier.fillMaxWidth().height(80.dp).background(Color.Green))}},list={padding->
+                    LazyColumn(Modifier.fillMaxSize(),contentPadding=padding) {
+                        item(key="gap"){Box(Modifier.fillMaxWidth().height(100.dp))}
+                        item(key="mail"){Box(Modifier.fillMaxWidth().height(2000.dp).background(Color.Red))}
+                    }
+                })
+            }
+        }
+        rule.waitForIdle()
+        val pixels=rule.onRoot().captureToImage().toPixelMap()
+        val gap=pixels[pixels.width/2,(90*density).toInt()]
+        assertEquals(1f,gap.red,0.04f);assertEquals(1f,gap.green,0.04f);assertEquals(1f,gap.blue,0.04f)
+        val bottom=pixels[pixels.width/2,pixels.height-(40*density).toInt()]
+        assertEquals(0.5f,bottom.red,0.04f);assertEquals(1f,bottom.green,0.04f);assertEquals(0.5f,bottom.blue,0.04f)
+        saveDeviceScreenshot(rule,"partial-panels")
+        rule.runOnIdle{progress.floatValue=0f};rule.waitForIdle()
+        val hidden=rule.onRoot().captureToImage().toPixelMap()
+        val uncovered=hidden[hidden.width/2,hidden.height-(40*density).toInt()]
+        assertEquals(1f,uncovered.red,0.04f);assertEquals(0f,uncovered.green,0.04f);assertEquals(0f,uncovered.blue,0.04f)
+        saveDeviceScreenshot(rule,"hidden-panels")
+    }
+
+    @Test fun filteringALongListToOneMessageRestoresPanelsAndKeepsThemVisibleOnDrag() {
+        val progress=mutableFloatStateOf(0.4f);val controller=InboxChromeController(0.4f)
+        val list=LazyListState();val count=mutableIntStateOf(200)
+        val metrics=mutableStateOf<InboxPanelMetrics?>(null);val scrollable=mutableStateOf<Boolean?>(null)
+        rule.setContent {
+            val fraction=remember{ {progress.floatValue} }
+            val keys=remember(count.intValue){(1..count.intValue).toSet<Any>()}
+            ObserveInboxScrollability(list,keys,count.intValue,metrics){long->scrollable.value=long;if(!long){controller.show();progress.floatValue=1f}}
+            val connection=remember{InboxScrollConnection(controller,progress,{scrollable.value==false},{!list.canScrollBackward},{false},{},{})}
+            MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={Text("Header",Modifier.fillMaxWidth().height(160.dp))},
+                bottom={alpha->InboxFadingControl(alpha){Text("Navigation",Modifier.fillMaxWidth().height(80.dp))}},onPanelsMeasured={metrics.value=it},list={padding->
+                    LazyColumn(Modifier.fillMaxSize().testTag("filtered-letters").nestedScroll(connection),state=list,contentPadding=padding) {
+                        items(count.intValue,key={it+1}){Text("Letter ${it+1}",Modifier.fillMaxWidth().height(100.dp))}
+                    }
+                })}
+        }
+        rule.waitForIdle();rule.runOnIdle{assertEquals(true,scrollable.value);assertEquals(0.4f,progress.floatValue,0f);count.intValue=1}
+        rule.waitForIdle();rule.runOnIdle{assertEquals(false,scrollable.value);assertEquals(1f,progress.floatValue,0f)}
+        rule.onNodeWithTag("filtered-letters").performTouchInput{swipeUp()}
+        rule.waitForIdle();rule.runOnIdle{assertEquals(1f,progress.floatValue,0f)}
+        rule.onNodeWithText("Header").assertIsDisplayed();rule.onNodeWithText("Navigation").assertIsDisplayed()
     }
 }

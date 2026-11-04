@@ -326,7 +326,15 @@ private val Paper=Color(0xFFF8F9F6)
     val selected=checked.toSet().intersect(visibleIds.toSet())
     val selectionMode=selected.isNotEmpty()
     val chromeFraction=remember(controlsProgress){ {controlsProgress.floatValue} }
-    val forceControls by rememberUpdatedState(selectionMode || !s.autoHidePanels)
+    val panelMetrics=remember(memory){mutableStateOf<InboxPanelMetrics?>(null)}
+    var scrollableContent by remember(memory){mutableStateOf<Boolean?>(null)}
+    val historyFooter=folder==MailFolder.INBOX && serverPath==null
+    val itemKeys=remember(visibleIds,historyFooter){buildSet<Any>{if(visibleIds.isEmpty())add("empty")else addAll(visibleIds);if(historyFooter)add("history-footer")}}
+    ObserveInboxScrollability(memory.list,itemKeys,visibleIds to LocalDensity.current.fontScale,panelMetrics){scrollable->
+        scrollableContent=scrollable
+        if(!scrollable){chrome.show();controlsProgress.floatValue=1f}
+    }
+    val forceControls by rememberUpdatedState(selectionMode || !s.autoHidePanels || scrollableContent==false)
     LaunchedEffect(selectionMode){if(!selectionMode)selectionMenu=false}
     LaunchedEffect(selectionMode){snapshotFlow{if(controlsProgress.floatValue>0.02f)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
     val scrollControls=remember(memory,chrome,focus,keyboard){InboxScrollConnection(chrome,controlsProgress,
@@ -395,7 +403,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close()};onAdd()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close()};onSettings()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.0",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.1",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -410,7 +418,7 @@ private val Paper=Color(0xFFF8F9F6)
         if(exitRequested)AlertDialog(onDismissRequest=onExit,properties=DialogProperties(dismissOnClickOutside=false),
             title={Text("Выйти из Почты?")},text={Text("Нажмите «Выйти» или кнопку Android «Назад» ещё раз. Фоновая проверка почты продолжится по настройкам.")},
             confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
-        InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,modifier=Modifier.fillMaxSize().safeDrawingPadding(),header={
+        InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},modifier=Modifier.fillMaxSize().safeDrawingPadding(),header={
             Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
                 if(selectionMode)TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Text("Выбрано: ${selected.size}",maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
                     IconButton(onClick={deleting=selected.toSet()},enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить выбранные письма")}
@@ -439,14 +447,18 @@ private val Paper=Color(0xFFF8F9F6)
                         style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-        },bottom={
+        },bottom={alpha->
             Column(Modifier.fillMaxWidth()) {
                 if(!selectionMode)Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp),contentAlignment=Alignment.CenterEnd) {
-                    ExtendedFloatingActionButton(onClick=onCompose,modifier=Modifier.onGloballyPositioned{fabTop=it.boundsInRoot().top},
-                        icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})
+                    InboxFadingControl(alpha,shape=RoundedCornerShape(16.dp)) {
+                        ExtendedFloatingActionButton(onClick=onCompose,shape=RoundedCornerShape(16.dp),modifier=Modifier.onGloballyPositioned{fabTop=it.boundsInRoot().top},
+                            icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})
+                    }
                 }
-                NavigationBar(windowInsets=WindowInsets(0,0,0,0),modifier=Modifier.onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
-                    MailFolder.entries.forEach{f->NavigationBarItem(selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
+                InboxFadingControl(alpha) {
+                    NavigationBar(windowInsets=WindowInsets(0,0,0,0),modifier=Modifier.onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
+                        MailFolder.entries.forEach{f->NavigationBarItem(selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
+                    }
                 }
             }
         },list={bottomPadding->
@@ -460,17 +472,9 @@ private val Paper=Color(0xFFF8F9F6)
                                 Text(if(query.isNotBlank())"Попробуйте другое слово" else "Потяните список вниз для проверки почты",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }}
-                        if(query.isBlank())items(viewedFolders,key={"folder-status:"+it.accountId+":"+it.path}){f->
-                            Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=8.dp)) {
-                                val count=s.messages.count{it.accountId==f.accountId && it.remoteFolder==f.path && FolderRules.remote(it) && !it.pendingDelete}
-                                Text((if(accountId==null)(s.accounts.find{it.id==f.accountId}?.name.orEmpty()+" · ")else "")+"Загружено $count"+(f.total?.let{" из $it"}?:""),style=MaterialTheme.typography.labelMedium)
-                                if(f.error.isNotBlank())Text(f.error,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
-                                if(f.syncAll)Text("История загружается",style=MaterialTheme.typography.labelSmall)
-                            }
-                        }
                         items(visible,key={it.id}){m->MailRow(m,s.accounts.find{it.id==m.accountId},onOpen={if(selectionMode)toggle(m.id)else onOpen(m)},
                             onSelect={toggle(m.id)},selectionMode=selectionMode,checked=m.id in selected,onStar={onStar(m)},busy=s.busy)}
-                        if(folder==MailFolder.INBOX && serverPath==null)item(key="history-footer") {
+                        if(historyFooter)item(key="history-footer") {
                             Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=20.dp),horizontalAlignment=Alignment.CenterHorizontally) {
                                 Text(if(total==null)"Загружено $loaded писем" else "Загружено $loaded из $total",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                                 if(!hasOlder)Text("Все входящие загружены",Modifier.padding(top=8.dp),style=MaterialTheme.typography.labelSmall)
