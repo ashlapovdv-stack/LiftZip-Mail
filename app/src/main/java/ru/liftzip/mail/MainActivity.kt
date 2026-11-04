@@ -217,7 +217,7 @@ private val Paper=Color(0xFFF8F9F6)
                 route=="history" -> HistoryScreen(s,onBack={route=historyReturn},onStart=vm::startHistory,onPause=vm::pauseHistory,onResume=vm::resumeHistory,onFolders={route="folder-history"})
                 route=="folder-history" -> FolderHistoryScreen(s,onBack={route="history"},onDiscover=vm::discoverFolders,onStart=vm::startFolderHistories,onPause=vm::pauseFolderHistory)
                 route=="settings" -> SettingsScreen(s,onBack={goInbox()},onAdd={route="add"},onEdit={editing=it;route="edit"},onSection={route=it},
-                    onHistory={historyReturn="settings";route="history"},onRemove={id->if(currentAccount==id)currentAccount=null;vm.removeAccount(id)})
+                    onHistory={historyReturn="settings";route="history"},onRemove={id->if(currentAccount==id){currentAccount=null;serverPath=null};vm.removeAccount(id)})
                 route=="delivery" -> DeliverySettingsScreen(s,onBack={route="settings"},onPoll=vm::setPoll,onFastMail=vm::setFastMail,onPermission={
                     if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                     else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))

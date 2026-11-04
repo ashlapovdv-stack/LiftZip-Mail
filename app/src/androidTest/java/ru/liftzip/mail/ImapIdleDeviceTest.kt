@@ -20,7 +20,7 @@ import org.junit.runner.RunWith
 /** Local TLS peer exercises the actual Android provider, Angus parser, IDLE manager, and callbacks. */
 @RunWith(AndroidJUnit4::class)
 class ImapIdleDeviceTest {
-    @Test fun tlsIdleDeliversTwoIndependentArrivalsAndRearms()=runBlocking {
+    @Test fun tlsIdleDeliversTwoIndependentArrivalsAndRearms(): Unit=runBlocking {
         LocalImapPeer().use{peer->
             val connected=CompletableDeferred<Boolean>();val events=ChannelCounter()
             val c=ApplicationProvider.getApplicationContext<Context>()
@@ -36,7 +36,7 @@ class ImapIdleDeviceTest {
             peer.problem.get()?.let{throw AssertionError("Test server failed",it)}
         }
     }
-    @Test fun aServerWithoutIdleUsesThePeriodicFallback()=runBlocking {
+    @Test fun aServerWithoutIdleUsesThePeriodicFallback(): Unit=runBlocking {
         LocalImapPeer(idle=false).use{peer->
             val connected=CompletableDeferred<Boolean>()
             val c=ApplicationProvider.getApplicationContext<Context>()
