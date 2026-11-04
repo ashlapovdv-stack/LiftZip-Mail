@@ -8,10 +8,8 @@ import jakarta.activation.DataSource
 import jakarta.mail.*
 import jakarta.mail.internet.*
 import jakarta.mail.event.*
-import org.eclipse.angus.mail.imap.IdleManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
 import jakarta.mail.search.FlagTerm
 import jakarta.mail.search.MessageIDTerm
@@ -37,16 +35,15 @@ class ServerCopyUnconfirmedException: java.io.IOException("Сервер пока
 class MailConnectionException(val stage: String, val host: String, val port: Int, cause: Exception) : Exception(cause)
 
 class MailGateway(private val context: Context,private val sslSocketFactory: javax.net.ssl.SSLSocketFactory?=null) {
-    private fun session(a: MailAccount,fast: Boolean=false,watch: Boolean=false): Session {
+    private fun session(a: MailAccount,fast: Boolean=false,watchFactory: javax.net.ssl.SSLSocketFactory?=null): Session {
         if(a.authKind==AuthKind.GOOGLE)AuthRules.validateGoogle(a)?.let{error(it)}
         val imap=if(a.imapStartTls)"imap" else "imaps"
         val p=Properties().apply {
             setProperty("mail.$imap.connectiontimeout",if(fast)"8000" else "15000")
             setProperty("mail.$imap.timeout",if(fast)"10000" else "20000")
             setProperty("mail.$imap.ssl.checkserveridentity","true")
-            sslSocketFactory?.let{put("mail.$imap.ssl.socketFactory",it)}
+            (watchFactory?:sslSocketFactory)?.let{put("mail.$imap.ssl.socketFactory",it)}
             setProperty("mail.$imap.peek","true")
-            if(watch)setProperty("mail.$imap.usesocketchannels","true")
             setProperty("mail.$imap.partialfetch","true")
             setProperty("mail.$imap.fetchsize","65536")
             if(a.imapStartTls){setProperty("mail.imap.starttls.enable","true");setProperty("mail.imap.starttls.required","true")}
@@ -69,34 +66,37 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
     }
     private fun store(a: MailAccount,password: String,fast: Boolean=false): Store = session(a,fast).getStore(if(a.imapStartTls)"imap" else "imaps").apply { GoogleMailAuth.withCredential(context,a,password){connect(a.imapHost,a.imapPort,a.username,it)} }
     suspend fun watchInbox(a: MailAccount,password: String,onConnected: (Boolean)->Unit,onChanged: ()->Unit)=withContext(Dispatchers.IO) {
-        val session=session(a,fast=true,watch=true)
-        val connection=runInterruptible{session.getStore(if(a.imapStartTls)"imap" else "imaps").apply{GoogleMailAuth.withCredential(context,a,password){connect(a.imapHost,a.imapPort,a.username,it)}}} as IMAPStore
+        val reader=IdleConnection(sslSocketFactory?:javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
+        val session=session(a,fast=true,watchFactory=reader.factory)
+        val connection=session.getStore(if(a.imapStartTls)"imap" else "imaps") as IMAPStore
         var folder: IMAPFolder?=null
-        var idle: IdleManager?=null
-        val executor=Executors.newSingleThreadExecutor()
         val problem=AtomicReference<Exception?>(null)
         try {
+            reader.call{GoogleMailAuth.withCredential(context,a,password){connection.connect(a.imapHost,a.imapPort,a.username,it)}}
             val f=connection.getFolder("INBOX") as IMAPFolder;folder=f
             val listener=object: ConnectionAdapter(){override fun closed(e: ConnectionEvent){problem.set(java.io.IOException("Соединение закрыто."))};override fun disconnected(e: ConnectionEvent){problem.set(java.io.IOException("Соединение прервано."))}}
             f.addConnectionListener(listener);connection.addConnectionListener(listener)
-            runInterruptible{f.open(Folder.READ_ONLY)}
+            reader.call{f.open(Folder.READ_ONLY)}
             if(!connection.hasCapability("IDLE")) {
                 onConnected(false)
-                while(currentCoroutineContext().isActive){delay(60_000);runInterruptible{f.messageCount};onChanged()}
+                while(currentCoroutineContext().isActive){delay(60_000);reader.call{f.messageCount};onChanged()}
             }else {
-                val manager=IdleManager(session,executor);idle=manager
-                fun changed(){onChanged();try{manager.watch(f)}catch(e: Exception){problem.set(e)}}
-                f.addMessageCountListener(object: MessageCountAdapter(){override fun messagesAdded(e: MessageCountEvent){changed()};override fun messagesRemoved(e: MessageCountEvent){changed()}})
-                f.addMessageChangedListener{changed()}
-                runInterruptible{manager.watch(f)};onConnected(true)
+                f.addMessageCountListener(object: MessageCountAdapter(){override fun messagesAdded(e: MessageCountEvent){onChanged()};override fun messagesRemoved(e: MessageCountEvent){onChanged()}})
+                f.addMessageChangedListener{onChanged()}
+                // Opening/authentication keep the short timeout. Only a ready IDLE socket waits long.
+                reader.timeout(20*60_000);onConnected(true)
                 val start=android.os.SystemClock.elapsedRealtime()
                 while(currentCoroutineContext().isActive && android.os.SystemClock.elapsedRealtime()-start<20*60_000) {
-                    delay(1_000);problem.get()?.let{throw it}
-                    check(manager.isRunning){"Соединение ожидания закрыто. Переподключаемся."}
+                    problem.get()?.let{throw it}
+                    try{reader.call{f.idle(true)}}catch(e: Exception){
+                        if(e is kotlinx.coroutines.CancellationException)throw e
+                        if(android.os.SystemClock.elapsedRealtime()-start<20*60_000-5_000)throw e
+                        break // Renew a quiet session after the bounded IDLE read expires.
+                    }
                 }
             }
         }finally {
-            idle?.stop();executor.shutdownNow()
+            reader.close()
             withContext(NonCancellable+Dispatchers.IO){runCatching{folder?.forceClose()};runCatching{connection.close()}}
         }
     }

@@ -17,7 +17,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Local TLS peer exercises the actual Android provider, Angus parser, IDLE manager, and callbacks. */
+/** Local TLS peer exercises the actual Android provider, Angus parser, IDLE loop, and callbacks. */
 @RunWith(AndroidJUnit4::class)
 class ImapIdleDeviceTest {
     @Test fun tlsIdleDeliversTwoIndependentArrivalsAndRearms(): Unit=runBlocking {
@@ -28,11 +28,13 @@ class ImapIdleDeviceTest {
             val job=async(Dispatchers.IO){MailGateway(c,peer.clientFactory).watchInbox(account,"dummy",{connected.complete(it)},{events.next()})}
             try {
                 assertTrue(withTimeout(15_000){connected.await()})
+                withTimeout(10_000){while(peer.idleCommands.get()<1)delay(10)}
                 peer.arrival(2);withTimeout(10_000){events.await(1)}
+                withTimeout(10_000){while(peer.idleCommands.get()<2)delay(10)}
                 peer.arrival(3);withTimeout(10_000){events.await(2)}
                 withTimeout(10_000){while(peer.idleCommands.get()<2)delay(10)}
                 assertTrue("Watcher should rearm IDLE",peer.idleCommands.get()>=2)
-            }finally{job.cancelAndJoin()}
+            }finally{withTimeout(3_000){job.cancelAndJoin()}}
             peer.problem.get()?.let{throw AssertionError("Test server failed",it)}
         }
     }
@@ -42,7 +44,7 @@ class ImapIdleDeviceTest {
             val c=ApplicationProvider.getApplicationContext<Context>()
             val a=MailAccount(id="test",name="Test",email="test@example.com",provider=Provider.CUSTOM,imapHost="localhost",imapPort=peer.port,smtpHost="localhost")
             val job=async(Dispatchers.IO){MailGateway(c,peer.clientFactory).watchInbox(a,"dummy",{connected.complete(it)},{})}
-            try{assertFalse(withTimeout(15_000){connected.await()})}finally{job.cancelAndJoin()}
+            try{assertFalse(withTimeout(15_000){connected.await()})}finally{withTimeout(3_000){job.cancelAndJoin()}}
         }
     }
     private class ChannelCounter {
