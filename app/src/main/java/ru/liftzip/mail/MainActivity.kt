@@ -537,7 +537,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 Text(displayDate(m.date),style=MaterialTheme.typography.labelSmall)
             }
             Text("Кому: ${m.recipients}",Modifier.padding(top=12.dp,bottom=18.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            if(FolderRules.sent(m))InfoCard("Письмо принято SMTP-сервером отправителя. Эта копия хранится на устройстве.")
+            if(m.localFolder=="sent")InfoCard("Письмо принято SMTP-сервером. Копия ожидает сохранения в серверной папке «Отправленные».")
             HorizontalDivider(Modifier.padding(vertical=10.dp))
             if(m.previewOnly)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             else SelectionContainer { Text(conversation.current.ifBlank{"В письме нет доступного текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=27.sp,modifier=Modifier.fillMaxWidth().padding(vertical=14.dp)) }
@@ -557,7 +557,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 Row(Modifier.padding(15.dp),verticalAlignment=Alignment.CenterVertically){Icon(Icons.Outlined.AttachFile,null);Text(file.name,Modifier.weight(1f).padding(start=12.dp),maxLines=2,overflow=TextOverflow.Ellipsis);Icon(Icons.AutoMirrored.Outlined.OpenInNew,"Открыть вложение")}
             } }
             Row(Modifier.fillMaxWidth().padding(vertical=30.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                if(m.localFolder!="sent")Button(onClick=onReply,enabled=!busy,modifier=Modifier.weight(1f)){Icon(Icons.AutoMirrored.Outlined.Reply,null);Spacer(Modifier.width(8.dp));Text("Ответить")}
+                if(!FolderRules.sent(m))Button(onClick=onReply,enabled=!busy,modifier=Modifier.weight(1f)){Icon(Icons.AutoMirrored.Outlined.Reply,null);Spacer(Modifier.width(8.dp));Text("Ответить")}
                 OutlinedButton(onClick=onForward,enabled=!busy,modifier=Modifier.weight(1f)){Text("Переслать")}
             }
             Spacer(Modifier.height(32.dp))

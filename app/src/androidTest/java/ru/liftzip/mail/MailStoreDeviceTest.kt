@@ -21,7 +21,7 @@ class MailStoreDeviceTest {
         return object: ContextWrapper(base) {
             override fun getDatabasePath(name: String)=File(root,name)
             override fun openOrCreateDatabase(name: String,mode: Int,factory: SQLiteDatabase.CursorFactory?)=SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name),factory)
-            override fun openOrCreateDatabase(name: String,mode: Int,factory: SQLiteDatabase.CursorFactory?,errorHandler: DatabaseErrorHandler?)=SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name),factory,errorHandler)
+            override fun openOrCreateDatabase(name: String,mode: Int,factory: SQLiteDatabase.CursorFactory?,errorHandler: DatabaseErrorHandler?)=SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name).path,factory,errorHandler)
             override fun deleteDatabase(name: String)=SQLiteDatabase.deleteDatabase(getDatabasePath(name))
         }
     }
@@ -60,4 +60,24 @@ class MailStoreDeviceTest {
             assertNotNull(db.action(a.id));assertEquals("a",db.message("m")?.accountId)
         }finally{db.close();c.deleteDatabase("mail-v1.db")}
     }
+    @Test fun openingARealVersionOneDatabaseMigratesAndKeepsTheCompleteBody() {
+        val c=context();val helper=LocalStore(c)
+        val legacy=c.openOrCreateDatabase("mail-v1.db",0,null)
+        try {
+            legacy.execSQL("CREATE TABLE accounts(id TEXT PRIMARY KEY,data TEXT NOT NULL)")
+            legacy.execSQL("CREATE TABLE messages(id TEXT PRIMARY KEY,account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,folder TEXT NOT NULL,data TEXT NOT NULL)")
+            val a=org.json.JSONObject().put("id","a").put("name","Test").put("email","a@example.com").put("username","a@example.com").put("provider","CUSTOM").put("imapHost","imap.example.com").put("imapPort",993).put("imapStartTls",false).put("smtpHost","smtp.example.com").put("smtpPort",465).put("smtpStartTls",false).put("secret","encrypted-old-secret")
+            legacy.execSQL("INSERT INTO accounts VALUES(?,?)",arrayOf("a",a.toString()))
+            val m=message().copy(body="Complete old body. "+"long text ".repeat(100))
+            legacy.execSQL("INSERT INTO messages VALUES(?,?,?,?)",arrayOf(m.id,m.accountId,m.localFolder,helper.encodeMessage(m).toString()))
+            legacy.version=1;legacy.close()
+            assertEquals(2,helper.readableDatabase.version)
+            assertEquals("encrypted-old-secret",helper.accounts().single().secret)
+            assertEquals(m.body,helper.message(m.id)?.body)
+            assertTrue(helper.messages().single().body.length<=MailContent.PREVIEW_LENGTH)
+            assertEquals(m.body,helper.message(m.id)?.body)
+            assertTrue(helper.actions().isEmpty());assertTrue(helper.folders().isEmpty())
+        }finally{if(legacy.isOpen)legacy.close();helper.close();c.deleteDatabase("mail-v1.db")}
+    }
+
 }

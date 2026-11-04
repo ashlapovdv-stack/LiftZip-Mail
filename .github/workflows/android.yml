@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -55,6 +56,13 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
+      - name: Download the previously delivered signed APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: LiftZip-Mail-debug
+          run-id: 40983684816
+          github-token: ${{ github.token }}
+          path: upgrade-baseline
       - name: Enable emulator acceleration
         run: sudo chmod 666 /dev/kvm
       - name: Test actual Compose gestures on Android 15
@@ -66,13 +74,24 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash ./gradlew --no-daemon :app:connectedDebugAndroidTest
+          script: |
+            bash ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+            adb install -r upgrade-baseline/app-debug.apk
+            adb shell am start -W -n ru.liftzip.mail/.MainActivity
+            adb shell run-as ru.liftzip.mail mkdir -p files
+            adb shell run-as ru.liftzip.mail touch files/upgrade-probe
+            adb shell am force-stop ru.liftzip.mail
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell run-as ru.liftzip.mail ls files/upgrade-probe > upgrade-check.txt
+            adb shell dumpsys package ru.liftzip.mail | rg 'versionName=0\.5\.0' >> upgrade-check.txt
+            bash ./gradlew --no-daemon :app:connectedDebugAndroidTest
       - name: Save device test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: device-test-reports
           path: |
+            upgrade-check.txt
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
           retention-days: 14

@@ -36,7 +36,7 @@ class DeliveryUncertainException : Exception("Сервер не подтверд
 class ServerCopyUnconfirmedException: java.io.IOException("Сервер пока не подтвердил сохранение копии. Проверка будет повторена без повторной отправки письма.")
 class MailConnectionException(val stage: String, val host: String, val port: Int, cause: Exception) : Exception(cause)
 
-class MailGateway(private val context: Context) {
+class MailGateway(private val context: Context,private val sslSocketFactory: javax.net.ssl.SSLSocketFactory?=null) {
     private fun session(a: MailAccount,fast: Boolean=false,watch: Boolean=false): Session {
         if(a.authKind==AuthKind.GOOGLE)AuthRules.validateGoogle(a)?.let{error(it)}
         val imap=if(a.imapStartTls)"imap" else "imaps"
@@ -44,6 +44,7 @@ class MailGateway(private val context: Context) {
             setProperty("mail.$imap.connectiontimeout",if(fast)"8000" else "15000")
             setProperty("mail.$imap.timeout",if(fast)"10000" else "20000")
             setProperty("mail.$imap.ssl.checkserveridentity","true")
+            sslSocketFactory?.let{put("mail.$imap.ssl.socketFactory",it)}
             setProperty("mail.$imap.peek","true")
             if(watch)setProperty("mail.$imap.usesocketchannels","true")
             setProperty("mail.$imap.partialfetch","true")
