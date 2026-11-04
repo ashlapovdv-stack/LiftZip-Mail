@@ -34,8 +34,11 @@ class MailScreensDeviceTest {
         val file=File(c.filesDir,"ui-checks/$name.png");file.parentFile!!.mkdirs()
         file.outputStream().use{assertTrue(rule.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG,100,it))}
         // Export while the target APK is still installed: Gradle can remove it after the suite.
-        val command="sh -c 'mkdir -p /data/local/tmp/liftzip-ui-checks && run-as ru.liftzip.mail cat files/ui-checks/$name.png > /data/local/tmp/liftzip-ui-checks/$name.png'"
-        ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)).use{it.readBytes()}
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("mkdir -p /data/local/tmp/liftzip-ui-checks")).use{it.readBytes()}
+        val pipes=automation.executeShellCommandRw("dd of=/data/local/tmp/liftzip-ui-checks/$name.png bs=65536")
+        ParcelFileDescriptor.AutoCloseOutputStream(pipes[1]).use{output->file.inputStream().use{it.copyTo(output)}}
+        ParcelFileDescriptor.AutoCloseInputStream(pipes[0]).use{it.readBytes()}
 
     }
     @Test fun mailboxMenusAndUnreadCountsRemainAccessible() {
