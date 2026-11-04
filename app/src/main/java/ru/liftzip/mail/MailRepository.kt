@@ -775,6 +775,14 @@ class MailRepository(private val context: Context) {
     }
     suspend fun pendingFolderHistory()=coordinator.data{val active=db.accounts().filter{it.enabled}.map{it.id}.toSet();db.folders().any{it.accountId in active && it.syncAll && it.hasOlder}}
     suspend fun pauseFolderHistory(accountId: String,path: String)=coordinator.data{db.folders().find{it.accountId==accountId && it.path==path}?.let{db.putFolders(listOf(it.copy(syncAll=false)))};refresh(messages=state.value.messages)}
+    suspend fun startFolderHistories(folders: List<ServerFolder>)=withContext(Dispatchers.IO) {
+        coordinator.data {
+            val chosen=folders.map{it.accountId to it.path}.toSet()
+            val active=db.accounts().filter{it.enabled}.map{it.id}.toSet()
+            db.putFolders(db.folders().filter{it.role!=FolderRole.INBOX && it.accountId in active && (it.accountId to it.path) in chosen}.map{it.copy(syncAll=true,error="")})
+            refresh(messages=state.value.messages)
+        };FolderWorker.enqueue(context)
+    }
     suspend fun loadFolderHistory(accountId: String,path: String)=withContext(Dispatchers.IO) {
         coordinator.data{db.folders().find{it.accountId==accountId && it.path==path}?.let{db.putFolders(listOf(it.copy(syncAll=true,error="")))};refresh(messages=state.value.messages)}
         FolderWorker.enqueue(context)

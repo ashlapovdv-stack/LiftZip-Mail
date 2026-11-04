@@ -85,6 +85,10 @@ jobs:
             adb shell run-as ru.liftzip.mail ls files/upgrade-probe > upgrade-check.txt
             adb shell dumpsys package ru.liftzip.mail | rg 'versionName=0\.5\.0' >> upgrade-check.txt
             bash ./gradlew --no-daemon :app:connectedDebugAndroidTest
+            mkdir -p ui-checks
+            adb exec-out run-as ru.liftzip.mail cat files/ui-checks/inbox.png > ui-checks/inbox.png
+            adb exec-out run-as ru.liftzip.mail cat files/ui-checks/drawer.png > ui-checks/drawer.png
+            adb exec-out run-as ru.liftzip.mail cat files/ui-checks/queue.png > ui-checks/queue.png
       - name: Save device test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -92,6 +96,7 @@ jobs:
           name: device-test-reports
           path: |
             upgrade-check.txt
+            ui-checks/
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
           retention-days: 14

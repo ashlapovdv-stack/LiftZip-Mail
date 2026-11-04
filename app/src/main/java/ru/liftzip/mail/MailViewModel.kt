@@ -190,6 +190,8 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             }catch(e: CancellationException){throw e}catch(e: Exception){if(manual)notice(friendlyError(e),error=true)}
         }
     }
+    fun discoverFolders()=work{repo.discoverFolders()}
+    fun startFolderHistories(folders: List<ServerFolder>)=work{repo.startFolderHistories(folders);notice("Загрузка выбранных папок запущена")}
     fun loadFolderHistory(accountId: String,path: String)=work{repo.loadFolderHistory(accountId,path);notice("История папки загружается в фоне")}
     fun pauseFolderHistory(accountId: String,path: String)=work{repo.pauseFolderHistory(accountId,path);notice("Загрузка папки приостановлена")}
     fun retryAction(id: String,confirmed: Boolean=false)=work{repo.retryAction(id,confirmed);notice("Действие возвращено в очередь")}

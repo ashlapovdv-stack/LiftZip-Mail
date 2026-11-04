@@ -109,7 +109,7 @@ class MainActivity: ComponentActivity() {
 private val Olive=Color(0xFF4C5D47)
 private val Paper=Color(0xFFF8F9F6)
 
-@Composable private fun MailTheme(content: @Composable ()->Unit) {
+@Composable internal fun MailTheme(content: @Composable ()->Unit) {
     val dark=isSystemInDarkTheme()
     val colors=if(dark)darkColorScheme(primary=Color(0xFFBDD0B2),secondary=Color(0xFFD5D8B8),secondaryContainer=Color(0xFF354332),onSecondaryContainer=Color(0xFFE2EADB),surface=Color(0xFF171B16),background=Color(0xFF111510))
     else lightColorScheme(primary=Olive,secondary=Color(0xFF69775F),secondaryContainer=Color(0xFFE3E8DC),onSecondaryContainer=Color(0xFF293525),primaryContainer=Color(0xFFE4EBD9),surface=Paper,background=Paper,surfaceContainer=Color(0xFFF0F2EB))
@@ -192,6 +192,7 @@ private val Paper=Color(0xFFF8F9F6)
         val d=draft
         if(route=="edit"){route="settings";editing=null}
         else if(route in setOf("delivery","sender","advanced","diagnostics","about","appearance","storage"))route="settings"
+        else if(route=="folder-history")route="history"
         else if(route=="history")route=historyReturn
         else if(route=="preview"){preview=null;route="reader"}
         else if(route=="compose" && d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}
@@ -213,7 +214,8 @@ private val Paper=Color(0xFFF8F9F6)
                     else key(account.id){AddAccount(s.busy,initial=account,onBack={route="settings"},onAdd={a,p->vm.editAccount(a,p){if(route=="edit" && editing==a.id){route="settings";editing=null}}})}
                 }
                 route=="actions" -> ActionsScreen(s,onBack={goInbox()},onRetry=vm::retryAction,onCancel=vm::cancelAction,onAccounts={route="settings"})
-                route=="history" -> HistoryScreen(s,onBack={route=historyReturn},onStart=vm::startHistory,onPause=vm::pauseHistory,onResume=vm::resumeHistory)
+                route=="history" -> HistoryScreen(s,onBack={route=historyReturn},onStart=vm::startHistory,onPause=vm::pauseHistory,onResume=vm::resumeHistory,onFolders={route="folder-history"})
+                route=="folder-history" -> FolderHistoryScreen(s,onBack={route="history"},onDiscover=vm::discoverFolders,onStart=vm::startFolderHistories,onPause=vm::pauseFolderHistory)
                 route=="settings" -> SettingsScreen(s,onBack={goInbox()},onAdd={route="add"},onEdit={editing=it;route="edit"},onSection={route=it},
                     onHistory={historyReturn="settings";route="history"},onRemove={id->if(currentAccount==id)currentAccount=null;vm.removeAccount(id)})
                 route=="delivery" -> DeliverySettingsScreen(s,onBack={route="settings"},onPoll=vm::setPoll,onFastMail=vm::setFastMail,onPermission={
@@ -261,7 +263,7 @@ private val Paper=Color(0xFFF8F9F6)
                     val memoryKey="${currentAccount?:"all"}:${folder.name}:${serverPath.orEmpty()}"
                     val memory=inboxMemory.getOrPut(memoryKey){InboxMemory()}
                     savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,serverPath,memory,onAccount={currentAccount=it;serverPath=null},onEnable=vm::setAccountEnabled,onFolder={folder=it;serverPath=null},
-                    onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path},onQueue={route="actions"},onLoadFolder=vm::loadFolderHistory,onPauseFolder=vm::pauseFolderHistory,onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
+                    onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path},onQueue={route="actions"},onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
                     onNoticeAnchor={anchor("inbox",it)},onSettings={route="settings"},onDelivery={route="delivery"},onRefresh={if(serverPath!=null || folder in setOf(MailFolder.SENT,MailFolder.DRAFTS))vm.refreshFolders(folder,currentAccount,serverPath)else vm.refresh()},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onDelete=vm::deleteMessages,onSearch=vm::search,onOpen={m->
                         selected=m.id
                         if(FolderRules.draft(m))vm.openDraft(m.id){full->if(route=="inbox" && selected==m.id)compose(full)}
@@ -287,8 +289,8 @@ private val Paper=Color(0xFFF8F9F6)
     }
 }
 
-@Composable private fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,serverPath: String?,memory: InboxMemory,onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,
-    onServerFolder: (ServerFolder)->Unit,onQueue: ()->Unit,onLoadFolder: (String,String)->Unit,onPauseFolder: (String,String)->Unit,
+@Composable internal fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,serverPath: String?,memory: InboxMemory,onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,
+    onServerFolder: (ServerFolder)->Unit,onQueue: ()->Unit,
     onAdd: ()->Unit,onExit: ()->Unit,onNoticeAnchor: (Float?)->Unit,onSettings: ()->Unit,onDelivery: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
     onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onDelete: (Set<String>,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit) {
     val drawer=rememberDrawerState(DrawerValue.Closed)
@@ -463,8 +465,7 @@ private val Paper=Color(0xFFF8F9F6)
                                 val count=s.messages.count{it.accountId==f.accountId && it.remoteFolder==f.path && FolderRules.remote(it) && !it.pendingDelete}
                                 Text((if(accountId==null)(s.accounts.find{it.id==f.accountId}?.name.orEmpty()+" · ")else "")+"Загружено $count"+(f.total?.let{" из $it"}?:""),style=MaterialTheme.typography.labelMedium)
                                 if(f.error.isNotBlank())Text(f.error,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
-                                if(f.hasOlder && !f.syncAll)TextButton(onClick={onLoadFolder(f.accountId,f.path)}){Text("Загрузить всю папку")}
-                                if(f.syncAll)TextButton(onClick={onPauseFolder(f.accountId,f.path)}){Text("История загружается · приостановить")}
+                                if(f.syncAll)Text("История загружается",style=MaterialTheme.typography.labelSmall)
                             }
                         }
                         items(visible,key={it.id}){m->MailRow(m,s.accounts.find{it.id==m.accountId},onOpen={if(selectionMode)toggle(m.id)else onOpen(m)},

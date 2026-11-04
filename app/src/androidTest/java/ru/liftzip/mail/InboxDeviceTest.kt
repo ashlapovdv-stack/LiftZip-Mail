@@ -57,8 +57,10 @@ class InboxDeviceTest {
                 Surface{Text("Navigation",Modifier.fillMaxWidth().height(64.dp))}
             },list={padding->
                 SideEffect{listCompositions.incrementAndGet()}
-                LazyColumn(Modifier.fillMaxSize().testTag("letters").nestedScroll(connection),state=listState,contentPadding=padding) {
-                    items((1..200).toList(),key={it}){Text("Letter $it",Modifier.fillMaxWidth().height(64.dp))}
+                PullToRefreshBox(isRefreshing=false,onRefresh={},indicator={}) {
+                    LazyColumn(Modifier.fillMaxSize().testTag("letters").nestedScroll(connection),state=listState,contentPadding=padding) {
+                        items((1..200).toList(),key={it}){Text("Letter $it",Modifier.fillMaxWidth().height(64.dp))}
+                    }
                 }
             })}
         }

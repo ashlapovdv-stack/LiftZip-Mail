@@ -20,7 +20,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@Composable fun HistoryScreen(s: UiState,onBack: ()->Unit,onStart: (List<String>)->Unit,onPause: ()->Unit,onResume: ()->Unit) {
+@Composable fun HistoryScreen(s: UiState,onBack: ()->Unit,onStart: (List<String>)->Unit,onPause: ()->Unit,onResume: ()->Unit,onFolders: ()->Unit) {
     val job=s.historyDownload
     val now by produceState(System.currentTimeMillis()){while(true){value=System.currentTimeMillis();delay(5000)}}
     val issues=HistoryRules.remainingIssues(job,s.messages)
@@ -33,7 +33,7 @@ import java.util.Locale
     Scaffold(topBar={TopAppBar(title={Text("Загрузка истории")},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}})}){padding->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
             Text("Загрузить все входящие",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
-            Text("Сначала сохраняется список всех входящих, затем тексты писем. Прогресс сохраняется после каждого текста. Вложения скачиваются при открытии или сохранении.")
+            Text("Сначала сохраняется список всех входящих, затем тексты с учётом предела кэша. Прогресс сохраняется после каждого текста. Вложения скачиваются при открытии или сохранении.")
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                 TextButton(onClick={selected=ArrayList(available)},enabled=!job.active && !s.busy){Text("Выбрать все")}
                 TextButton(onClick={selected=arrayListOf()},enabled=!job.active && !s.busy){Text("Снять выбор")}
@@ -91,6 +91,7 @@ import java.util.Locale
                 if(job.status in listOf("paused","partial") && job.accountIds.any{it in available})OutlinedButton(onClick=onResume,enabled=!s.busy,modifier=Modifier.fillMaxWidth()){Text(if(job.status=="partial")"Повторить неполученные тексты" else "Продолжить прежнюю загрузку")}
             }
             Text("Сохранённые письма повторно не скачиваются. Если отдельное письмо не читается, загрузка остальных продолжается; проблемное письмо запрашивается ещё раз в конце. В фоне Android может отложить выполнение.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedButton(onClick=onFolders,modifier=Modifier.fillMaxWidth()){Text("Загрузить другие серверные папки")}
             Spacer(Modifier.height(24.dp))
         }
     }
