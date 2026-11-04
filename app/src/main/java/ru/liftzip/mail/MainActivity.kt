@@ -451,7 +451,7 @@ private val Paper=Color(0xFFF8F9F6)
             Column(Modifier.fillMaxWidth()) {
                 if(!selectionMode)Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp),contentAlignment=Alignment.CenterEnd) {
                     InboxFadingControl(alpha,shape=RoundedCornerShape(16.dp)) {
-                        ExtendedFloatingActionButton(onClick=onCompose,shape=RoundedCornerShape(16.dp),modifier=Modifier.onGloballyPositioned{fabTop=it.boundsInRoot().top},
+                        ExtendedFloatingActionButton(onClick=onCompose,shape=RoundedCornerShape(16.dp),modifier=Modifier.semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top},
                             icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})
                     }
                 }

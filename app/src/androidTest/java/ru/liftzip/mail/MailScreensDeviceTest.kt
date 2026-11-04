@@ -41,12 +41,13 @@ class MailScreensDeviceTest {
         screenshot("drawer")
     }
     @Test fun singleUnreadMessageRestoresMenusAfterLeavingAPartlyHiddenInbox() {
+        var composeRequests=0
         val folder=mutableStateOf(MailFolder.INBOX)
         val model=state().copy(messages=state().messages.mapIndexed{i,m->m.copy(unread=i==0)})
         rule.setContent {
             val memory=remember{InboxMemory()}
             MailTheme {InboxScreen(model,"a",folder.value,null,memory,onAccount={},onEnable={_,_->},onFolder={folder.value=it},onServerFolder={},onQueue={},
-                onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}
+                onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={composeRequests++},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}
         }
         rule.waitForIdle()
         rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-100f),600)}
@@ -54,11 +55,10 @@ class MailScreensDeviceTest {
         rule.onNodeWithContentDescription("Непрочитанные").performClick()
         rule.waitForIdle()
         screenshot("single-unread")
-        println("SINGLE_UNREAD_ROOT\n"+rule.onRoot(useUnmergedTree=true).printToString())
-        println("COMPOSE_BUTTON_BOUNDS "+rule.onNodeWithText("Написать").fetchSemanticsNode().boundsInRoot)
         rule.onNodeWithText("Поиск писем").assertIsDisplayed()
         rule.onNodeWithContentDescription("Выбрать ящик").assertIsDisplayed()
-        rule.onNodeWithText("Написать").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Написать письмо").assertIsDisplayed().assertHasClickAction().performClick()
+        rule.runOnIdle{assertEquals(1,composeRequests)}
         rule.onNodeWithText("Запрос по оборудованию 1").assertIsDisplayed()
         rule.onNodeWithContentDescription("Отправленные").performClick();rule.waitForIdle()
         rule.onAllNodesWithText("Загружено",substring=true).assertCountEquals(0)
