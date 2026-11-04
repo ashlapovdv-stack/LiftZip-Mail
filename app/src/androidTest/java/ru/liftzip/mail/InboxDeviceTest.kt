@@ -28,8 +28,11 @@ class InboxDeviceTest {
 
     @Test fun automaticRefreshReturnAnimationHasNoGestureCircle() {
         val refreshing=mutableStateOf(true)
+        val compositions=AtomicInteger()
         rule.setContent {
+            SideEffect{compositions.incrementAndGet()}
             val state=rememberPullToRefreshState()
+            ObservePullRefresh(state,refreshing.value,onRefreshing={},onRest={})
             MaterialTheme {PullToRefreshBox(isRefreshing=refreshing.value,onRefresh={},state=state,
                 indicator={PullRefreshHint(state.distanceFraction,refreshing.value,false,false,Modifier.testTag("hint"))}) {
                 LazyColumn(Modifier.fillMaxSize()){items(20){Text("Letter $it",Modifier.height(60.dp))}}
@@ -39,6 +42,7 @@ class InboxDeviceTest {
         rule.mainClock.autoAdvance=false
         rule.runOnIdle{refreshing.value=false}
         repeat(40){rule.mainClock.advanceTimeByFrame();rule.onNodeWithTag("hint").assertDoesNotExist()}
+        assertTrue("Automatic refresh must not recompose the screen on every frame: ${compositions.get()}",compositions.get()<=3)
         rule.mainClock.autoAdvance=true
     }
 

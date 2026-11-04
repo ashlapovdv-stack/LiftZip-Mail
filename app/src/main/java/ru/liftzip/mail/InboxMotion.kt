@@ -7,6 +7,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.getValue
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
@@ -79,6 +85,16 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
             mail.placeRelative(0,geometry.listY,zIndex=1f)
             if(progress>0.001f)controls.placeRelative(0,geometry.bottomY,zIndex=2f)
         }
+    }
+}
+
+/** Watch only the resting boundary; animation pixels must not invalidate the entire inbox. */
+@Composable fun ObservePullRefresh(state: PullToRefreshState,refreshing: Boolean,onRefreshing: ()->Unit,onRest: ()->Unit) {
+    val started by rememberUpdatedState(onRefreshing)
+    val rested by rememberUpdatedState(onRest)
+    LaunchedEffect(state,refreshing) {
+        if(refreshing)started()
+        snapshotFlow{state.distanceFraction<0.02f}.distinctUntilChanged().collect{atRest->if(!refreshing && atRest)rested()}
     }
 }
 

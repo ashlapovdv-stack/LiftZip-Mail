@@ -313,7 +313,7 @@ private val Paper=Color(0xFFF8F9F6)
     var pullAccepted by remember{mutableStateOf(false)}
     var pullGestureArmed by remember{mutableStateOf(false)}
     val latestRefreshing by rememberUpdatedState(refreshing)
-    LaunchedEffect(refreshing,pullState.distanceFraction){if(refreshing)pullGestureArmed=false; if(!refreshing && pullState.distanceFraction<0.02f){pullAccepted=false;pullGestureArmed=false}}
+    ObservePullRefresh(pullState,refreshing,onRefreshing={pullGestureArmed=false},onRest={pullAccepted=false;pullGestureArmed=false})
     val chrome=remember(memory){InboxChromeController(controlsProgress.floatValue)}
 
     LaunchedEffect(query){onSearch(query)}
