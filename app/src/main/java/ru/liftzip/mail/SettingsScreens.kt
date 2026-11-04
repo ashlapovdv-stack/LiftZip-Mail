@@ -163,7 +163,7 @@ import java.util.Locale
     var clear by remember{mutableStateOf(false)}
     LaunchedEffect(Unit){onInspect()}
     fun mb(bytes: Long)=String.format(Locale.forLanguageTag("ru"),"%.1f МБ",bytes/1048576.0)
-    if(clear)AlertDialog(onDismissRequest={clear=false},title={Text("Очистить кэш?")},text={Text("Тексты серверных писем и файлы для просмотра будут загружены заново при открытии. Черновики, Исходящие и сохранённые вами файлы останутся.")},confirmButton={TextButton(onClick={clear=false;onClear()}){Text("Очистить")}},dismissButton={TextButton(onClick={clear=false}){Text("Отмена")}})
+    if(clear)AlertDialog(onDismissRequest={clear=false},title={Text("Очистить кэш?")},text={Text("Тексты серверных писем и файлы для просмотра будут загружены заново при открытии. Черновики, Исходящие и сохранённые вами файлы останутся. Недавние и непрочитанные письма могут снова загрузиться в фоне.")},confirmButton={TextButton(onClick={clear=false;onClear()}){Text("Очистить")}},dismissButton={TextButton(onClick={clear=false}){Text("Отмена")}})
     SettingsPage("Хранение",onBack) {
         Text("Кэш: ${mb(s.storage.bytes)}",style=MaterialTheme.typography.titleLarge)
         Text("Тексты: ${mb(s.storage.bodyBytes)} · ${s.storage.cachedBodies} писем\nВложения для просмотра: ${mb(s.storage.attachmentBytes)}",style=MaterialTheme.typography.bodyMedium)

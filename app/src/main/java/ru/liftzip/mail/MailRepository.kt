@@ -190,7 +190,10 @@ class MailRepository(private val context: Context) {
         wakeActions();FolderWorker.enqueue(context)
     }
     suspend fun removeAccount(id: String)=withContext(Dispatchers.IO){coordinator.data{
+        val outgoing=db.messages().filter{it.accountId==id}.flatMap{it.outgoing}.map{it.uri}.toSet()
+        val retained=db.messages().filter{it.accountId!=id}.flatMap{it.outgoing}.map{it.uri}.toSet()
         db.messages().filter{it.accountId==id}.forEach{ForwardWorker.cancel(context,it.id);forwardProgress.update{progress->progress-it.id};forwarded.remove(it.id)}
+        queueFiles.removeUris(outgoing-retained)
         coordinator.invalidate(id);db.removeAccount(id);attachmentCache.removeAccount(id)
         if(settings.getString("default-sender",null)==id)settings.edit().remove("default-sender").apply()
         syncPrefs.edit().remove(id).remove("count:$id").remove("unread:$id").remove("older:$id").remove("checked:$id").remove("error:$id").apply()
@@ -699,14 +702,16 @@ class MailRepository(private val context: Context) {
         MailRules.validateDraft(draft)?.let{error(it)}
         val flattened=ForwardRules.sending(draft).copy(timestamp=System.currentTimeMillis())
         val frozen=queueFiles.freeze(flattened)
-        coordinator.data {
+        var queued=false
+        try {coordinator.data {
             val account=db.accounts().find{it.id==draft.accountId}?:error("Ящик отправителя не найден.")
             val old=db.message(draft.id)
             require(old?.localFolder!="outbox"){"Письмо уже находится в Исходящих."}
             val m=frozen.toMessage(account,"outbox").copy(delivery="queued",sourceDraftId=old?.sourceDraftId?:draft.sourceDraftId,editRevision=(old?.editRevision?:0)+1)
             db.applyActions(listOf(m),actions=listOf(actionFor(m,ActionKind.SEND)),removeActions=setOf(ActionKind.APPEND_DRAFT.name+":"+m.id))
+            queued=true
             forwardProgress.update{it-draft.id};refresh()
-        }
+        }}catch(e: Exception){if(!queued)queueFiles.removeUris(frozen.attachments.map{it.uri}.toSet());throw e}
         wakeActions()
     }
     suspend fun discoverFolders(accountId: String?=null)=withContext(Dispatchers.IO) {
@@ -762,7 +767,7 @@ class MailRepository(private val context: Context) {
             })
         }catch(e: CancellationException){throw e}catch(e: Exception){coordinator.data {
             folder?.let{f->db.putFolders(listOf(f.copy(syncing=false,checkedAt=System.currentTimeMillis(),error=friendlyError(e))))};refresh(messages=state.value.messages)
-        }}finally{coordinator.data{db.folders().find{it.accountId==accountId && it.path==path && it.syncing}?.let{db.putFolders(listOf(it.copy(syncing=false)))};refresh(messages=state.value.messages)}}
+        }}finally{withContext(kotlinx.coroutines.NonCancellable){coordinator.data{db.folders().find{it.accountId==accountId && it.path==path && it.syncing}?.let{db.putFolders(listOf(it.copy(syncing=false)))};refresh(messages=state.value.messages)}}}
     }}
     suspend fun folderStep(): Boolean=withContext(Dispatchers.IO) {
         val target=coordinator.data {

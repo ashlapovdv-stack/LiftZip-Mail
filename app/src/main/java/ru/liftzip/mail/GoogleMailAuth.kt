@@ -37,7 +37,7 @@ object GoogleMailAuth {
         }
     }
     fun disconnect(context: Context,email: String) {
-        Tasks.await(Identity.getAuthorizationClient(context).revokeAccess(RevokeAccessRequest.builder().setAccount(Account(email,"com.google")).build()),20,TimeUnit.SECONDS)
+        Tasks.await(Identity.getAuthorizationClient(context).revokeAccess(RevokeAccessRequest.builder().setAccount(Account(email,"com.google")).setScopes(listOf(Scope(SCOPE))).build()),20,TimeUnit.SECONDS)
     }
     fun problem(error: Throwable,email: String=""): String {
         val api=generateSequence(error){it.cause}.filterIsInstance<ApiException>().firstOrNull()

@@ -24,4 +24,17 @@ class QueueFiles(private val context: Context) {
             return draft.copy(attachments=files)
         }catch(e: Exception){directory.deleteRecursively();throw e}
     }
+    /** Only app-owned queue URIs are removable; an external document is never a cleanup target. */
+    fun removeUris(uris: Set<String>) {
+        uris.forEach{text->runCatching {
+            val uri=Uri.parse(text)
+            if(uri.authority!="${context.packageName}.attachments" || uri.pathSegments.firstOrNull()!="queued-attachments")return@runCatching
+            val file=File(root,uri.pathSegments.drop(1).joinToString("/")).canonicalFile
+            if(!file.path.startsWith(root.canonicalPath+File.separator))return@runCatching
+            if(file.isFile)file.delete()
+            val directory=file.parentFile
+            if(directory!=null && directory!=root && directory.list()?.isEmpty()==true)directory.delete()
+        }}
+    }
+
 }

@@ -34,7 +34,7 @@ class FastMailController(private val app: MailApplication) {
         if(!FastMailRules.mayStart(s.enabled,app.visible,app.repository.snapshot.value.accounts.any{it.enabled},s.running || s.starting))return
         mutable.update{it.copy(starting=true,error="")}
         try{ContextCompat.startForegroundService(app,Intent(app,FastMailService::class.java))}
-        catch(_: Exception){mutable.update{it.copy(starting=false,error="Android пока не разрешил быстрый режим. Обычная фоновая проверка остаётся по расписанию.")}}
+        catch(_: Exception){mutable.update{it.copy(starting=false,error="Android пока не разрешил быстрый режим. Далее используется выбранное расписание фоновой проверки.")}}
     }
     fun running(){mutable.update{it.copy(running=true,starting=false,error="",accounts=emptyMap())}}
     fun stopped(reason: String=""){mutable.update{it.copy(running=false,starting=false,accounts=emptyMap(),error=reason.ifBlank{it.error})}}
@@ -97,7 +97,7 @@ class FastMailService: Service() {
         }
     }
     override fun onTimeout(startId: Int,fgsType: Int) {
-        app.fastMail.stopped("Android завершил быстрый режим по лимиту времени. Работает обычная фоновая проверка. Откройте приложение для возобновления.")
+        app.fastMail.stopped("Android завершил быстрый режим по лимиту времени. Далее используется выбранное расписание фоновой проверки. Откройте приложение для возобновления.")
         scope.cancel();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
     }
     override fun onDestroy(){scope.cancel();events.close();app.fastMail.stopped();super.onDestroy()}

@@ -28,6 +28,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     private var checking: Job?=null
     private var opening: Job?=null
     private var folderOpening: Job?=null
+    private var folderTarget: Triple<MailFolder,String?,String?>?=null
     private var folderView=Triple(MailFolder.INBOX,null as String?,null as String?)
     private val query=MutableStateFlow("")
     private val unreadScope=MutableStateFlow(UnreadScope())
@@ -179,7 +180,9 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         if(path!=null || folder in setOf(MailFolder.SENT,MailFolder.DRAFTS))refreshFolders(folder,accountId,path,false)
     }
     fun refreshFolders(folder: MailFolder,accountId: String?,path: String?,manual: Boolean=true) {
-        if(folderOpening?.isActive==true)return
+        val target=Triple(folder,accountId,path)
+        if(folderOpening?.isActive==true){if(folderTarget==target)return;folderOpening?.cancel()}
+        folderTarget=target
         folderOpening=viewModelScope.launch {
             try {
                 repo.discoverFolders(accountId)

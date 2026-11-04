@@ -39,4 +39,17 @@ class StorageDeviceTest {
             assertFalse(recent.exists());assertTrue(partial.exists());assertTrue(draft.exists())
         }finally{root.deleteRecursively()}
     }
+    @Test fun queueCleanupRemovesItsOwnSnapshotAndPreservesTheOriginalDocument() {
+        val c=ApplicationProvider.getApplicationContext<Context>()
+        val original=File(c.cacheDir,"cleanup-test-"+UUID.randomUUID()+".txt").apply{writeText("keep original")}
+        try {
+            val queue=QueueFiles(c)
+            val frozen=queue.freeze(ComposeDraft(accountId="test",attachments=listOf(OutgoingFile(android.net.Uri.fromFile(original).toString(),"source.txt","text/plain",original.length()))))
+            val copy=frozen.attachments.single().uri
+            queue.removeUris(setOf(copy,android.net.Uri.fromFile(original).toString(),"content://${c.packageName}.attachments/queued-attachments/../../cache/${original.name}"))
+            assertTrue(original.exists());assertEquals("keep original",original.readText())
+            try{c.contentResolver.openInputStream(android.net.Uri.parse(copy))?.close();fail("snapshot must be removed")}catch(_: java.io.FileNotFoundException){}
+        }finally{original.delete()}
+    }
+
 }

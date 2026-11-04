@@ -42,6 +42,7 @@ class PreviewStorage(private val root: File) {
     fun bytes()=if(root.isDirectory)root.walkTopDown().filter{it.isFile && !it.name.endsWith(".part")}.sumOf{it.length()}else 0L
     fun trim(budget: Long,clear: Boolean=false,now: Long=System.currentTimeMillis()) {
         if(!root.isDirectory)return
+        root.walkTopDown().filter{it.isFile && it.name.endsWith(".part") && now-it.lastModified()>24*60*60_000L}.forEach{it.delete()}
         val files=root.walkTopDown().filter{it.isFile && !it.name.endsWith(".part")}.toList()
         var used=files.sumOf{it.length()}
         for(file in files.sortedBy{it.lastModified()}) {
