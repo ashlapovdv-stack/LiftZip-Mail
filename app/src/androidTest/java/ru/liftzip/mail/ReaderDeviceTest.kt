@@ -46,7 +46,10 @@ class ReaderDeviceTest {
         rule.waitForIdle();rule.onNodeWithText("Переслать").assertIsDisplayed()
         saveDeviceScreenshot(rule,"html-long")
         rule.runOnIdle{view.scrollContent(Int.MIN_VALUE)}
-        rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,500f),600)}
+        // Returning also traverses the footer and header, which together exceed 500 physical
+        // pixels on the high-density Pixel 6. Use a screen-relative gesture in both densities.
+        rule.onRoot().performTouchInput{swipe(Offset(center.x,height*0.15f),Offset(center.x,height*0.85f),600)}
+        rule.waitForIdle();saveDeviceScreenshot(rule,"html-return")
         rule.waitForIdle();rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
     }
     @Test fun closingAndReopeningCachedMailReleasesOldViewsAndKeepsTheBodyAvailable() {
