@@ -32,15 +32,8 @@ val MailStyle.artwork: Int get()=if(this==MailStyle.COZY)R.drawable.header_cozy 
 val MailStyle.accent: Color get()=if(this==MailStyle.COZY)Color(0xFF784BCE)else Color(0xFF135DBD)
 val MailStyle.navAccent: Color get()=if(this==MailStyle.COZY)Color(0xFF356331)else accent
 
-@Composable fun DecorativeHeader(style: MailStyle,title: String,account: String,refreshing: Boolean,onMenu: ()->Unit,onRefresh: ()->Unit,onSettings: ()->Unit) {
+@Composable fun DecorativeHeader(title: String,account: String,onMenu: ()->Unit) {
     Box(Modifier.fillMaxWidth().height(140.dp)) {
-        Image(painterResource(style.artwork),null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(18.dp)
-            .background(Brush.verticalGradient(listOf(Color.Transparent,MaterialTheme.colorScheme.surface))))
-        Row(Modifier.align(Alignment.TopEnd).padding(top=6.dp,end=14.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            HeaderButton(onRefresh,!refreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")}
-            HeaderButton(onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
-        }
         Row(Modifier.align(Alignment.CenterStart).padding(start=14.dp,top=20.dp).fillMaxWidth(0.76f),verticalAlignment=Alignment.CenterVertically) {
             HeaderButton(onMenu){Icon(Icons.Outlined.Menu,"Выбрать ящик")}
             Column(Modifier.padding(start=12.dp)) {

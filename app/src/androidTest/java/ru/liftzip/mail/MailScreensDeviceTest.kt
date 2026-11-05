@@ -74,9 +74,12 @@ class MailScreensDeviceTest {
 }
 
 internal fun saveDeviceScreenshot(rule: androidx.compose.ui.test.junit4.ComposeContentTestRule,name: String) {
+    saveDeviceBitmap(rule.onRoot().captureToImage().asAndroidBitmap(),name)
+}
+internal fun saveDeviceBitmap(bitmap: Bitmap,name: String) {
     val c=ApplicationProvider.getApplicationContext<Context>()
     val file=File(c.filesDir,"ui-checks/$name.png");file.parentFile!!.mkdirs()
-    file.outputStream().use{assertTrue(rule.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG,100,it))}
+    file.outputStream().use{assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG,100,it))}
     // Export while the target APK is still installed: Gradle can remove it after the suite.
     val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
     ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("mkdir -p /data/local/tmp/liftzip-ui-checks")).use{it.readBytes()}

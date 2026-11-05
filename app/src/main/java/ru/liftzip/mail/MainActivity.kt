@@ -13,7 +13,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.IntentSenderRequest
 import com.google.android.gms.auth.api.identity.Identity
@@ -102,7 +101,7 @@ class MainActivity: ComponentActivity() {
     override fun onNewIntent(intent: Intent){super.onNewIntent(intent);setIntent(intent);handleNotification(intent)}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        edgeMailWindow()
         handleNotification(intent)
         setContent {
             val message by requestedMessage.collectAsStateWithLifecycle()
@@ -213,6 +212,7 @@ private val Paper=Color(0xFFF8F9F6)
         else if(route=="compose" && d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}
         else goInbox()
     }
+    if(route!="inbox" || !s.loaded || s.accounts.isEmpty())SystemBarIcons()
     Scaffold(modifier=Modifier.onSizeChanged{rootHeight=it.height},snackbarHost={
         SnackbarHost(snack,Modifier.fillMaxWidth().padding(start=16.dp,end=16.dp,bottom=noticeBottom)){ServiceSnackbar(it)}
     },contentWindowInsets=WindowInsets(0,0,0,0)) { outer->
@@ -390,6 +390,8 @@ private val Paper=Color(0xFFF8F9F6)
             if(moving)memory.pinned=index==0 && offset==0
         }
     }
+    SystemBarIcons(decorativeStatus=style!=MailStyle.STANDARD && drawer.currentValue==DrawerValue.Closed && drawer.targetValue==DrawerValue.Closed)
+    InboxCanvas(style) {
     ModalNavigationDrawer(drawerState=drawer,drawerContent={
         ModalDrawerSheet {
             LazyColumn {
@@ -421,7 +423,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close()};onAdd()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close()};onSettings()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.4",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.5",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -437,7 +439,7 @@ private val Paper=Color(0xFFF8F9F6)
             title={Text("Выйти из Почты?")},text={Text("Нажмите «Выйти» или кнопку Android «Назад» ещё раз. Фоновая проверка почты продолжится по настройкам.")},
             confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
         InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},modifier=Modifier.fillMaxSize().safeDrawingPadding(),header={
-            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.fillMaxWidth()) {
                 if(selectionMode)TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Text("Выбрано: ${selected.size}",maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
                     IconButton(onClick={deleting=selected.toSet()},enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить выбранные письма")}
                     Box {
@@ -448,12 +450,11 @@ private val Paper=Color(0xFFF8F9F6)
                             DropdownMenuItem(text={Text("Отметить непрочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailUnread,null)},onClick={selectionMenu=false;mark(true)})
                         }
                     }
-                }) else if(style!=MailStyle.STANDARD)DecorativeHeader(style,viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,
-                    current?.let{it.name+if(!it.enabled)" · выключен"else ""}?:"Все ящики",s.refreshing || s.unreadRefreshing,{scope.launch{drawer.open()}},onRefresh,onSettings)
+                }) else if(style!=MailStyle.STANDARD)DecorativeHeader(viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,
+                    current?.let{it.name+if(!it.enabled)" · выключен"else ""}?:"Все ящики",{scope.launch{drawer.open()}})
                 else TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Column{Text(viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,fontWeight=FontWeight.Bold);Text((current?.name?:"Все ящики")+if(current?.enabled==false)" · выключен" else "",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
-                    navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}},actions={
-                        IconButton(onClick=onRefresh,enabled=!s.refreshing && !s.unreadRefreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
-                    })
+                    navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}})
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
                 Box(Modifier.fillMaxWidth().height(2.dp)) {
                     if(s.busy || refreshing || s.searching && query.isNotBlank())LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp).semantics{contentDescription="Обновление почты"})
                 }
@@ -469,6 +470,7 @@ private val Paper=Color(0xFFF8F9F6)
                 Row(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
                     Text(if(query.isNotBlank())"Поиск среди загруженных писем" else "${visible.size} писем · ${visible.count{it.unread}} непрочитанных",
                         style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 }
             }
         },bottom={alpha->
@@ -512,6 +514,7 @@ private val Paper=Color(0xFFF8F9F6)
                     }
                 }
         })
+    }
     }
 }
 
