@@ -482,9 +482,9 @@ private val Paper=Color(0xFFF8F9F6)
                     }
                 }
                 InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)0.dp else 26.dp),
-                    modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.padding(horizontal=8.dp,vertical=6.dp)) {
+                    modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.background(MaterialTheme.colorScheme.surface).padding(horizontal=8.dp,vertical=6.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
-                        modifier=Modifier.onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
+                        modifier=Modifier.then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
                         MailFolder.entries.forEach{f->NavigationBarItem(colors=if(style==MailStyle.STANDARD)NavigationBarItemDefaults.colors()else NavigationBarItemDefaults.colors(
                             selectedIconColor=navigationAccent,selectedTextColor=navigationAccent,indicatorColor=navigationAccent.copy(alpha=0.08f)),selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
                     }
