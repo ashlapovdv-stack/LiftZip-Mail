@@ -1004,7 +1004,7 @@ class MailRepository(private val context: Context) {
         attachmentCache.opened(cachedAttachment(message,file),file)
     }
     suspend fun inlineImage(message: MailItem,file: Attachment): OpenedAttachment=withContext(Dispatchers.IO){
-        require(file.contentId.isNotBlank() && file.mime.startsWith("image/") && message.attachments.any{it.path==file.path && it.contentId==file.contentId}){"Изображение не найдено в письме."}
+        require(file.contentId.isNotBlank() && file.mime.startsWith("image/",true) && message.attachments.any{it.path==file.path && it.contentId==file.contentId}){"Изображение не найдено в письме."}
         require(file.size.toLong()<=MailImageLimits.MAX_BYTES*2){"Изображение слишком большое для просмотра в письме."}
         attachmentCache.opened(cachedAttachment(message,file,MailImageLimits.MAX_BYTES),file)
     }

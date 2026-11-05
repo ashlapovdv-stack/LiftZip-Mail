@@ -15,7 +15,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import java.io.ByteArrayInputStream
-import kotlin.math.ceil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -66,7 +65,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private fun publishHeight() {
         if(!live)return
         val content=contentHeight
-        val value=ceil(content*renderScale).toInt().coerceIn(1,500_000)
+        val value=HtmlMail.height(content,renderScale)
         if(value==lastHeight || content<=0)return
         lastHeight=value
         post{if(live)heightChanged(value)}

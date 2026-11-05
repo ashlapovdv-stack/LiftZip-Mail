@@ -21,7 +21,7 @@ data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSou
 /** HTML remains data. Only the renderer's generated image URLs can request resources. */
 object HtmlMail {
     const val ORIGIN="https://mail.liftzip.invalid/"
-    private val links=Regex("(?i)\\b(?:https?://[^\\s<>]+|mailto:[^\\s<>]+)")
+    private val links=Regex("""(?i)\b(?:https?://[^\s<>"']+|mailto:[^\s<>"']+|www\.[^\s<>"']+|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})""")
     private val unsafe="script,iframe,frame,frameset,object,embed,applet,form,input,button,select,textarea,link,base,meta,svg,math,video,audio,source,track,canvas,noscript,template"
     private fun safelist()=Safelist.relaxed().addTags("style","section","article","header","footer","main","hr","s","strike","center","font").addAttributes("font","color","face","size")
         .addAttributes(":all","style","class","id","dir","align","valign","width","height","bgcolor","border","cellpadding","cellspacing","role")
@@ -83,14 +83,21 @@ object HtmlMail {
     fun plain(source: String): String {
         val out=StringBuilder();var end=0
         for(match in links.findAll(source)) {
-            val raw=match.value.trimEnd('.',',',';',')',']','!','?')
-            val url=link(raw)?:continue
+            var raw=match.value.trimEnd('.',',',';','!','?')
+            for((open,close) in listOf('(' to ')','[' to ']'))while(raw.endsWith(close) && raw.count{it==close}>raw.count{it==open})raw=raw.dropLast(1)
+            val target=when{raw.startsWith("www.",true)->"https://$raw";!raw.contains(":") && raw.contains("@")->"mailto:$raw";else->raw}
+            val url=link(target)?:continue
             out.append(escape(source.substring(end,match.range.first)))
             out.append("<a href=\"").append(escape(url)).append("\">").append(escape(raw)).append("</a>")
             end=match.range.first+raw.length
         }
         out.append(escape(source.substring(end)))
         return "<div class=\"mail-plain\">$out</div>"
+    }
+    fun height(content: Int,scale: Float): Int {
+        val factor=scale.takeIf{it.isFinite() && it>0f}?:1f
+        // Rounding down prevents viewport minimum-height rounding feeding back into endless growth.
+        return (content.toDouble()*factor).toInt().coerceIn(1,500_000)
     }
     private fun escape(value: String)=value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
     private fun currentSource(html: String,hasHistory: Boolean): String? {
@@ -110,7 +117,7 @@ object HtmlMail {
         val resources=linkedMapOf<String,MailImageSource>();var hasExternal=false
         fun resource(raw: String): Pair<String,MailImageSource>? {
             val image=when {
-                raw.startsWith("cid:",true)->attachments.firstOrNull{cid(it.contentId)==cid(raw.substring(4)) && it.contentId.isNotBlank() && it.mime.startsWith("image/") }?.let{MailImageSource.Inline(it)}
+                raw.startsWith("cid:",true)->attachments.firstOrNull{cid(it.contentId)==cid(raw.substring(4)) && it.contentId.isNotBlank() && it.mime.startsWith("image/",true) }?.let{MailImageSource.Inline(it)}
                 raw.startsWith("data:",true)->Regex("(?is)^data:(image/(?:png|jpeg|gif|webp));base64,([a-z0-9+/=\\s]+)$").matchEntire(raw)?.takeIf{raw.length<2*1024*1024}?.let{MailImageSource.Data(it.groupValues[1].lowercase(),it.groupValues[2])}
                 else->imageUrl(raw)?.let{MailImageSource.Remote(it)}
             }?:return null

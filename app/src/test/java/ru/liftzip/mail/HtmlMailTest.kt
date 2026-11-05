@@ -36,7 +36,7 @@ class HtmlMailTest {
         assertTrue(Jsoup.parse(allowed.html).selectFirst("img")!!.attr("src").startsWith(HtmlMail.ORIGIN))
     }
     @Test fun cidImagesResolveWithoutEnablingExternalImages() {
-        val attachment=Attachment("1.2","photo.png","image/png",100,"logo+1@example")
+        val attachment=Attachment("1.2","photo.png","IMAGE/PNG",100,"logo+1@example")
         val doc=HtmlMail.document("<p>Фото</p><img src='cid:logo%2B1%40example'>","",listOf(attachment))
         assertFalse(doc.externalImages);assertEquals(MailImageSource.Inline(attachment),doc.images.values.single())
     }
@@ -73,6 +73,8 @@ class HtmlMailTest {
         assertTrue(doc.select("script").isEmpty())
         assertEquals("https://example.com/a?b=1&c=2",doc.selectFirst("a")!!.attr("href"))
         assertTrue(doc.text().contains("<script>example</script>"))
+        val extra=Jsoup.parse(HtmlMail.plain("(https://example.com/wiki_(Topic)) www.example.com client@example.com"))
+        assertEquals(listOf("https://example.com/wiki_(Topic)","https://www.example.com","mailto:client@example.com"),extra.select("a").map{it.attr("href")})
     }
     @Test fun imageResourceUrlsCannotBeReusedAcrossMessagesOrConsentChanges() {
         val source="<img src='cid:x'><img src='https://img.example/x.png'>"
@@ -104,6 +106,18 @@ class HtmlMailTest {
         val wrapper=doc.selectFirst("div")!!
         assertTrue(wrapper.attr("style").contains("color:white"));assertTrue(wrapper.attr("style").contains("background-color:#000000"))
         assertEquals("rtl",wrapper.attr("dir"));assertEquals("white",doc.selectFirst("font")!!.attr("color"))
+    }
+
+    @Test fun fractionalWebViewScalesCannotGrowTheViewportOnEveryMeasurement() {
+        for(scale in listOf(1f,1.371234f,2.625f,3.5f)) {
+            var pixels=HtmlMail.height(700,scale)
+            val initial=pixels
+            repeat(100){
+                val css=kotlin.math.ceil(pixels.toDouble()/scale).toInt().coerceAtLeast(700)
+                pixels=HtmlMail.height(css,scale)
+            }
+            assertEquals(initial,pixels)
+        }
     }
 
 }

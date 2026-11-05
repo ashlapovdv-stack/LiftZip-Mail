@@ -53,7 +53,7 @@ class MimeReaderTest {
     }
     @Test fun aRelatedInlineImageRetainsItsCidWithoutReadingItsPayload() {
         val image=object: MimeBodyPart() {override fun getInputStream(): java.io.InputStream=throw AssertionError("Inline image payload must stay lazy")}.apply {
-            setHeader("Content-Type","image/png");setHeader("Content-ID","<photo@example.com>")
+            setHeader("Content-Type","IMAGE/PNG");setHeader("Content-ID","<photo@example.com>")
         }
         val multi=MimeMultipart("related").apply {
             addBodyPart(MimeBodyPart().apply{setContent("<p>Photo</p><img src='cid:photo@example.com'>","text/html; charset=UTF-8");setHeader("Content-Type","text/html; charset=UTF-8")})
@@ -63,7 +63,7 @@ class MimeReaderTest {
         assertTrue(decoded.html.contains("cid:photo@example.com"))
         val root=object: MimeBodyPart(){override fun getContent(): Any=multi;override fun isMimeType(type: String)=type=="multipart/*" || type=="multipart/related";override fun getContentType()="multipart/related"}
         val complete=MimeReader().read(root)
-        assertEquals("photo@example.com",complete.attachments.single().contentId)
+        assertEquals("photo@example.com",complete.attachments.single().contentId);assertEquals("image/png",complete.attachments.single().mime)
         assertEquals("1",complete.attachments.single().path)
     }
     @Test fun newsletterCssDoesNotLeakIntoPreviewsOrReplyText() {
