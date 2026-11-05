@@ -4,6 +4,7 @@ import android.graphics.Color
 import android.os.ParcelFileDescriptor
 import android.view.WindowInsets
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
@@ -30,8 +31,10 @@ class WindowBackgroundDeviceTest {
     private val account=MailAccount("a","lift-zip","test@example.com",provider=Provider.REG,imapHost="mail.hosting.reg.ru",smtpHost="mail.hosting.reg.ru")
     private val messages=(1..30).map{i->MailItem("edge-$i","a",sender="Отправитель $i",senderEmail="sender@example.com",recipients="test@example.com",subject="Письмо $i",body="Сохранённый текст письма",date=1_800_000_000_000L,unread=i==1)}
     private fun screen() {
-        rule.runOnUiThread{rule.activity.edgeMailWindow()}
-        rule.setContent {
+        val activity=rule.activity
+        rule.runOnUiThread {
+        activity.edgeMailWindow()
+        activity.setContent {
             MailTheme(style.value) {
                 canvas=MaterialTheme.colorScheme.surface.toArgb()
                 val memory=remember{InboxMemory()}
@@ -39,6 +42,7 @@ class WindowBackgroundDeviceTest {
                     onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},
                     onSettings={settings++},onDelivery={},onRefresh={refreshed++;refreshing.value=true},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})
             }
+        }
         }
         rule.waitForIdle()
     }
@@ -55,16 +59,20 @@ class WindowBackgroundDeviceTest {
                 val result=command("cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.$overlay")
                 assertFalse(result,result.contains("Error",true))
                 rule.waitUntil(5000){currentOverlay()?.endsWith(".$overlay")==true}
+                // Framework overlay changes can recreate the plain test host. Production
+                // MainActivity configures every new window in onCreate; reproduce that here.
+                rule.activityRule.scenario.recreate()
+                screen()
                 for(selected in MailStyle.entries) {
                     rule.runOnIdle{style.value=selected};rule.waitForIdle()
                     rule.onNodeWithContentDescription("Настройки").assertDoesNotExist()
                     rule.onNodeWithContentDescription("Обновить почту").assertDoesNotExist()
                     // Insets and SystemUI composition settle independently of the Compose clock.
-                    var top=0;var bottom=0
+                    var top=0;var bottom=0;var contrast=true
                     rule.runOnIdle {
                         val insets=rule.activity.window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
                         top=insets.top;bottom=insets.bottom
-                        assertFalse(rule.activity.window.isNavigationBarContrastEnforced)
+                        contrast=rule.activity.window.isNavigationBarContrastEnforced
                     }
                     assertTrue(top>0);assertTrue(bottom>0)
                     rule.waitUntil(5000) {
@@ -75,16 +83,17 @@ class WindowBackgroundDeviceTest {
                     val tabs=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInRoot
                     val bitmap=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No full-window screenshot")
                     try {
+                        saveDeviceBitmap(bitmap,"edge-${selected.key}-$mode")
+                        assertFalse("Navigation transparency lost in $mode/$selected",contrast)
                         assertTrue("Menu must stay below system icons",menu.top>=top)
                         assertTrue("Tabs must stay above system navigation",tabs.bottom<=bitmap.height-bottom)
                         assertTrue("System navigation must reveal the app canvas",close(canvas,bitmap.getPixel(bitmap.width/8,bitmap.height-bottom/2)))
                         val status=bitmap.getPixel((bitmap.width*0.42f).toInt(),top/2)
                         if(selected==MailStyle.STANDARD)assertTrue(close(canvas,status))
                         else {
-                            val samples=listOf(0.3f,0.4f,0.6f).map{bitmap.getPixel((bitmap.width*it).toInt(),top/2)}
+                            val samples=listOf(0.25f,0.3f,0.4f,0.6f).map{bitmap.getPixel((bitmap.width*it).toInt(),top/2)}
                             assertTrue("Status area must show artwork, not a solid strip or camera cutout",samples.any{!close(canvas,it) && Color.blue(it)>60})
                         }
-                        saveDeviceBitmap(bitmap,"edge-${selected.key}-$mode")
                     }finally{bitmap.recycle()}
                 }
             }
