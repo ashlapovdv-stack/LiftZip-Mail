@@ -53,7 +53,8 @@ class AppearanceDeviceTest {
             rule.onNodeWithText("Уютный").performClick();rule.runOnIdle{assertEquals(MailStyle.COZY,AppearancePreferences.read(prefs))}
             rule.onNodeWithText("Деловой").performScrollTo().performClick();rule.waitForIdle()
             saveDeviceScreenshot(rule,"appearance")
-            rule.runOnIdle{visible=false;prefs.edit().putBoolean("saved",true).commit();current.value=AppearancePreferences.read(context.getSharedPreferences(name,Context.MODE_PRIVATE));visible=true}
+            rule.runOnIdle{visible=false;prefs.edit().putBoolean("saved",true).commit()};rule.waitForIdle()
+            rule.runOnIdle{current.value=AppearancePreferences.read(context.getSharedPreferences(name,Context.MODE_PRIVATE));visible=true}
             rule.waitForIdle();rule.runOnIdle {
                 assertEquals(MailStyle.BUSINESS,current.value);assertFalse(prefs.getBoolean("auto-hide-panels",true))
                 assertTrue(File(context.applicationInfo.dataDir,"shared_prefs/$name.xml").readText().contains("business"))

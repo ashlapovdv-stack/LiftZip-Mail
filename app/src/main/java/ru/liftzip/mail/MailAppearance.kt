@@ -35,6 +35,8 @@ val MailStyle.navAccent: Color get()=if(this==MailStyle.COZY)Color(0xFF356331)el
 @Composable fun DecorativeHeader(style: MailStyle,title: String,account: String,refreshing: Boolean,onMenu: ()->Unit,onRefresh: ()->Unit,onSettings: ()->Unit) {
     Box(Modifier.fillMaxWidth().height(140.dp)) {
         Image(painterResource(style.artwork),null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(18.dp)
+            .background(Brush.verticalGradient(listOf(Color.Transparent,MaterialTheme.colorScheme.surface))))
         Row(Modifier.align(Alignment.TopEnd).padding(top=6.dp,end=14.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             HeaderButton(onRefresh,!refreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")}
             HeaderButton(onSettings){Icon(Icons.Outlined.Settings,"Настройки")}
