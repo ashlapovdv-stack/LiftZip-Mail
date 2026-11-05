@@ -19,6 +19,7 @@ class MailStoreDeviceTest {
         val base=ApplicationProvider.getApplicationContext<Context>()
         val root=File(base.cacheDir,"db-test-"+UUID.randomUUID()).apply{mkdirs()}
         return object: ContextWrapper(base) {
+            override fun getSharedPreferences(name: String,mode: Int)=base.getSharedPreferences(root.name+"-"+name,mode)
             override fun getDatabasePath(name: String)=File(root,name)
             override fun openOrCreateDatabase(name: String,mode: Int,factory: SQLiteDatabase.CursorFactory?)=SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name),factory)
             override fun openOrCreateDatabase(name: String,mode: Int,factory: SQLiteDatabase.CursorFactory?,errorHandler: DatabaseErrorHandler?)=SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name).path,factory,errorHandler)
@@ -97,6 +98,45 @@ class MailStoreDeviceTest {
             val old=db.encodeMessage(full).apply{remove("htmlBody");remove("contentVersion");getJSONArray("attachments").getJSONObject(0).remove("contentId")}
             val legacy=db.decodeMessage(old)
             assertEquals("",legacy.htmlBody);assertEquals(0,legacy.contentVersion);assertEquals("",legacy.attachments.single().contentId)
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
+    @Test fun spamAndRestoreQueuesSurviveReopeningTheDatabaseAndCanBeCancelled() {
+        val c=context();var db=LocalStore(c)
+        try {
+            db.putAccount(account())
+            val original=message().copy(uid=12,validity=7,localFolder="inbox")
+            for(kind in listOf(ActionKind.SPAM,ActionKind.RESTORE_INBOX)) {
+                db.putMessage(original)
+                val action=MailAction("move","a",original.id,kind,db.encodeMessage(original).toString())
+                db.applyActions(listOf(original.copy(pendingDelete=true)),actions=listOf(action))
+                db.close();db=LocalStore(c)
+                assertEquals(kind,db.actions().single().kind)
+                assertTrue(ActionRules.overlay(db.messages(),db.actions()).single().pendingDelete)
+                assertEquals(original.body,db.message(original.id)?.body)
+                assertTrue(db.finishAction(db.actions().single(),items=listOf(original)))
+                assertTrue(db.actions().isEmpty());assertFalse(db.message(original.id)!!.pendingDelete)
+            }
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
+    @Test fun cancellingAnOfflineSpamMoveRestoresTheMessageAndBothInboxCounters()=kotlinx.coroutines.runBlocking {
+        val c=context();val db=LocalStore(c)
+        try {
+            db.putAccount(account())
+            val original=message().copy(uid=12,validity=7,localFolder="inbox",unread=true)
+            db.putMessage(original)
+            c.getSharedPreferences("sync-baseline",Context.MODE_PRIVATE).edit().putInt("count:a",25).putInt("unread:a",7).commit()
+            val repo=MailRepository(c);repo.load()
+            assertEquals(setOf(original.id),repo.spamMessages(setOf(original.id),false).removed)
+            assertEquals(24,repo.snapshot.value.history["a"]?.total)
+            assertEquals(6,repo.snapshot.value.history["a"]?.unread)
+            val queued=repo.snapshot.value.actions.single()
+            assertTrue(repo.snapshot.value.messages.single().pendingDelete)
+            repo.cancelAction(queued.id)
+            assertEquals(25,repo.snapshot.value.history["a"]?.total)
+            assertEquals(7,repo.snapshot.value.history["a"]?.unread)
+            assertFalse(repo.snapshot.value.messages.single().pendingDelete)
+            assertTrue(repo.snapshot.value.actions.isEmpty())
+            assertEquals(original.body,db.message(original.id)?.body)
         }finally{db.close();c.deleteDatabase("mail-v1.db")}
     }
 

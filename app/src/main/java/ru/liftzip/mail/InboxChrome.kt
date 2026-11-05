@@ -1,6 +1,6 @@
 package ru.liftzip.mail
 
-/** Scroll position, with no clock, threshold, spring, or release-time snapping. */
+/** Panel motion follows the actual drag and fling pixels. */
 class InboxChromeController(initialFraction: Float=1f) {
     var fraction=initialFraction.takeIf{it.isFinite()}?.coerceIn(0f,1f)?:1f
         private set
@@ -25,9 +25,13 @@ class InboxChromeController(initialFraction: Float=1f) {
 data class NoticeAnchor(val owner: String,val top: Float)
 
 object InboxInteractionRules {
+    /** Finish uncovering the clipped row before opening panels above it. */
+    fun revealAlignment(delta: Float,fraction: Float,rowOffset: Int)=
+        if(delta.isFinite() && delta>0f && fraction==0f)minOf(delta,rowOffset.coerceAtLeast(0).toFloat())else 0f
     fun viewport(height: Int,header: Int,bottom: Int,fraction: Float): InboxViewportGeometry {
-        val offset=kotlin.math.round(header*fraction.coerceIn(0f,1f)).toInt()
-        return InboxViewportGeometry(height,offset,height-bottom,offset+bottom)
+        val progress=fraction.coerceIn(0f,1f)
+        val offset=kotlin.math.round(header*progress).toInt()
+        return InboxViewportGeometry(height,offset,height-bottom,offset+kotlin.math.round(bottom*progress).toInt())
     }
     fun pullProgress(distance: Float,refreshing: Boolean,accepted: Boolean,gestureArmed: Boolean)=if(refreshing || accepted || !gestureArmed)0f else distance.coerceIn(0f,1f)
     fun noticeBottom(rootHeight: Int,route: String,anchor: NoticeAnchor?,safeBottom: Int,gap: Int): Int {

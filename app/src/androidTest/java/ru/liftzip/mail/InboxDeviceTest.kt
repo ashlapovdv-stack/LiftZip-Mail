@@ -153,4 +153,26 @@ class InboxDeviceTest {
         rule.waitForIdle();rule.runOnIdle{assertEquals(1f,progress.floatValue,0f)}
         rule.onNodeWithText("Header").assertIsDisplayed();rule.onNodeWithText("Navigation").assertIsDisplayed()
     }
+    @Test fun reversingAHiddenListFinishesTheWholeCardBeforeRevealingPanels() {
+        val progress=mutableFloatStateOf(0f);val controller=InboxChromeController(0f)
+        val list=LazyListState(10,100)
+        rule.setContent {
+            val fraction=remember{{progress.floatValue}}
+            val connection=remember{InboxScrollConnection(controller,progress,{false},{!list.canScrollBackward},{false},{},{},list)}
+            MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),
+                header={Text("Header",Modifier.fillMaxWidth().height(180.dp))},bottom={alpha->InboxFadingControl(alpha){Text("Tabs",Modifier.height(80.dp))}},list={padding->
+                    LazyColumn(Modifier.fillMaxSize().testTag("boundary-list").nestedScroll(connection),state=list,contentPadding=padding) {
+                        items(100,key={it}){Text("Card $it",Modifier.fillMaxWidth().height(120.dp))}
+                    }
+                })}
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("boundary-list").performTouchInput{down(center);moveBy(Offset(0f,60f));advanceEventTime(500);up()}
+        rule.waitForIdle()
+        rule.runOnIdle{assertEquals(0f,progress.floatValue,0f);assertTrue(list.firstVisibleItemScrollOffset in 1..99)}
+        rule.onNodeWithTag("boundary-list").performTouchInput{down(center);moveBy(Offset(0f,160f));advanceEventTime(500);up()}
+        rule.waitForIdle()
+        rule.runOnIdle{assertTrue(progress.floatValue>0f);assertEquals(10,list.firstVisibleItemIndex);assertEquals(0,list.firstVisibleItemScrollOffset)}
+        saveDeviceScreenshot(rule,"row-boundary")
+    }
 }

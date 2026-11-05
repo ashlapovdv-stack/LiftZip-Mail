@@ -234,6 +234,13 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             (if(result.errors.isNotEmpty())(if(result.removed.isNotEmpty())"\n" else "")+result.errors.joinToString("\n")else ""),error=result.errors.isNotEmpty())
     }
     fun startHistory(ids: List<String>)=work{HistoryWorker.enqueue(getApplication(),repo.startHistory(ids));notice("Загрузка истории запущена")}
+    fun spamMessages(ids: Set<String>,toInbox: Boolean,onMoved: (Set<String>)->Unit)=work {
+        val result=repo.spamMessages(ids,toInbox)
+        mutable.update{it.copy(opened=it.opened?.takeUnless{m->m.id in result.removed})}
+        onMoved(result.removed)
+        val message=if(result.removed.isNotEmpty())"${if(toInbox)"К возврату во Входящие" else "К перемещению в Спам"}: ${result.removed.size}. Действие сохранено в очереди." else "Подходящих писем нет."
+        notice((listOf(message)+result.errors).joinToString("\n"),error=result.errors.isNotEmpty())
+    }
     fun resumeHistory()=startHistory(mutable.value.historyDownload.accountIds)
     fun pauseHistory()=work{repo.pauseHistory();HistoryWorker.cancel(getApplication());notice("Загрузка приостановлена. Полученные письма сохранены.")}
     fun setDefaultAccount(id: String?)=work{repo.setDefaultAccount(id);notice("Ящик отправителя по умолчанию сохранён")}

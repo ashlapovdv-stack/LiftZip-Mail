@@ -11,8 +11,21 @@ class InboxInteractionTest {
         for(step in 0..100) {
             val g=InboxInteractionRules.viewport(800,218,152,step/100f)
             assertEquals(648,g.bottomY)
-            assertEquals(648,g.listHeight+g.listY-g.listBottomPadding)
+            assertEquals(800-kotlin.math.round(152*step/100f).toInt(),g.listHeight+g.listY-g.listBottomPadding)
         }
+    }
+    @Test fun aHiddenHeaderWaitsForTheClippedRowAndUsesOnlyTheRemainingDrag() {
+        assertEquals(30f,InboxInteractionRules.revealAlignment(30f,0f,80),0f)
+        assertEquals(80f,InboxInteractionRules.revealAlignment(120f,0f,80),0f)
+        assertEquals(0f,InboxInteractionRules.revealAlignment(120f,0f,0),0f)
+        assertEquals(0f,InboxInteractionRules.revealAlignment(-20f,0f,80),0f)
+        assertEquals(0f,InboxInteractionRules.revealAlignment(20f,0.5f,80),0f)
+        assertEquals(0f,InboxInteractionRules.revealAlignment(Float.NaN,0f,80),0f)
+        val controller=InboxChromeController(0f).apply{measureHeader(200f)}
+        val alignment=InboxInteractionRules.revealAlignment(120f,controller.fraction,80)
+        val consumed=controller.scroll(120f-alignment)
+        assertEquals(120f,alignment+consumed,0f)
+        assertEquals(0.2f,controller.fraction,0.00001f)
     }
     @Test fun reversingTheAnimationHasNoViewportResizeOrPositionJumpAtTheEndpoints() {
         val fractions=(0..100).map{it/100f}+(100 downTo 0).map{it/100f}

@@ -43,14 +43,19 @@ import androidx.compose.ui.unit.dp
 /** Distinguishes native fling deltas from unrelated programmatic positioning. */
 class InboxScrollConnection(private val controller: InboxChromeController,private val progress: MutableFloatState,
     private val forced: ()->Boolean,private val canPull: ()->Boolean,private val refreshing: ()->Boolean,
-    private val onHide: ()->Unit,private val onPull: ()->Unit): NestedScrollConnection {
+    private val onHide: ()->Unit,private val onPull: ()->Unit,private val listState: LazyListState?=null): NestedScrollConnection {
     override fun onPreScroll(available: Offset,source: NestedScrollSource): Offset {
         if(source==NestedScrollSource.UserInput)controller.endFling()
         val before=controller.fraction
-        val consumed=controller.scroll(available.y,forced=forced(),userInput=source==NestedScrollSource.UserInput)
+        val force=forced()
+        val alignment=if(!force && listState!=null)InboxInteractionRules.revealAlignment(available.y,before,listState.firstVisibleItemScrollOffset)else 0f
+        // dispatchRawDelta handles only this row fragment; the remaining motion is still
+        // distributed through nested scroll, so neither the row nor the header moves twice.
+        val aligned=if(alignment>0f && listState!=null)-listState.dispatchRawDelta(-alignment)else 0f
+        val consumed=controller.scroll(available.y-aligned,forced=force,userInput=source==NestedScrollSource.UserInput)
         progress.floatValue=controller.fraction
         if(before==1f && controller.fraction<1f)onHide()
-        return Offset(0f,consumed)
+        return Offset(0f,aligned+consumed)
     }
     override fun onPostScroll(consumed: Offset,available: Offset,source: NestedScrollSource): Offset {
         if(source==NestedScrollSource.UserInput && available.y>0 && canPull() && !refreshing() && controller.fraction>=1f)onPull()
@@ -62,15 +67,18 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
 
 /** Stable insets are read by LazyColumn in measurement, never by the screen's composition. */
 @Composable fun InboxViewport(fraction: ()->Float,onHeaderMeasured: (Float)->Unit,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable (contentAlpha: ()->Float)->Unit,
-    list: @Composable (bottomPadding: PaddingValues)->Unit,onPanelsMeasured: (InboxPanelMetrics)->Unit={}) {
+    list: @Composable (bottomPadding: PaddingValues)->Unit,onPanelsMeasured: (InboxPanelMetrics)->Unit={},endInset: Dp=0.dp) {
     val density=LocalDensity.current
     val headerHeight=remember{mutableIntStateOf(0)}
     val bottomHeight=remember{mutableIntStateOf(0)}
-    val insets=remember(fraction,density){object: PaddingValues {
+    val insets=remember(fraction,density,endInset){object: PaddingValues {
         override fun calculateTopPadding()=0.dp
         override fun calculateLeftPadding(layoutDirection: LayoutDirection)=0.dp
         override fun calculateRightPadding(layoutDirection: LayoutDirection)=0.dp
-        override fun calculateBottomPadding()=with(density){(headerHeight.intValue*fraction().coerceIn(0f,1f)+bottomHeight.intValue).toDp()+12.dp}
+        override fun calculateBottomPadding(): Dp {
+            val progress=fraction().coerceIn(0f,1f)
+            return with(density){((headerHeight.intValue+bottomHeight.intValue)*progress).toDp()}+endInset*(1f-progress)+12.dp
+        }
     }}
     Layout(modifier=modifier.clipToBounds(),content={
         Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){header()}
