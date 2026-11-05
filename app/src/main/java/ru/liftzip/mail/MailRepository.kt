@@ -361,16 +361,19 @@ class MailRepository(private val context: Context) {
             val rows=chosen.filter{SpamRules.eligible(it,toInbox)}
             val kind=if(toInbox)ActionKind.RESTORE_INBOX else ActionKind.SPAM
             db.applyActions(rows.map{it.copy(pendingDelete=true)},actions=rows.map{actionFor(it,kind)})
-            rows.groupBy{it.accountId}.forEach{(id,before)->
-                val edit=syncPrefs.edit()
-                if(syncPrefs.contains("unread:$id"))edit.putInt("unread:$id",TrashRules.unreadAfter(syncPrefs.getInt("unread:$id",0),before))
-                if(syncPrefs.contains("count:$id"))edit.putInt("count:$id",(syncPrefs.getInt("count:$id",0)-before.count(SyncRules::remoteInbox)).coerceAtLeast(0))
-                edit.apply()
-            }
+            spamCounts(rows,-1)
             refresh()
             DeleteResult(rows.map{it.id}.toSet(),if(rows.size<chosen.size)listOf("Для части выбранных писем это действие недоступно.")else emptyList())
         }
         wakeActions();result
+    }
+    private fun spamCounts(rows: List<MailItem>,delta: Int) {
+        rows.filter(SyncRules::remoteInbox).groupBy{it.accountId}.forEach{(id,messages)->
+            val edit=syncPrefs.edit()
+            if(syncPrefs.contains("count:$id"))edit.putInt("count:$id",(syncPrefs.getInt("count:$id",0)+delta*messages.size).coerceAtLeast(0))
+            if(syncPrefs.contains("unread:$id"))edit.putInt("unread:$id",(syncPrefs.getInt("unread:$id",0)+delta*messages.count{it.unread}).coerceAtLeast(0))
+            edit.apply()
+        }
     }
     /** Called under the short data lock, after server acknowledgement or for local-only mail. */
     private fun removeCached(ids: Set<String>) {
@@ -990,6 +993,7 @@ class MailRepository(private val context: Context) {
                             if(a.kind==ActionKind.SEND && current!=null)db.putMessage(current.copy(delivery=if(status=="uncertain")"uncertain" else "queued"))
                             if(status=="failed" && current!=null && sameActionServer(a)) {
                                 val original=actionMessage(a)
+                                if(a.kind==ActionKind.SPAM || a.kind==ActionKind.RESTORE_INBOX)spamCounts(listOf(current),1)
                                 db.putMessage(current.copy(pendingDelete=false,unread=if(a.kind==ActionKind.FLAGS && a.unread!=null)original.unread else current.unread,
                                     starred=if(a.kind==ActionKind.FLAGS && a.starred!=null)original.starred else current.starred))
                             }
@@ -1005,6 +1009,7 @@ class MailRepository(private val context: Context) {
             val a=db.action(id)?:return@data
             require(a.status!="uncertain" || confirmUncertain){"Сначала проверьте доставку и подтвердите повторную отправку."}
             require(a.status !in setOf("running","sending")){"Действие уже выполняется."}
+            if(!a.active && (a.kind==ActionKind.SPAM || a.kind==ActionKind.RESTORE_INBOX) && sameActionServer(a))spamCounts(listOfNotNull(db.message(a.messageId)),-1)
             db.putAction(a.copy(status="pending",nextAttempt=0,error="",lease=""))
             if(a.kind==ActionKind.SEND)db.message(a.messageId)?.let{db.putMessage(it.copy(delivery="queued"))}
             refresh()
@@ -1021,7 +1026,8 @@ class MailRepository(private val context: Context) {
                 ActionKind.FLAGS->current?.copy(unread=if(a.unread!=null)original.unread else current.unread,starred=if(a.starred!=null)original.starred else current.starred)
                 else->null
             }
-            db.finishAction(a,items=listOfNotNull(restored));refresh()
+            if(db.finishAction(a,items=listOfNotNull(restored)) && a.active && (a.kind==ActionKind.SPAM || a.kind==ActionKind.RESTORE_INBOX))spamCounts(listOfNotNull(restored),1)
+            refresh()
         }
     }
     private data class AttachmentRequest(val account: MailAccount,val version: Long)
