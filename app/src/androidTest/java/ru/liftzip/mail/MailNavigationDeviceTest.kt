@@ -31,14 +31,17 @@ class MailNavigationDeviceTest {
         }
         rule.waitForIdle()
     }
-    private fun back(){rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()};rule.waitForIdle()}
+    private fun back(){rule.waitForIdle();rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()};rule.waitForIdle()}
     @Test fun backReturnsFromUnreadAndServerSpamToInboxBeforeAskingToExit() {
         screen();back()
         rule.runOnIdle{assertEquals(MailFolder.INBOX,folder.value);assertEquals(0,exits)}
         rule.onNodeWithText("Выйти из Почты?").assertDoesNotExist()
         back();rule.onNodeWithText("Выйти из Почты?").assertIsDisplayed()
         rule.onNodeWithText("Остаться").performClick()
-        rule.runOnIdle{path.value="Spam"}
+        rule.onNodeWithContentDescription("Выбрать ящик").performClick()
+        rule.onNodeWithText("Спам",substring=false).performClick()
+        rule.waitForIdle()
+        rule.runOnIdle{assertEquals("Spam",path.value)}
         back();rule.runOnIdle{assertNull(path.value);assertEquals(0,exits)}
         rule.onNodeWithText("Выйти из Почты?").assertDoesNotExist()
         back();rule.onNodeWithText("Выйти из Почты?").assertIsDisplayed()
