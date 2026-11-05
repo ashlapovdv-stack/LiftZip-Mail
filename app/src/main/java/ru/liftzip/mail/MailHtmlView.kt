@@ -52,7 +52,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             override fun onReceivedSslError(view: WebView,handler: SslErrorHandler,error: SslError){handler.cancel()}
             override fun onReceivedHttpAuthRequest(view: WebView,handler: HttpAuthHandler,host: String,realm: String){handler.cancel()}
             override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight()}
-            override fun onPageFinished(view: WebView,url: String){postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){publishHeight();ready()}}})}
+            override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){publishHeight();ready()}}})}
         }
     }
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
@@ -64,8 +64,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight()}
     private fun publishHeight() {
-        val value=ceil(contentHeight*renderScale).toInt().coerceIn(1,500_000)
-        if(value==lastHeight || contentHeight<=0 || !live)return
+        if(!live)return
+        val content=contentHeight
+        val value=ceil(content*renderScale).toInt().coerceIn(1,500_000)
+        if(value==lastHeight || content<=0)return
         lastHeight=value
         post{if(live)heightChanged(value)}
     }
@@ -76,14 +78,15 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
-    val foreground="#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
-    val background="#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
+    // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
+    val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
+    val background=if(message.htmlBody.isNotBlank())"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
     val document by produceState<MailHtmlDocument?>(null,message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,hasHistory,external,foreground,background) {
         value=withContext(Dispatchers.Default){HtmlMail.document(message.htmlBody,plain,message.attachments,hasHistory,external,foreground,background,identity="${message.accountId}:${message.id}:${message.validity}")}
     }
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
-    val loader=remember(message.id,message.contentVersion){MailImageLoader(context,message.accountId){latestInline(it)}}
+    val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     val ready=document
     if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)

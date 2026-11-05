@@ -98,4 +98,12 @@ class HtmlMailTest {
         stream.write(byteArrayOf(1,2,3));assertThrows(java.io.IOException::class.java){stream.write(byteArrayOf(4,5))}
         assertArrayEquals(byteArrayOf(1,2,3),saved.toByteArray())
     }
+    @Test fun senderBodyColorsAndLegacyFontFormattingSurviveTheBodyFragment() {
+        val clean=HtmlMail.cleanSource("<html><body bgcolor='#000000' style='color:white' dir='rtl'><font color='white'>Visible</font></body></html>")
+        val doc=Jsoup.parse(clean)
+        val wrapper=doc.selectFirst("div")!!
+        assertTrue(wrapper.attr("style").contains("color:white"));assertTrue(wrapper.attr("style").contains("background-color:#000000"))
+        assertEquals("rtl",wrapper.attr("dir"));assertEquals("white",doc.selectFirst("font")!!.attr("color"))
+    }
+
 }

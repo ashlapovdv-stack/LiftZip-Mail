@@ -23,7 +23,7 @@ object HtmlMail {
     const val ORIGIN="https://mail.liftzip.invalid/"
     private val links=Regex("(?i)\\b(?:https?://[^\\s<>]+|mailto:[^\\s<>]+)")
     private val unsafe="script,iframe,frame,frameset,object,embed,applet,form,input,button,select,textarea,link,base,meta,svg,math,video,audio,source,track,canvas,noscript,template"
-    private fun safelist()=Safelist.relaxed().addTags("style","section","article","header","footer","main","hr","s","strike","center")
+    private fun safelist()=Safelist.relaxed().addTags("style","section","article","header","footer","main","hr","s","strike","center","font").addAttributes("font","color","face","size")
         .addAttributes(":all","style","class","id","dir","align","valign","width","height","bgcolor","border","cellpadding","cellspacing","role")
         .addProtocols("img","src","cid","data").removeProtocols("a","href","ftp")
     fun link(raw: String): String? {
@@ -48,6 +48,15 @@ object HtmlMail {
         doc.select(unsafe).remove()
         // Email styles commonly live in head. Keep them for layout, remove them from plain text.
         doc.head().select("style").toList().asReversed().forEach{doc.body().prependChild(it)}
+        val body=doc.body()
+        if(body.attributes().size()>0) {
+            val wrapper=Element("div")
+            body.attributes().forEach{wrapper.attr(it.key,it.value)}
+            val color=body.attr("bgcolor")
+            if(color.matches(Regex("#[a-fA-F0-9]{3,8}|[a-zA-Z]{1,24}")))wrapper.attr("style",wrapper.attr("style")+";background-color:$color")
+            body.childNodes().toList().forEach{wrapper.appendChild(it)}
+            body.appendChild(wrapper)
+        }
         val safe=Cleaner(safelist()).clean(doc)
         safe.outputSettings().prettyPrint(false)
         safe.select("a").forEach{a->val url=link(a.attr("href"));if(url==null)a.removeAttr("href")else a.attr("href",url)}

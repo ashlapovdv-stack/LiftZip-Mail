@@ -4,6 +4,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
@@ -89,12 +93,15 @@ class HtmlMailDeviceTest {
         val message=MailItem("html-native","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Прогноз",body="Аналитики поделились прогнозом на Q4",date=1,
             htmlBody="<p>Аналитики поделились прогнозом на Q4</p><img src='cid:chart' width='40' height='40'>",contentVersion=MailContent.FORMAT_VERSION,attachments=listOf(attachment))
         try {
-            rule.setContent {MailTheme {Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            rule.setContent {MaterialTheme(colorScheme=darkColorScheme(surface=Color(0xFF171B16),onSurface=Color.White)) {Column(Modifier.fillMaxSize().background(Color(0xFF171B16)).verticalScroll(rememberScrollState())) {
                 MailHtmlBody(message,message.body,false,onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
             }}}
             rule.waitUntil(15_000){requests.get()==1}
             rule.waitUntil(10_000){greenPixels()>50}
             rule.onNodeWithText("Показать изображения").assertDoesNotExist()
+            val pixels=rule.onRoot().captureToImage().toPixelMap()
+            val canvas=pixels[pixels.width-2,(40*c.resources.displayMetrics.density).toInt()]
+            assertTrue("Rich mail must keep a readable light canvas in a dark app",canvas.red>0.9f && canvas.green>0.9f && canvas.blue>0.9f)
             saveDeviceScreenshot(rule,"html-inline")
         }finally{file.delete()}
     }
