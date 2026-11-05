@@ -10,6 +10,7 @@ import kotlin.math.roundToInt
 /** One continuous scroll: header -> bounded HTML viewport -> attachments and reply controls. */
 class ReaderScroll(val outer: ScrollState) {
     var viewportTop=0
+        set(value){bodyAnchor+=field-value;field=value}
     var viewportHeight by mutableIntStateOf(0)
     var view: MailHtmlWebView?=null
     private var bodyAnchor=0

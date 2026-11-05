@@ -107,30 +107,34 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         return scrollY-before
     }
     private fun movePage(pixels: Float)=scrollPage?.invoke(pixels)?:scrollContent(pixels.roundToInt()).toFloat()
+    private fun track(event: MotionEvent) {
+        // Layout moves the WebView while its header scrolls. Velocity must use screen coordinates.
+        MotionEvent.obtain(event).also{copy->copy.offsetLocation(event.rawX-event.x,event.rawY-event.y);velocity?.addMovement(copy);copy.recycle()}
+    }
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if(!live)return false
         when(event.actionMasked) {
             MotionEvent.ACTION_DOWN->{
                 fling.abortAnimation();removeCallbacks(animateFling)
-                velocity?.recycle();velocity=VelocityTracker.obtain().also{it.addMovement(event)}
-                startX=event.x;startY=event.y;lastY=event.y;dragging=false;zooming=false
+                velocity?.recycle();velocity=VelocityTracker.obtain();track(event)
+                startX=event.rawX;startY=event.rawY;lastY=event.rawY;dragging=false;zooming=false
                 parent?.requestDisallowInterceptTouchEvent(true)
             }
             MotionEvent.ACTION_POINTER_DOWN->{zooming=true;dragging=false}
             MotionEvent.ACTION_MOVE->{
-                velocity?.addMovement(event)
+                track(event)
                 if(!zooming && event.pointerCount==1) {
-                    val dy=startY-event.y
-                    if(!dragging && abs(dy)>touch.scaledTouchSlop && abs(dy)>abs(startX-event.x)) {
+                    val dy=startY-event.rawY
+                    if(!dragging && abs(dy)>touch.scaledTouchSlop && abs(dy)>abs(startX-event.rawX)) {
                         dragging=true
                         MotionEvent.obtain(event).also{it.action=MotionEvent.ACTION_CANCEL;super.onTouchEvent(it);it.recycle()}
                         lastY=startY-kotlin.math.sign(dy)*touch.scaledTouchSlop
                     }
-                    if(dragging){movePage(lastY-event.y);lastY=event.y;return true}
+                    if(dragging){movePage(lastY-event.rawY);lastY=event.rawY;return true}
                 }
             }
             MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->{
-                velocity?.addMovement(event)
+                track(event)
                 if(dragging && event.actionMasked==MotionEvent.ACTION_UP) {
                     velocity?.computeCurrentVelocity(1000,touch.scaledMaximumFlingVelocity.toFloat())
                     val speed=-(velocity?.yVelocity?:0f).roundToInt()
