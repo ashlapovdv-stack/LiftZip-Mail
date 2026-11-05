@@ -212,20 +212,26 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             message.copy(body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true,internetMessageId=message.internetMessageId.ifBlank{(remote as? MimeMessage)?.messageID.orEmpty()},recipients=message.recipients.ifBlank{HeaderText.decode((remote as? MimeMessage)?.getHeader("To",null).orEmpty())})
         }finally{folder.close(false)}
     }
-    suspend fun trashMany(a: MailAccount,password: String,messages: List<MailItem>,before: suspend ()->Boolean,onConfirmed: suspend (Set<Long>)->Boolean)=withContext(Dispatchers.IO) {
-        if(messages.isEmpty())return@withContext
+    suspend fun trashMany(a: MailAccount,password: String,messages: List<MailItem>,before: suspend ()->Boolean,onConfirmed: suspend (Set<Long>)->Boolean) {
+        moveMany(a,password,messages,FolderRole.TRASH,before,onConfirmed)
+    }
+    suspend fun moveMany(a: MailAccount,password: String,messages: List<MailItem>,role: FolderRole,before: suspend ()->Boolean,onConfirmed: suspend (Set<Long>)->Boolean): String=withContext(Dispatchers.IO) {
+        require(role in setOf(FolderRole.TRASH,FolderRole.JUNK,FolderRole.INBOX))
+        val title=when(role){FolderRole.TRASH->"Корзина";FolderRole.JUNK->"Спам";else->"Входящие"}
+        if(messages.isEmpty())return@withContext ""
         runInterruptible{store(a,password)}.use{connection->
             val imap=connection as IMAPStore
             val method=runInterruptible{TrashRules.method(imap.hasCapability("MOVE"),imap.hasCapability("UIDPLUS"))}
-                ?:error("Сервер не поддерживает безопасное перемещение в Корзину. Письма не удалены.")
+                ?:error("Сервер не поддерживает безопасное перемещение в «$title». Письма не перемещены.")
             val target=runInterruptible {
                 val folders=connection.defaultFolder.list("*").mapNotNull{it as? IMAPFolder}
-                val name=TrashRules.destination(folders.map{TrashFolderInfo(it.fullName,it.attributes.toSet())})
-                    ?:error("Не найдена папка Корзина на сервере. Письма не удалены.")
+                val available=folders.map{TrashFolderInfo(it.fullName,it.attributes.toSet())}
+                val name=(if(role==FolderRole.TRASH)TrashRules.destination(available)else SpamRules.destination(available,role))
+                    ?:error("Не найдена папка «$title» на сервере. Письма не перемещены.")
                 connection.getFolder(name)
             }
             val folder=connection.getFolder(messages.first().remoteFolder) as IMAPFolder
-            require(!folder.fullName.equals(target.fullName,true)){"Письма уже находятся в Корзине."}
+            require(!folder.fullName.equals(target.fullName,true)){"Письма уже находятся в папке «$title»."}
             runInterruptible{folder.open(Folder.READ_WRITE)}
             try {
                 require(messages.all{it.accountId==a.id && it.remoteFolder==folder.fullName && it.validity==folder.uidValidity}){"Папка изменилась. Обновите список писем."}
@@ -238,6 +244,7 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
                         }
                     }},before=before,onConfirmed=onConfirmed)
             }finally{withContext(NonCancellable){runInterruptible{runCatching{folder.close(false)}}}}
+            target.fullName
         }
     }
     fun flagsMany(a: MailAccount,password: String,messages: List<MailItem>,seen: Boolean?=null,starred: Boolean?=null): Set<Long> = store(a,password).use { store->

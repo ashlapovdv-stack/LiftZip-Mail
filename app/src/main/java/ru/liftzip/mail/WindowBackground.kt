@@ -30,7 +30,7 @@ fun ComponentActivity.edgeMailWindow() {
     if(Build.VERSION.SDK_INT>=29)window.isNavigationBarContrastEnforced=false
 }
 
-/** Paint outside safe insets; only the interactive viewport is inset. */
+/** Artwork fills the window; individual visible controls own their safe insets. */
 @Composable fun InboxCanvas(style: MailStyle,content: @Composable ()->Unit) {
     val density=LocalDensity.current
     val top=with(density){WindowInsets.safeDrawing.getTop(density).toDp()}

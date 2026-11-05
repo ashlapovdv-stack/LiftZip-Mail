@@ -58,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
@@ -164,6 +165,7 @@ private val Paper=Color(0xFFF8F9F6)
         download=null
     }
     fun goInbox(){route="inbox";selected=null;notificationFallback=null}
+    fun systemInbox(){folder=MailFolder.INBOX;serverPath=null;preview=null;editing=null;goInbox()}
     fun openExternal(file: OpenedAttachment) {
         runCatching {
             val uri=Uri.parse(file.uri)
@@ -204,13 +206,8 @@ private val Paper=Color(0xFFF8F9F6)
     }
     BackHandler(enabled=route!="inbox") {
         val d=draft
-        if(route=="edit"){route="settings";editing=null}
-        else if(route in setOf("delivery","sender","advanced","diagnostics","about","appearance","storage"))route="settings"
-        else if(route=="folder-history")route="history"
-        else if(route=="history")route=historyReturn
-        else if(route=="preview"){preview=null;route="reader"}
-        else if(route=="compose" && d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}
-        else goInbox()
+        if(route=="compose" && d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;systemInbox()}}
+        else systemInbox()
     }
     if(route!="inbox" || !s.loaded || s.accounts.isEmpty())SystemBarIcons()
     Scaffold(modifier=Modifier.onSizeChanged{rootHeight=it.height},snackbarHost={
@@ -267,6 +264,7 @@ private val Paper=Color(0xFFF8F9F6)
                         onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
+                        onSpam={vm.spamMessages(setOf(message.id),SpamRules.junk(message)){moved->if(message.id in moved && route=="reader" && selected==message.id)goInbox()}},
                         onReply={compose(ComposeDraft(accountId=message.accountId,to=message.senderEmail,
                             subject=if(message.subject.startsWith("Re:",true))message.subject else "Re: ${message.subject}",body="\n\n──────────\n${message.sender} пишет:\n${message.body}"))},
                         onForward={
@@ -280,7 +278,7 @@ private val Paper=Color(0xFFF8F9F6)
                     val memory=inboxMemory.getOrPut(memoryKey){InboxMemory()}
                     savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,serverPath,memory,onAccount={currentAccount=it;serverPath=null},onEnable=vm::setAccountEnabled,onFolder={folder=it;serverPath=null},
                     onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path},onQueue={route="actions"},onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
-                    onNoticeAnchor={anchor("inbox",it)},onSettings={route="settings"},onDelivery={route="delivery"},onRefresh={if(serverPath!=null || folder in setOf(MailFolder.SENT,MailFolder.DRAFTS))vm.refreshFolders(folder,currentAccount,serverPath)else vm.refresh()},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onDelete=vm::deleteMessages,onSearch=vm::search,onOpen={m->
+                    onNoticeAnchor={anchor("inbox",it)},onSettings={route="settings"},onDelivery={route="delivery"},onRefresh={if(serverPath!=null || folder in setOf(MailFolder.SENT,MailFolder.DRAFTS))vm.refreshFolders(folder,currentAccount,serverPath)else vm.refresh()},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onDelete=vm::deleteMessages,onSpam=vm::spamMessages,onSearch=vm::search,onOpen={m->
                         selected=m.id
                         if(FolderRules.draft(m))vm.openDraft(m.id){full->if(route=="inbox" && selected==m.id)compose(full)}
                         else route="reader"
@@ -308,7 +306,8 @@ private val Paper=Color(0xFFF8F9F6)
 @Composable internal fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,serverPath: String?,memory: InboxMemory,onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,
     onServerFolder: (ServerFolder)->Unit,onQueue: ()->Unit,
     onAdd: ()->Unit,onExit: ()->Unit,onNoticeAnchor: (Float?)->Unit,onSettings: ()->Unit,onDelivery: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
-    onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onDelete: (Set<String>,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit) {
+    onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onDelete: (Set<String>,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit,
+    onSpam: (Set<String>,Boolean,(Set<String>)->Unit)->Unit={_,_,_->}) {
     val style=LocalMailStyle.current
     val navigationAccent=if(isSystemInDarkTheme())MaterialTheme.colorScheme.primary else style.navAccent
     val drawer=rememberDrawerState(DrawerValue.Closed)
@@ -321,6 +320,9 @@ private val Paper=Color(0xFFF8F9F6)
     val controlsProgress=rememberSaveable{mutableFloatStateOf(1f)}
     val focus=LocalFocusManager.current
     val keyboard=LocalSoftwareKeyboardController.current
+    val density=LocalDensity.current
+    val safeTop=WindowInsets.safeDrawing.getTop(density)
+    val safeBottom=with(density){WindowInsets.safeDrawing.getBottom(density).toDp()}
     var fabTop by remember{mutableStateOf<Float?>(null)}
     var navigationTop by remember{mutableStateOf<Float?>(null)}
     val anchorCallback by rememberUpdatedState(onNoticeAnchor)
@@ -357,7 +359,7 @@ private val Paper=Color(0xFFF8F9F6)
     LaunchedEffect(selectionMode){snapshotFlow{if(controlsProgress.floatValue>0.02f)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
     val scrollControls=remember(memory,chrome,focus,keyboard){InboxScrollConnection(chrome,controlsProgress,
         forced={forceControls},canPull={!memory.list.canScrollBackward},refreshing={latestRefreshing},
-        onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true})}
+        onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true},listState=memory.list)}
     LaunchedEffect(selectionMode,drawer.currentValue,s.autoHidePanels){if(selectionMode || !s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsProgress.floatValue=1f}}
 
     val current=s.accounts.find{it.id==accountId}
@@ -368,6 +370,10 @@ private val Paper=Color(0xFFF8F9F6)
     val loaded=s.messages.count{it.localFolder=="inbox" && it.accountId in selectedIds}
     fun toggle(id: String){checked=ArrayList(if(id in selected)selected-id else selected+id)}
     fun mark(unread: Boolean){onMarkRead(selected,unread){updated->checked=ArrayList(checked.filter{it !in updated})}}
+    fun spam(toInbox: Boolean){onSpam(selected,toInbox){updated->checked=ArrayList(checked.filter{it !in updated})}}
+    val selectedRows=visible.filter{it.id in selected}
+    val canSpam=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,false)}
+    val canRestore=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,true)}
     deleting?.let{ids->
         val rows=s.messages.filter{it.id in ids}
         AlertDialog(onDismissRequest={deleting=null},title={Text("Удалить выбранные письма?")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -390,7 +396,11 @@ private val Paper=Color(0xFFF8F9F6)
             if(moving)memory.pinned=index==0 && offset==0
         }
     }
-    SystemBarIcons(decorativeStatus=style!=MailStyle.STANDARD && drawer.currentValue==DrawerValue.Closed && drawer.targetValue==DrawerValue.Closed)
+    val artworkStatus by remember(style,drawer,controlsProgress,panelMetrics,safeTop){derivedStateOf{
+        style!=MailStyle.STANDARD && drawer.currentValue==DrawerValue.Closed && drawer.targetValue==DrawerValue.Closed &&
+            (panelMetrics.value?.headerHeight?:0)*controlsProgress.floatValue>=safeTop
+    }}
+    SystemBarIcons(decorativeStatus=artworkStatus)
     InboxCanvas(style) {
     ModalNavigationDrawer(drawerState=drawer,drawerContent={
         ModalDrawerSheet {
@@ -423,7 +433,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close()};onAdd()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close()};onSettings()},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.5",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.6",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -432,14 +442,16 @@ private val Paper=Color(0xFFF8F9F6)
             when {
                 drawer.currentValue!=DrawerValue.Closed || drawer.targetValue!=DrawerValue.Closed -> scope.launch{drawer.close()}
                 selectionMode -> checked=arrayListOf()
+                folder!=MailFolder.INBOX || serverPath!=null || query.isNotBlank() -> {query="";focus.clearFocus();keyboard?.hide();onFolder(MailFolder.INBOX)}
                 else -> exitRequested=true
             }
         }
         if(exitRequested)AlertDialog(onDismissRequest=onExit,properties=DialogProperties(dismissOnClickOutside=false),
             title={Text("Выйти из Почты?")},text={Text("Нажмите «Выйти» или кнопку Android «Назад» ещё раз. Фоновая проверка почты продолжится по настройкам.")},
             confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
-        InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},modifier=Modifier.fillMaxSize().safeDrawingPadding(),header={
-            Column(Modifier.fillMaxWidth()) {
+        InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},endInset=safeBottom,
+            modifier=Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),header={
+            Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).testTag("inbox-header")) {
                 if(selectionMode)TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Text("Выбрано: ${selected.size}",maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
                     IconButton(onClick={deleting=selected.toSet()},enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить выбранные письма")}
                     Box {
@@ -448,6 +460,8 @@ private val Paper=Color(0xFFF8F9F6)
                             DropdownMenuItem(text={Text("Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={selectionMenu=false;checked=ArrayList(visibleIds)})
                             DropdownMenuItem(text={Text("Отметить прочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailRead,null)},onClick={selectionMenu=false;mark(false)})
                             DropdownMenuItem(text={Text("Отметить непрочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailUnread,null)},onClick={selectionMenu=false;mark(true)})
+                            if(canSpam)DropdownMenuItem(text={Text("В спам")},leadingIcon={Icon(Icons.Outlined.Report,null)},onClick={selectionMenu=false;spam(false)})
+                            if(canRestore)DropdownMenuItem(text={Text("Не спам · во Входящие")},leadingIcon={Icon(Icons.Outlined.MoveToInbox,null)},onClick={selectionMenu=false;spam(true)})
                         }
                     }
                 }) else if(style!=MailStyle.STANDARD)DecorativeHeader(viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,
@@ -474,7 +488,7 @@ private val Paper=Color(0xFFF8F9F6)
                 }
             }
         },bottom={alpha->
-            Column(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().testTag("inbox-bottom")) {
                 if(!selectionMode)Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp),contentAlignment=Alignment.CenterEnd) {
                     InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp)) {
                         ExtendedFloatingActionButton(onClick=onCompose,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp),
@@ -483,6 +497,7 @@ private val Paper=Color(0xFFF8F9F6)
                             icon={Icon(Icons.Outlined.Edit,null)},text={Text("Написать")})
                     }
                 }
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
                 InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)0.dp else 26.dp),
                     modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.background(MaterialTheme.colorScheme.surface).padding(horizontal=8.dp,vertical=6.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
@@ -491,11 +506,12 @@ private val Paper=Color(0xFFF8F9F6)
                             selectedIconColor=navigationAccent,selectedTextColor=navigationAccent,indicatorColor=navigationAccent.copy(alpha=0.08f)),selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
                     }
                 }
+                }
             }
         },list={bottomPadding->
                 PullToRefreshBox(isRefreshing=refreshing,state=pullState,onRefresh={if(!refreshing){pullAccepted=true;pullGestureArmed=false;onRefresh()}},
                     indicator={PullRefreshHint(pullState.distanceFraction,refreshing,pullAccepted,pullGestureArmed,Modifier.align(Alignment.TopCenter))},modifier=Modifier.fillMaxSize()) {
-                    LazyColumn(Modifier.fillMaxSize().nestedScroll(scrollControls),state=memory.list,contentPadding=bottomPadding) {
+                    LazyColumn(Modifier.fillMaxSize().testTag("inbox-list").nestedScroll(scrollControls),state=memory.list,contentPadding=bottomPadding) {
                         if(visible.isEmpty())item(key="empty") {Box(Modifier.fillMaxWidth().padding(vertical=30.dp),contentAlignment=Alignment.Center) {
                             Column(horizontalAlignment=Alignment.CenterHorizontally,modifier=Modifier.padding(24.dp)) {
                                 Icon(folderIcon(folder),null,Modifier.size(48.dp),tint=MaterialTheme.colorScheme.outline)
@@ -534,7 +550,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     val background=when{card && !checked->MaterialTheme.colorScheme.surfaceContainer;checked->MaterialTheme.colorScheme.primaryContainer;m.unread->MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.28f);else->MaterialTheme.colorScheme.surface}
     val shape=RoundedCornerShape(20.dp)
     val frame=if(card)Modifier.padding(horizontal=14.dp,vertical=5.dp).shadow(2.dp,shape).clip(shape)else Modifier
-    Row(frame.fillMaxWidth().height(IntrinsicSize.Min).background(MaterialTheme.colorScheme.surface).background(background)
+    Row(frame.fillMaxWidth().height(IntrinsicSize.Min).background(MaterialTheme.colorScheme.surface).background(background).testTag("mail-row:${m.id}")
         .combinedClickable(onClick=onOpen,onLongClick=onSelect,onLongClickLabel="Выделить письмо")
         .semantics{stateDescription=if(m.unread)"Не прочитано" else "Прочитано";selected=checked}) {
         Box(Modifier.width(4.dp).fillMaxHeight().background(if(m.unread)MaterialTheme.colorScheme.primary else Color.Transparent))
@@ -568,13 +584,23 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     if(!card)HorizontalDivider(Modifier.padding(start=75.dp),color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.45f))
 }
 
-@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit) {
+@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null) {
     val conversation by produceState<QuotedConversation?>(null,m.id,m.body) {
         value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.conversation(m.body)}
     }
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
-    Scaffold(topBar={TopAppBar(title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}})}) { padding->
+    var messageMenu by remember(m.id){mutableStateOf(false)}
+    Scaffold(topBar={TopAppBar(title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+        IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
+        if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
+            IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
+            DropdownMenu(expanded=messageMenu,onDismissRequest={messageMenu=false}) {
+                DropdownMenuItem(text={Text(if(SpamRules.junk(m))"Не спам · во Входящие" else "В спам")},leadingIcon={Icon(if(SpamRules.junk(m))Icons.Outlined.MoveToInbox else Icons.Outlined.Report,null)},
+                    onClick={messageMenu=false;onSpam()})
+            }
+        }
+    })}) { padding->
         Column(Modifier.padding(padding).fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
             .nestedScroll(scroll.connection).verticalScroll(outer).padding(horizontal=22.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())

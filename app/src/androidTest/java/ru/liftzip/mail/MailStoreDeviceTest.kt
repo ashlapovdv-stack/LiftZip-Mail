@@ -99,5 +99,23 @@ class MailStoreDeviceTest {
             assertEquals("",legacy.htmlBody);assertEquals(0,legacy.contentVersion);assertEquals("",legacy.attachments.single().contentId)
         }finally{db.close();c.deleteDatabase("mail-v1.db")}
     }
+    @Test fun spamAndRestoreQueuesSurviveReopeningTheDatabaseAndCanBeCancelled() {
+        val c=context();var db=LocalStore(c)
+        try {
+            db.putAccount(account())
+            val original=message().copy(uid=12,validity=7,localFolder="inbox")
+            for(kind in listOf(ActionKind.SPAM,ActionKind.RESTORE_INBOX)) {
+                db.putMessage(original)
+                val action=MailAction("move","a",original.id,kind,db.encodeMessage(original).toString())
+                db.applyActions(listOf(original.copy(pendingDelete=true)),actions=listOf(action))
+                db.close();db=LocalStore(c)
+                assertEquals(kind,db.actions().single().kind)
+                assertTrue(ActionRules.overlay(db.messages(),db.actions()).single().pendingDelete)
+                assertEquals(original.body,db.message(original.id)?.body)
+                assertTrue(db.finishAction(db.actions().single(),items=listOf(original)))
+                assertTrue(db.actions().isEmpty());assertFalse(db.message(original.id)!!.pendingDelete)
+            }
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
 
 }

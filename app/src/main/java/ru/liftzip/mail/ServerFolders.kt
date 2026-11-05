@@ -18,7 +18,7 @@ object FolderRules {
             "sent","sent mail","sent items","sent messages","отправленные"->FolderRole.SENT
             "drafts","черновики"->FolderRole.DRAFTS
             "trash","deleted items","deleted messages","корзина","удаленные","удалённые"->FolderRole.TRASH
-            "spam","junk","спам"->FolderRole.JUNK
+            "spam","junk","junk e-mail","junk email","bulk mail","спам","нежелательная почта"->FolderRole.JUNK
             "archive","archives","архив"->FolderRole.ARCHIVE
             else->FolderRole.OTHER
         }

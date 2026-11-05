@@ -37,10 +37,12 @@ class WindowBackgroundDeviceTest {
         activity.setContent {
             MailTheme(style.value) {
                 canvas=MaterialTheme.colorScheme.surface.toArgb()
+                key(style.value) {
                 val memory=remember{InboxMemory()}
                 InboxScreen(UiState(loaded=true,accounts=listOf(account),messages=messages,refreshing=refreshing.value),"a",MailFolder.INBOX,null,memory,
                     onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},
                     onSettings={settings++},onDelivery={},onRefresh={refreshed++;refreshing.value=true},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})
+                }
             }
         }
         }
@@ -95,6 +97,16 @@ class WindowBackgroundDeviceTest {
                             assertTrue("Status area must show artwork, not a solid strip or camera cutout",samples.any{!close(canvas,it) && Color.blue(it)>60})
                         }
                     }finally{bitmap.recycle()}
+                    repeat(2){rule.onRoot().performTouchInput{swipe(Offset(center.x,height*0.8f),Offset(center.x,height*0.2f),400)};rule.waitForIdle()}
+                    rule.onNodeWithTag("inbox-header").assertIsNotDisplayed()
+                    rule.onNodeWithTag("inbox-bottom").assertIsNotDisplayed()
+                    val list=rule.onNodeWithTag("inbox-list").fetchSemanticsNode().boundsInRoot
+                    val full=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No hidden window screenshot")
+                    try {
+                        assertEquals("List must reach the top physical edge",0f,list.top,1f)
+                        assertEquals("List must reach the bottom physical edge",full.height.toFloat(),list.bottom,1f)
+                        saveDeviceBitmap(full,"edge-hidden-${selected.key}-$mode")
+                    }finally{full.recycle()}
                 }
             }
         }finally{if(original!=null)command("cmd overlay enable-exclusive --user 0 --category $original")}
