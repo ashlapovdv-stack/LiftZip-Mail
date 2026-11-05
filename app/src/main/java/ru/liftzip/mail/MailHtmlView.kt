@@ -3,6 +3,12 @@ package ru.liftzip.mail
 import android.content.Context
 import android.graphics.Canvas
 import android.net.http.SslError
+import android.view.MotionEvent
+import android.view.VelocityTracker
+import android.view.ViewConfiguration
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.OverScroller
 import android.webkit.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -12,19 +18,40 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import java.io.ByteArrayInputStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
-    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={}): WebView(context) {
+    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={}): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
     private var renderScale=resources.displayMetrics.density
     private var lastHeight=0
     @Volatile private var live=true
+    private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+    var scrollPage: ((Float)->Float)?=null
+    var onReleased: (()->Unit)?=null
+    private val fling=OverScroller(context)
+    private val touch=ViewConfiguration.get(context)
+    private var velocity: VelocityTracker?=null
+    private var startX=0f;private var startY=0f;private var lastY=0f
+    private var dragging=false;private var zooming=false;private var flingY=0
+    private val animateFling=object: Runnable {
+        override fun run() {
+            if(!live || !fling.computeScrollOffset())return
+            val delta=fling.currY-flingY;flingY=fling.currY
+            if(delta!=0 && abs(movePage(delta.toFloat()))<0.5f){fling.abortAnimation();return}
+            postOnAnimation(this)
+        }
+    }
     init {
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
         settings.apply {
@@ -50,53 +77,135 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             }
             override fun onReceivedSslError(view: WebView,handler: SslErrorHandler,error: SslError){handler.cancel()}
             override fun onReceivedHttpAuthRequest(view: WebView,handler: HttpAuthHandler,host: String,realm: String){handler.cancel()}
+            override fun onRenderProcessGone(view: WebView,detail: RenderProcessGoneDetail): Boolean {
+                // The dead renderer must never take the Activity down or be reused by Compose.
+                (parent as? ViewGroup)?.removeView(this@MailHtmlWebView)
+                release(rendererGone=true);failed();return true
+            }
             override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight()}
             override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){publishHeight();ready()}}})}
         }
     }
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
+        if(!live)return
         val zoom=(fontScale*100).toInt().coerceIn(50,300)
         if(settings.textZoom!=zoom)settings.textZoom=zoom
-        if(document==next)return
+        if(document===next)return
         document=next
+        fling.abortAnimation();scrollTo(0,0)
         loadDataWithBaseURL(HtmlMail.ORIGIN,next.html,"text/html","UTF-8",null)
+    }
+    fun viewport(pixels: Int) {
+        val next=pixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+        if(viewport!=next){viewport=next;publishHeight()}
+    }
+    fun scrollContent(pixels: Int): Int {
+        if(!live)return 0
+        val before=scrollY
+        val maximum=(contentHeight.toDouble()*renderScale-height).toInt().coerceAtLeast(0)
+        scrollTo(scrollX,(before.toLong()+pixels).coerceIn(0,maximum.toLong()).toInt())
+        return scrollY-before
+    }
+    private fun movePage(pixels: Float)=scrollPage?.invoke(pixels)?:scrollContent(pixels.roundToInt()).toFloat()
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if(!live)return false
+        when(event.actionMasked) {
+            MotionEvent.ACTION_DOWN->{
+                fling.abortAnimation();removeCallbacks(animateFling)
+                velocity?.recycle();velocity=VelocityTracker.obtain().also{it.addMovement(event)}
+                startX=event.x;startY=event.y;lastY=event.y;dragging=false;zooming=false
+                parent?.requestDisallowInterceptTouchEvent(true)
+            }
+            MotionEvent.ACTION_POINTER_DOWN->{zooming=true;dragging=false}
+            MotionEvent.ACTION_MOVE->{
+                velocity?.addMovement(event)
+                if(!zooming && event.pointerCount==1) {
+                    val dy=startY-event.y
+                    if(!dragging && abs(dy)>touch.scaledTouchSlop && abs(dy)>abs(startX-event.x)) {
+                        dragging=true
+                        MotionEvent.obtain(event).also{it.action=MotionEvent.ACTION_CANCEL;super.onTouchEvent(it);it.recycle()}
+                        lastY=startY-kotlin.math.sign(dy)*touch.scaledTouchSlop
+                    }
+                    if(dragging){movePage(lastY-event.y);lastY=event.y;return true}
+                }
+            }
+            MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->{
+                velocity?.addMovement(event)
+                if(dragging && event.actionMasked==MotionEvent.ACTION_UP) {
+                    velocity?.computeCurrentVelocity(1000,touch.scaledMaximumFlingVelocity.toFloat())
+                    val speed=-(velocity?.yVelocity?:0f).roundToInt()
+                    if(abs(speed)>=touch.scaledMinimumFlingVelocity) {
+                        flingY=0;fling.fling(0,0,0,speed,0,0,-Int.MAX_VALUE/4,Int.MAX_VALUE/4)
+                        postOnAnimation(animateFling)
+                    }
+                }
+                velocity?.recycle();velocity=null
+                parent?.requestDisallowInterceptTouchEvent(false)
+                if(dragging){dragging=false;return true}
+            }
+        }
+        return super.onTouchEvent(event)
     }
     override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight()}
     private fun publishHeight() {
         if(!live)return
         val content=contentHeight
-        val value=HtmlMail.height(content,renderScale)
+        val value=HtmlMail.height(content,renderScale,viewport)
         if(value==lastHeight || content<=0)return
         lastHeight=value
         post{if(live)heightChanged(value)}
     }
-    fun release(){live=false;stopLoading();document=null;destroy()}
+    fun release(rendererGone: Boolean=false){
+        if(!live)return
+        live=false;removeCallbacks(animateFling);fling.abortAnimation();velocity?.recycle();velocity=null
+        onReleased?.invoke();onReleased=null;scrollPage=null
+        if(!rendererGone)stopLoading()
+        document=null;destroy()
+    }
 }
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
+    var failed by remember(message.id,message.contentVersion){mutableStateOf(false)}
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
     val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
     val background=if(message.htmlBody.isNotBlank())"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
     val document by produceState<MailHtmlDocument?>(null,message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,hasHistory,external,foreground,background) {
-        value=withContext(Dispatchers.Default){HtmlMail.document(message.htmlBody,plain,message.attachments,hasHistory,external,foreground,background,identity="${message.accountId}:${message.id}:${message.validity}")}
+        try {
+            value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,hasHistory,external,foreground,background))}
+        }catch(e: CancellationException){throw e}catch(e: Exception){failed=true}
     }
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     val ready=document
-    if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+    val viewport=((scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels)-with(density){20.dp.roundToPx()}).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+    if(failed) {
+        Text("Показываем текстовую версию письма",Modifier.padding(vertical=10.dp),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        // Small native blocks also avoid an unbounded single Text layout after a renderer failure.
+        plain.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
+    }
+    else if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
         if(ready.externalImages)TextButton(onClick={external=!external},modifier=Modifier.fillMaxWidth()) {
             Text(if(external)"Скрыть внешние изображения" else "Показать изображения")
         }
         key(message.id,message.contentVersion) {
-            AndroidView(factory={c->MailHtmlWebView(c,loader::load,{latestLink(it)},{height=it})},
-                modifier=Modifier.fillMaxWidth().padding(vertical=10.dp).height(with(density){height.toDp()}),
-                update={it.show(ready,density.fontScale)},onRelease={it.release()})
+            AndroidView(factory={c->FrameLayout(c).apply {
+                try {
+                    val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{height=it},failed={failed=true;loader.close()})
+                    view.onReleased={scroll?.detach(view)}
+                    scroll?.attach(view)
+                    addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
+                }catch(e: Exception){failed=true;loader.close()}
+            }},
+                modifier=Modifier.fillMaxWidth().padding(vertical=10.dp).height(with(density){height.coerceAtMost(viewport).toDp()})
+                    .onGloballyPositioned{scroll?.position(it.positionInWindow().y.toInt())},
+                update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
+                onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
         }
     }
 }

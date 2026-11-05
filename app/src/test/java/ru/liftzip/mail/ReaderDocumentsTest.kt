@@ -1,0 +1,65 @@
+package ru.liftzip.mail
+
+import org.junit.Assert.*
+import org.junit.Test
+import androidx.compose.ui.unit.Constraints
+
+class ReaderDocumentsTest {
+    private fun key()=ReaderDocumentCache.Key("a:m:1","<p>Cached content</p><img src='https://images.example/p.png'>","Cached content",emptyList(),false,false,"#20241f","#f8f9f6")
+    @Test fun reopeningAnUnchangedMessageReusesThePreparedDocument() {
+        val cache=ReaderDocumentCache();val first=cache.prepare(key())
+        assertSame(first,cache.prepare(key().copy()))
+    }
+    @Test fun imagePermissionAndMessageIdentityCannotReuseTheWrongDocument() {
+        val cache=ReaderDocumentCache();val blocked=cache.prepare(key())
+        val allowed=cache.prepare(key().copy(external=true))
+        val other=cache.prepare(key().copy(identity="b:m:1",external=true))
+        assertTrue(blocked.images.isEmpty());assertEquals(1,allowed.images.size)
+        assertNotEquals(allowed.images.keys,other.images.keys)
+        assertSame(blocked,cache.prepare(key()))
+    }
+    @Test fun changedBodyAttachmentsHistoryOrColorsInvalidateThePreparedContent() {
+        val cache=ReaderDocumentCache();val original=cache.prepare(key())
+        for(changed in listOf(key().copy(html="<p>Changed</p>"),key().copy(plain="Changed"),key().copy(history=true),
+            key().copy(attachments=listOf(Attachment("1","x.png","image/png",1,"x"))),key().copy(background="#000000"))) {
+            assertNotSame(original,cache.prepare(changed))
+        }
+    }
+    @Test fun leastRecentlyUsedDocumentsAreEvictedAndLargeLettersAreNotRetained() {
+        val cache=ReaderDocumentCache(limit=2);val first=cache.prepare(key())
+        val second=cache.prepare(key().copy(identity="second"))
+        assertSame(first,cache.prepare(key()))
+        cache.prepare(key().copy(identity="third"))
+        assertSame(first,cache.prepare(key()));assertNotSame(second,cache.prepare(key().copy(identity="second")))
+        val tiny=ReaderDocumentCache(budget=8)
+        assertNotSame(tiny.prepare(key()),tiny.prepare(key()))
+    }
+    @Test fun clearingTheCacheReleasesPreparedDocuments() {
+        val cache=ReaderDocumentCache();val first=cache.prepare(key());cache.clear()
+        assertNotSame(first,cache.prepare(key()))
+    }
+    @Test fun theReported266942PixelMailNeverBecomesAnUnrepresentableLayout() {
+        assertThrows(IllegalArgumentException::class.java){Constraints(minHeight=266942,maxHeight=266942)}
+        assertEquals(1200,HtmlMail.height(266942,1f,1200))
+        for(width in listOf(0,690,1080,1440,4096)) {
+            val height=HtmlMail.height(Int.MAX_VALUE,3.5f,Int.MAX_VALUE)
+            val bounds=Constraints(maxWidth=width,minHeight=height,maxHeight=height)
+            assertEquals(height,bounds.maxHeight);assertEquals(width,bounds.maxWidth)
+        }
+    }
+    @Test fun invalidScalesAndViewportLimitsStayBounded() {
+        for(scale in listOf(Float.NaN,Float.POSITIVE_INFINITY,-1f,0f,3.5f)) {
+            assertTrue(HtmlMail.height(Int.MAX_VALUE,scale,1080) in 1..1080)
+            assertEquals(1,HtmlMail.height(100,scale,0))
+        }
+    }
+    @Test fun listPreviewOmitsImageAltMarkersButKeepsTheFollowingMessageText() {
+        assertEquals("Создан пароль приложения",MailContent.snippet("[image: Google]\n\nСоздан пароль приложения"))
+        assertEquals("Прогноз на Q4",MailContent.snippet("[IMAGE: logo] [изображение: баннер]\nПрогноз на Q4"))
+    }
+    @Test fun previewCleanupKeepsOrdinaryBracketedTextAndDoesNotAlterTheStoredBody() {
+        val body="[image quality] Смета [123]";assertEquals(body,MailContent.snippet(body))
+        val original="[image: Google] Important message";MailContent.snippet(original)
+        assertEquals("[image: Google] Important message",original)
+    }
+}

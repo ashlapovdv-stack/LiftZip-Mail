@@ -95,6 +95,10 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         if(mutable.value.opened?.id!=id)mutable.update{it.copy(opened=null)}
         opening=viewModelScope.launch {
             try {
+                // Show offline content before waiting for content coordination, legacy refresh or LRU writes.
+                repo.cachedMessage(id)?.takeIf{it.contentCached}?.let { cached->
+                    mutable.update{it.copy(opened=cached)}
+                }
                 val message=repo.message(id)?:error("Письмо не найдено.")
                 mutable.update{it.copy(opened=message)}
                 read(message)

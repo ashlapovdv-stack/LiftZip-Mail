@@ -94,10 +94,13 @@ object HtmlMail {
         out.append(escape(source.substring(end)))
         return "<div class=\"mail-plain\">$out</div>"
     }
-    fun height(content: Int,scale: Float): Int {
+    const val MAX_VIEWPORT_PIXELS=8192
+    fun height(content: Int,scale: Float,viewport: Int=MAX_VIEWPORT_PIXELS): Int {
         val factor=scale.takeIf{it.isFinite() && it>0f}?:1f
         // Rounding down prevents viewport minimum-height rounding feeding back into endless growth.
-        return (content.toDouble()*factor).toInt().coerceIn(1,500_000)
+        // A WebView is a viewport, not a bitmap as tall as the entire email. Compose packs
+        // dimensions into Constraints; even valid long mail can exceed that representation.
+        return (content.toDouble()*factor).toInt().coerceIn(1,viewport.coerceIn(1,MAX_VIEWPORT_PIXELS))
     }
     private fun escape(value: String)=value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
     private fun currentSource(html: String,hasHistory: Boolean): String? {

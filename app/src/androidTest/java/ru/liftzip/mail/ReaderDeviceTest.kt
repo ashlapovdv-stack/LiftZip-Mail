@@ -1,0 +1,76 @@
+package ru.liftzip.mail
+
+import android.view.View
+import android.view.ViewGroup
+import androidx.activity.ComponentActivity
+import androidx.compose.runtime.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class ReaderDeviceTest {
+    @get:Rule val rule=createAndroidComposeRule<ComponentActivity>()
+    private val message=MailItem("reader-regression","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Длинное письмо",body="Начало письма. Последняя строка письма.",date=1,
+        htmlBody="<p>Начало письма</p><div style='height:100000px'></div><p>Последняя строка письма</p>",contentVersion=MailContent.FORMAT_VERSION)
+    private fun webView(root: View=rule.activity.window.decorView): MailHtmlWebView? {
+        if(root is MailHtmlWebView)return root
+        if(root is ViewGroup)for(i in 0 until root.childCount)webView(root.getChildAt(i))?.let{return it}
+        return null
+    }
+    @Composable private fun reader(m: MailItem=message) {
+        ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("No inline images")},{},{},{},{},{},{})
+    }
+    private fun loaded(): MailHtmlWebView {
+        rule.waitUntil(15_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.contentHeight>0 && it.height>20}?:false};ready}
+        var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
+    }
+    @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
+        rule.setContent{MailTheme{reader()}}
+        val view=loaded()
+        rule.runOnIdle {
+            assertTrue("The regression fixture must exceed the reported Compose limit at device scale",view.contentHeight*view.resources.displayMetrics.density>262143)
+            assertTrue(view.height<=view.resources.displayMetrics.heightPixels)
+            assertTrue(view.canScrollVertically(1))
+        }
+        rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-500f),600)}
+        rule.waitUntil(5000){var moved=false;rule.runOnUiThread{moved=view.scrollY>0};moved}
+        rule.onRoot().performTouchInput{down(center);up()}
+        rule.runOnIdle{view.scrollContent(Int.MAX_VALUE);assertFalse(view.canScrollVertically(1))}
+        rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-450f),600)}
+        rule.waitForIdle();rule.onNodeWithText("Переслать").assertIsDisplayed()
+        saveDeviceScreenshot(rule,"html-long")
+        rule.runOnIdle{view.scrollContent(Int.MIN_VALUE)}
+        rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,500f),600)}
+        rule.waitForIdle();rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
+    }
+    @Test fun closingAndReopeningCachedMailReleasesOldViewsAndKeepsTheBodyAvailable() {
+        val visible=mutableStateOf(true)
+        val short=message.copy(htmlBody="<p>Сохранённый текст письма</p>",body="Сохранённый текст письма")
+        rule.setContent{MailTheme{if(visible.value)reader(short)}}
+        repeat(4) {
+            val previous=loaded()
+            rule.runOnIdle{visible.value=false};rule.waitForIdle()
+            rule.runOnIdle{assertNull(previous.parent);visible.value=true}
+            val next=loaded();assertNotSame(previous,next)
+        }
+        rule.onNodeWithText("Переслать").assertIsDisplayed()
+    }
+    @Test fun losingTheWebRendererShowsSavedTextAndLeavesReplyControlsWorking() {
+        val short=message.copy(htmlBody="<p>Текст после сбоя просмотрщика</p>",body="Текст после сбоя просмотрщика")
+        rule.setContent{MailTheme{reader(short)}}
+        val view=loaded()
+        // Official WebView test hook: the renderer dies, while the app must stay alive.
+        rule.runOnIdle{view.loadUrl("chrome://crash")}
+        rule.waitUntil(15_000){rule.onAllNodesWithText("Показываем текстовую версию письма").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithText("Текст после сбоя просмотрщика").assertIsDisplayed()
+        rule.onNodeWithText("Ответить").assertIsDisplayed().assertHasClickAction()
+        rule.runOnIdle{assertNull(webView())}
+        saveDeviceScreenshot(rule,"html-fallback")
+    }
+}

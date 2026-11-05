@@ -40,6 +40,7 @@ class MailApplication : Application() {
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.IO)
     private val warmup=BodyWarmupSignals()
     @Volatile var visible=false
+    override fun onTrimMemory(level: Int){super.onTrimMemory(level);ReaderDocuments.clear()}
     override fun onCreate(){super.onCreate();runCatching{connectivity.registerDefaultNetworkCallback(networkCallback)};scope.launchSafe{actions.collect({true},{repository.flushActions(60_000);BodyWarmupResult(0,0,false)})};scope.launchSafe{warmup.collect({visible},{repository.prefetchBodies(45_000)})};scope.launchSafe{
         repository.load()
         if(repository.snapshot.value.accounts.any{it.enabled}) {
@@ -144,7 +145,12 @@ class MailRepository(private val context: Context) {
     suspend fun cachedMessage(id: String): MailItem?=withContext(Dispatchers.IO){db.message(id)?.let{it.copy(previewOnly=!it.contentCached)}}
     suspend fun message(id: String): MailItem?=withContext(Dispatchers.IO){coordinator.content(id){
         val cached=db.message(id)?:return@content null
-        if(cached.contentCached && !MailContent.needsRenderUpdate(cached)){db.putMessage(cached.copy(cachedAt=System.currentTimeMillis()));return@content cached}
+        if(cached.contentCached && !MailContent.needsRenderUpdate(cached)){
+            val now=System.currentTimeMillis()
+            // Reopening the same letter must not repeatedly serialize its complete HTML to SQLite.
+            if(now-cached.cachedAt>=60_000L)db.putMessage(cached.copy(cachedAt=now))
+            return@content cached
+        }
         try {
             coordinator.request(prepare={capture(cached.accountId)?.let{request->request to (db.message(id)?:cached)}},fetch={(request,m)->
                 val coroutine=currentCoroutineContext()
