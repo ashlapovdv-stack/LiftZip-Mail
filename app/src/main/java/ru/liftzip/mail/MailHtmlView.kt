@@ -99,8 +99,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     fun fitWidth() {
         if(!live || width<=0)return
-        val css=document?.layoutWidth?.takeIf{it>0}?.toFloat()?: (width/resources.displayMetrics.density)
-        val factor=width/(css*renderScale)
+        // Use the rendered extent, including borders, padding and nested tables, rather than
+        // assuming that the sender's nominal table width is the final page width.
+        val factor=width.toFloat()/computeHorizontalScrollRange().coerceAtLeast(width)
         if(factor.isFinite() && factor>0f)zoomBy(factor.coerceIn(0.01f,100f))
     }
     fun viewport(pixels: Int) {

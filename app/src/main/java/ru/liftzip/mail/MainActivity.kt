@@ -449,7 +449,7 @@ private val Paper=Color(0xFFF8F9F6)
                         }
                     }
                 }) else if(style!=MailStyle.STANDARD)DecorativeHeader(style,viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,
-                    current?.name?:"Все ящики",s.refreshing || s.unreadRefreshing,{scope.launch{drawer.open()}},onRefresh,onSettings)
+                    current?.let{it.name+if(!it.enabled)" · выключен"else ""}?:"Все ящики",s.refreshing || s.unreadRefreshing,{scope.launch{drawer.open()}},onRefresh,onSettings)
                 else TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Column{Text(viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,fontWeight=FontWeight.Bold);Text((current?.name?:"Все ящики")+if(current?.enabled==false)" · выключен" else "",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
                     navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}},actions={
                         IconButton(onClick=onRefresh,enabled=!s.refreshing && !s.unreadRefreshing){Icon(Icons.Outlined.Refresh,"Обновить почту")};IconButton(onClick=onSettings){Icon(Icons.Outlined.Settings,"Настройки")}

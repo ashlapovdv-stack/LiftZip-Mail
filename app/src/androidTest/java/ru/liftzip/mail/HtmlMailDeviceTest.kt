@@ -57,7 +57,7 @@ class HtmlMailDeviceTest {
     @Test fun desktopTableFitsInitiallyAndCanReturnToWidthAfterZooming() {
         val c=ApplicationProvider.getApplicationContext<Context>();val loaded=AtomicBoolean()
         val source="""<table width='720' style='border-collapse:collapse'><tr><td colspan='3' style='padding:20px'><h2>Backend checks: All jobs have passed</h2></td></tr><tr><th width='100'>Status</th><th width='240'>Job</th><th width='380'>Annotations</th></tr><tr><td>Passed</td><td>Backend checks</td><td>No warnings or errors</td></tr></table>"""
-        val doc=HtmlMail.document(source,"",emptyList());lateinit var view: MailHtmlWebView
+        val doc=HtmlMail.document("<div style='padding:0 36px'>$source</div>","",emptyList());lateinit var view: MailHtmlWebView
         rule.setContent {AndroidView(factory={MailHtmlWebView(c,{null},{},{},{loaded.set(true)}).also{view=it;it.show(doc)}},modifier=Modifier.fillMaxWidth().height(400.dp),onRelease={it.release()})}
         rule.waitUntil(15_000){loaded.get()}
         var scale=0f
