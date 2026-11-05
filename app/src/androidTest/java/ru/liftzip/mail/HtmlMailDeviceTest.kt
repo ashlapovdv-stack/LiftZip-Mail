@@ -54,6 +54,25 @@ class HtmlMailDeviceTest {
         rule.runOnIdle{view.setFindListener(null);view.clearMatches()}
         return found
     }
+    @Test fun desktopTableFitsInitiallyAndCanReturnToWidthAfterZooming() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val loaded=AtomicBoolean()
+        val source="""<table width='720' style='border-collapse:collapse'><tr><td colspan='3' style='padding:20px'><h2>Backend checks: All jobs have passed</h2></td></tr><tr><th width='100'>Status</th><th width='240'>Job</th><th width='380'>Annotations</th></tr><tr><td>Passed</td><td>Backend checks</td><td>No warnings or errors</td></tr></table>"""
+        val doc=HtmlMail.document(source,"",emptyList());lateinit var view: MailHtmlWebView
+        rule.setContent {AndroidView(factory={MailHtmlWebView(c,{null},{},{},{loaded.set(true)}).also{view=it;it.show(doc)}},modifier=Modifier.fillMaxWidth().height(400.dp),onRelease={it.release()})}
+        rule.waitUntil(15_000){loaded.get()}
+        var scale=0f
+        rule.runOnIdle {
+            scale=view.scale
+            assertFalse("The complete table must fit the initial viewport",view.canScrollHorizontally(1))
+            assertTrue("Words must not form a many-screen vertical column",view.contentHeight*view.scale<=view.height*1.5f)
+        }
+        assertEquals(2,matches(view,"Backend checks"));saveDeviceScreenshot(rule,"html-fit")
+        rule.runOnIdle{view.zoomBy(2f)}
+        rule.waitUntil(5000){var zoomed=false;rule.runOnUiThread{zoomed=view.scale>scale*1.4f};zoomed}
+        rule.runOnIdle{assertTrue(view.canScrollHorizontally(1));view.fitWidth()}
+        rule.waitUntil(5000){var fit=false;rule.runOnUiThread{fit=kotlin.math.abs(view.scale-scale)<scale*0.05f};fit}
+        rule.runOnIdle{assertFalse(view.canScrollHorizontally(1))}
+    }
     @Test fun newsletterCssIsHiddenInlineImageIsDrawnAndALinkOpensOnlyThroughTheApp() {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val loaded=AtomicBoolean();val clicks=AtomicReference<String?>(null);val images=AtomicInteger();val png=image()

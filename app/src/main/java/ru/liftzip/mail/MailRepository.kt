@@ -29,7 +29,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 data class MailSnapshot(val accounts: List<MailAccount> = emptyList(), val messages: List<MailItem> = emptyList(), val history: Map<String,InboxHistory> = emptyMap(), val defaultAccountId: String? = null,
-    val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus())
+    val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus(),val style: MailStyle=MailStyle.STANDARD)
 data class SyncResult(val newUnread: Int, val errors: List<String>)
 
 class MailApplication : Application() {
@@ -99,7 +99,7 @@ class MailRepository(private val context: Context) {
             accounts.associate{it.id to SyncCheck(syncPrefs.getLong("checked:${it.id}",0),syncPrefs.getString("error:${it.id}","").orEmpty(),syncPrefs.getLong("duration:${it.id}",0))},
             BackgroundCheck(settings.getLong("poll-start",0),settings.getLong("poll-end",0),settings.getString("poll-result","").orEmpty(),settings.getString("poll-error","").orEmpty(),settings.getInt("poll-arrived",0),
                 settings.getString("poll-kind","auto").orEmpty(),settings.getLong("poll-auto-start",0),settings.getLong("poll-auto-end",0),settings.getString("poll-auto-result","").orEmpty()),
-            bodyCache.copy(pending=pendingBodies(items,accounts).size),settings.getBoolean("auto-hide-panels",true),db.folders(),actions,storage)
+            bodyCache.copy(pending=pendingBodies(items,accounts).size),settings.getBoolean("auto-hide-panels",true),db.folders(),actions,storage,AppearancePreferences.read(settings))
         notifications.reconcile(SyncRules.activeMessages(state.value.messages,accounts,null),arrived,accounts){id->db.message(id)?.body?.take(3000)}
         notifications.history(state.value)
     }
@@ -225,6 +225,9 @@ class MailRepository(private val context: Context) {
     suspend fun setDefaultAccount(id: String?)=withContext(Dispatchers.IO){coordinator.data{
         require(id==null || db.accounts().any{it.id==id}){"Ящик не найден."}
         settings.edit().putString("default-sender",id).apply();refresh()
+    }}
+    suspend fun setStyle(style: MailStyle)=withContext(Dispatchers.IO){coordinator.data{
+        AppearancePreferences.write(settings,style);refresh(messages=state.value.messages)
     }}
     suspend fun setAutoHidePanels(enabled: Boolean)=withContext(Dispatchers.IO){coordinator.data{
         settings.edit().putBoolean("auto-hide-panels",enabled).apply();refresh(messages=state.value.messages)

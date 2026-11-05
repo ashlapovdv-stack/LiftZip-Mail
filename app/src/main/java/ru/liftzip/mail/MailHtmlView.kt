@@ -61,6 +61,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             mediaPlaybackRequiresUserGesture=true;setGeolocationEnabled(false)
             safeBrowsingEnabled=true;cacheMode=WebSettings.LOAD_NO_CACHE
             useWideViewPort=true;loadWithOverviewMode=true
+            layoutAlgorithm=WebSettings.LayoutAlgorithm.NORMAL
             builtInZoomControls=true;displayZoomControls=false
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(this,false)
@@ -93,7 +94,14 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(document===next)return
         document=next
         fling.abortAnimation();scrollTo(0,0)
+        setInitialScale(0)
         loadDataWithBaseURL(HtmlMail.ORIGIN,next.html,"text/html","UTF-8",null)
+    }
+    fun fitWidth() {
+        if(!live || width<=0)return
+        val css=document?.layoutWidth?.takeIf{it>0}?.toFloat()?: (width/resources.displayMetrics.density)
+        val factor=width/(css*renderScale)
+        if(factor.isFinite() && factor>0f)zoomBy(factor.coerceIn(0.01f,100f))
     }
     fun viewport(pixels: Int) {
         val next=pixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
@@ -173,6 +181,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
     var failed by remember(message.id,message.contentVersion){mutableStateOf(false)}
+    var web by remember(message.id,message.contentVersion){mutableStateOf<MailHtmlWebView?>(null)}
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
     val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
     val background=if(message.htmlBody.isNotBlank())"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
@@ -194,14 +203,16 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     else if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
-        if(ready.externalImages)TextButton(onClick={external=!external},modifier=Modifier.fillMaxWidth()) {
-            Text(if(external)"Скрыть внешние изображения" else "Показать изображения")
+        if(ready.externalImages || ready.layoutWidth>0)Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
+            if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
+            if(ready.layoutWidth>0)TextButton(onClick={web?.fitWidth()}){Text("По ширине")}
         }
         key(message.id,message.contentVersion) {
             AndroidView(factory={c->FrameLayout(c).apply {
                 try {
                     val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{height=it},failed={failed=true;loader.close()})
-                    view.onReleased={scroll?.detach(view)}
+                    web=view
+                    view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)
                     addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                 }catch(e: Exception){failed=true;loader.close()}

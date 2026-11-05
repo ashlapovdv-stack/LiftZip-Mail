@@ -17,7 +17,7 @@ data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = e
     val background: BackgroundCheck=BackgroundCheck(),val backgroundRuntime: BackgroundRuntime=BackgroundRuntime(),val notificationAccess: NotificationAccess=NotificationAccess(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
     val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: ServiceNotice?=null,
-    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus(),val fastMail: FastMailStatus=FastMailStatus())
+    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus(),val fastMail: FastMailStatus=FastMailStatus(),val style: MailStyle=MailStyle.STANDARD)
 
 private data class UnreadScope(val enabled: Boolean=false,val accountId: String?=null)
 
@@ -52,7 +52,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
         viewModelScope.launch {
             repo.snapshot.collect { snapshot->(getApplication<Application>() as MailApplication).fastMail.ensure();mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
-                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage) } }
+                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage,style=snapshot.style) } }
         }
         viewModelScope.launch {
             combine(query,repo.snapshot){q,snapshot->q to snapshot.messages}.distinctUntilChanged().collectLatest{(text,_)->
@@ -78,7 +78,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             val snapshot=repo.snapshot.value
             mutable.update { it.copy(loaded=true,accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
                 poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,
-                notificationAccess=MailNotifications.access(getApplication()),autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage) }
+                notificationAccess=MailNotifications.access(getApplication()),autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage,style=snapshot.style) }
             repo.notificationEnvironmentChanged()
             if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
@@ -224,6 +224,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
     }
     fun setPoll(poll: PollSettings)=work{repo.setPoll(poll);MailWorker.schedule(getApplication());notice("Интервал проверки почты сохранён")}
+    fun setStyle(style: MailStyle){viewModelScope.launch{try{repo.setStyle(style)}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}
     fun setAutoHidePanels(enabled: Boolean){viewModelScope.launch{try{repo.setAutoHidePanels(enabled)}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}
     fun deleteMessages(ids: Set<String>,onRemoved: (Set<String>)->Unit)=work {
         val result=repo.deleteMessages(ids)

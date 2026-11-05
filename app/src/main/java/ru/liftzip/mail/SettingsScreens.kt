@@ -54,7 +54,7 @@ import java.util.Locale
         OutlinedButton(onClick=onAdd,enabled=!s.busy,modifier=Modifier.fillMaxWidth()){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(8.dp));Text("Добавить ящик")}
         HorizontalDivider(Modifier.padding(vertical=4.dp))
         SettingsLink("Получение и уведомления","Интервалы проверки и уведомления Android"){onSection("delivery")}
-        SettingsLink("Внешний вид","Скрытие панелей при прокрутке"){onSection("appearance")}
+        SettingsLink("Внешний вид","Стиль приложения и панели при прокрутке"){onSection("appearance")}
         val sender=s.accounts.find{it.id==s.defaultAccountId}
         SettingsLink("Отправитель по умолчанию",sender?.email?:"Ящик открытой папки"){onSection("sender")}
         SettingsLink("Загрузить всю историю","Все или выбранные ящики",onHistory)
@@ -63,8 +63,11 @@ import java.util.Locale
     }
 }
 
-@Composable fun AppearanceSettingsScreen(s: UiState,onBack: ()->Unit,onAutoHide: (Boolean)->Unit) {
+@Composable fun AppearanceSettingsScreen(s: UiState,onBack: ()->Unit,onAutoHide: (Boolean)->Unit,onStyle: (MailStyle)->Unit) {
     SettingsPage("Внешний вид",onBack) {
+        Text("Стиль приложения",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
+        MailStyle.entries.forEach{style->StyleChoice(style,s.style==style){onStyle(style)}}
+        HorizontalDivider(Modifier.padding(vertical=8.dp))
         ListItem(headlineContent={Text("Скрывать панели при прокрутке")},supportingContent={Text(if(s.autoHidePanels)"При просмотре старых писем список занимает экран. Прокрутите обратно, чтобы вернуть кнопки." else "Верхняя панель, нижняя навигация и кнопка «Написать» всегда видны.")},
             trailingContent={Switch(checked=s.autoHidePanels,onCheckedChange=onAutoHide)},modifier=Modifier.fillMaxWidth())
     }
@@ -131,7 +134,7 @@ import java.util.Locale
 
 @Composable fun AboutSettingsScreen(onBack: ()->Unit) {
     SettingsPage("О приложении",onBack) {
-        Text("Почта · 0.5.2",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
+        Text("Почта · 0.5.4",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
         Text("Поиск работает по загруженным письмам. Черновики и отправленные сохраняются на устройстве и синхронизируются с папками сервера. Состояние видно в «Исходящих и синхронизации».")
         Text("Вложения открываются нажатием на файл; значок загрузки сохраняет копию. PDF и изображения можно смотреть внутри приложения. Для других форматов используется установленная программа.")
         Text("Пароли защищены Android Keystore. Резервное копирование почтовых данных отключено. Внешний сервер приложения не используется.")

@@ -16,13 +16,31 @@ sealed interface MailImageSource {
     data class Remote(val url: String): MailImageSource
     data class Data(val mime: String,val base64: String): MailImageSource
 }
-data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSource>,val externalImages: Boolean)
+data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSource>,val externalImages: Boolean,val layoutWidth: Int=0)
 
 /** HTML remains data. Only the renderer's generated image URLs can request resources. */
 object HtmlMail {
     const val ORIGIN="https://mail.liftzip.invalid/"
     private val links=Regex("""(?i)\b(?:https?://[^\s<>"']+|mailto:[^\s<>"']+|www\.[^\s<>"']+|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})""")
     private val unsafe="script,iframe,frame,frameset,object,embed,applet,form,input,button,select,textarea,link,base,meta,svg,math,video,audio,source,track,canvas,noscript,template"
+    private val pixelWidth=Regex("(?i)(?:^|[;{])\\s*(?:min-)?width\\s*:\\s*(\\d{2,4})px(?:\\s*!important)?\\s*(?=[;}])")
+    /** Give desktop tables their natural layout space, then let WebView fit that space to the screen. */
+    fun layoutWidth(source: String): Int=layoutWidth(Jsoup.parse(source))
+    private fun layoutWidth(doc: org.jsoup.nodes.Document): Int {
+        fun width(element: Element): Int {
+            val attribute=element.attr("width").trim().takeIf{it.matches(Regex("\\d{2,4}"))}?.toIntOrNull()?:0
+            val inline=pixelWidth.findAll(element.attr("style")+";").maxOfOrNull{it.groupValues[1].toInt()}?:0
+            return maxOf(attribute,inline)
+        }
+        var result=doc.select("table,div,section,article,main,body").maxOfOrNull(::width)?:0
+        doc.select("tr").forEach{row->
+            val cells=row.children().filter{it.normalName() in setOf("td","th")}
+            result=maxOf(result,cells.sumOf(::width))
+            if(cells.size>=3)result=maxOf(result,640)
+        }
+        doc.select("style").forEach{style->result=maxOf(result,pixelWidth.findAll(style.data()).maxOfOrNull{it.groupValues[1].toInt()}?:0)}
+        return result.takeIf{it>=480}?.coerceAtMost(1440)?:0
+    }
     private fun safelist()=Safelist.relaxed().addTags("style","section","article","header","footer","main","hr","s","strike","center","font").addAttributes("font","color","face","size")
         .addAttributes(":all","style","class","id","dir","align","valign","width","height","bgcolor","border","cellpadding","cellspacing","role")
         .addProtocols("img","src","cid","data").removeProtocols("a","href","ftp")
@@ -144,12 +162,14 @@ object HtmlMail {
         doc.select("style").forEach{it.html(css(it.data()))}
         doc.select("a").forEach{it.removeAttr("target");it.attr("rel","noreferrer noopener")}
         val csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src $ORIGIN; font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'"
-        val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
-            html,body{margin:0;padding:0;max-width:100%;overflow-wrap:anywhere;background:$background;color:$foreground;font:16px/1.55 sans-serif}
-            table{max-width:100%!important} img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
+        val layout=if(html.isNotBlank())layoutWidth(doc)else 0
+        val viewport=if(layout>0)layout.toString()else "device-width"
+        val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
+            html,body{margin:0;padding:0;max-width:100%;overflow-wrap:break-word;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
+            img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
             .mail-plain{white-space:pre-wrap}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
-        return MailHtmlDocument(wrapped,resources,hasExternal)
+        return MailHtmlDocument(wrapped,resources,hasExternal,layout)
     }
     /** One forward scan, including malformed input; nested url( text cannot cause regex backtracking. */
     private fun rewriteCss(value: String,resolve: (String)->String?): String {
