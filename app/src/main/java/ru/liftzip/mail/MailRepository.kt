@@ -144,16 +144,18 @@ class MailRepository(private val context: Context) {
     suspend fun cachedMessage(id: String): MailItem?=withContext(Dispatchers.IO){db.message(id)?.let{it.copy(previewOnly=!it.contentCached)}}
     suspend fun message(id: String): MailItem?=withContext(Dispatchers.IO){coordinator.content(id){
         val cached=db.message(id)?:return@content null
-        if(cached.contentCached){db.putMessage(cached.copy(cachedAt=System.currentTimeMillis()));return@content cached}
-        coordinator.request(prepare={capture(cached.accountId)?.let{request->request to (db.message(id)?:cached)}},fetch={(request,m)->
-            val coroutine=currentCoroutineContext()
-            if(m.contentCached)m else runInterruptible{gateway.content(request.account,vault.open(request.account.id,request.account.secret),m){coroutine.ensureActive()}}
-        },commit={(request,_),full->
-            require(current(request)){"Ящик приостановлен или его настройки изменились."}
-            val now=state.value.messages.find{it.id==id}?:return@request null
-            val result=full.copy(unread=now.unread,starred=now.starred,localFolder=now.localFolder)
-            db.putMessage(result.copy(cachedAt=System.currentTimeMillis()));StorageWorker.enqueue(context);refresh(messages=state.value.messages.map{if(it.id==id)MailContent.preview(result)else it});result
-        })?:error("Включите ящик в меню, чтобы загрузить текст письма.")
+        if(cached.contentCached && !MailContent.needsRenderUpdate(cached)){db.putMessage(cached.copy(cachedAt=System.currentTimeMillis()));return@content cached}
+        try {
+            coordinator.request(prepare={capture(cached.accountId)?.let{request->request to (db.message(id)?:cached)}},fetch={(request,m)->
+                val coroutine=currentCoroutineContext()
+                if(m.contentCached && !MailContent.needsRenderUpdate(m))m else runInterruptible{gateway.content(request.account,vault.open(request.account.id,request.account.secret),m){coroutine.ensureActive()}}
+            },commit={(request,_),full->
+                require(current(request)){"Ящик приостановлен или его настройки изменились."}
+                val now=state.value.messages.find{it.id==id}?:return@request null
+                val result=full.copy(unread=now.unread,starred=now.starred,localFolder=now.localFolder)
+                db.putMessage(result.copy(cachedAt=System.currentTimeMillis()));StorageWorker.enqueue(context);refresh(messages=state.value.messages.map{if(it.id==id)MailContent.preview(result)else it});result
+            })?:error("Включите ящик в меню, чтобы загрузить текст письма.")
+        }catch(e: CancellationException){throw e}catch(e: Exception){if(cached.contentCached)cached else throw e}
     }}
     suspend fun search(query: String): Set<String> =withContext(Dispatchers.IO){
         val coroutine=currentCoroutineContext();db.search(query){coroutine.ensureActive()}
@@ -584,7 +586,7 @@ class MailRepository(private val context: Context) {
             val protected=db.actions().map{it.messageId}.toSet()+state.value.messages.filter{it.localFolder in setOf("drafts","outbox")}.flatMap{listOfNotNull(it.sourceDraftId,it.forwarding?.messageId)}
             val ids=CacheRules.evict(db.messages(),protected,CacheRules.bodyBudget(storage.limitMb),clear)
             if(ids.isNotEmpty()) {
-                db.putMessages(ids.mapNotNull{db.message(it)}.map{it.copy(body=it.body.take(MailContent.PREVIEW_LENGTH),contentCached=false,previewOnly=false)})
+                db.putMessages(ids.mapNotNull{db.message(it)}.map{it.copy(body=it.body.take(MailContent.PREVIEW_LENGTH),htmlBody="",contentVersion=0,contentCached=false,previewOnly=false)})
                 bodyFailures.keys.removeAll(ids);saveBodyFailures();refresh()
             }
         }
@@ -750,7 +752,7 @@ class MailRepository(private val context: Context) {
                     val local=localCopies[m.internetMessageId]
                     val current=byId[m.id]
                     val reused=local?:current
-                    val withBody=if(reused?.contentCached==true)m.copy(id=local?.id?:m.id,body=reused.body,attachments=reused.attachments,outgoing=reused.outgoing,contentCached=true,previewOnly=reused.previewOnly)else m
+                    val withBody=if(reused?.contentCached==true)m.copy(id=local?.id?:m.id,body=reused.body,htmlBody=reused.htmlBody,contentVersion=reused.contentVersion,cacheBytes=reused.cacheBytes,attachments=reused.attachments,outgoing=reused.outgoing,contentCached=true,previewOnly=reused.previewOnly)else m
                     if(local!=null) {
                         if(local.unread!=m.unread || local.starred!=m.starred)db.putAction(actionFor(withBody,ActionKind.FLAGS,unread=local.unread,starred=local.starred))
                         withBody.copy(unread=local.unread,starred=local.starred)
@@ -979,13 +981,13 @@ class MailRepository(private val context: Context) {
         }
     }
     private data class AttachmentRequest(val account: MailAccount,val version: Long)
-    private suspend fun cachedAttachment(message: MailItem,file: Attachment): java.io.File=withContext(Dispatchers.IO){
+    private suspend fun cachedAttachment(message: MailItem,file: Attachment,limit: Long?=null): java.io.File=withContext(Dispatchers.IO){
         attachmentLocks.computeIfAbsent("${message.id}|${file.path}"){Mutex()}.withLock{
             coordinator.request(prepare={
                 db.accounts().find{it.id==message.accountId}?.let{AttachmentRequest(it,coordinator.version(it.id))}
             },fetch={request->runInterruptible{
                 val a=request.account
-                attachmentCache.prepare(message,file){output->require(a.enabled){"Включите ящик для загрузки вложения."};gateway.attachment(a,vault.open(a.id,a.secret),message,file,output)}
+                attachmentCache.prepare(message,file){output->require(a.enabled){"Включите ящик для загрузки вложения."};gateway.attachment(a,vault.open(a.id,a.secret),message,file,if(limit==null)output else BoundedMailOutput(output,limit))}
             }},commit={request,cached->
                 require(coordinator.version(request.account.id)==request.version && state.value.accounts.any{it.id==request.account.id}){"Ящик изменён или удалён. Повторите открытие вложения."}
                 StorageWorker.enqueue(context);cached
@@ -1000,6 +1002,11 @@ class MailRepository(private val context: Context) {
     }
     suspend fun openAttachment(message: MailItem,file: Attachment): OpenedAttachment=withContext(Dispatchers.IO){
         attachmentCache.opened(cachedAttachment(message,file),file)
+    }
+    suspend fun inlineImage(message: MailItem,file: Attachment): OpenedAttachment=withContext(Dispatchers.IO){
+        require(file.contentId.isNotBlank() && file.mime.startsWith("image/") && message.attachments.any{it.path==file.path && it.contentId==file.contentId}){"Изображение не найдено в письме."}
+        require(file.size.toLong()<=MailImageLimits.MAX_BYTES*2){"Изображение слишком большое для просмотра в письме."}
+        attachmentCache.opened(cachedAttachment(message,file,MailImageLimits.MAX_BYTES),file)
     }
     private fun ComposeDraft.toMessage(a: MailAccount,folder: String)=MailItem(id,accountId,sender=a.senderName,senderEmail=a.email,recipients=to,
         subject=subject,body=body,date=if(folder in setOf("outbox","sent") && timestamp>0)timestamp else System.currentTimeMillis(),localFolder=folder,outgoing=attachments,forwarding=forwarding,internetMessageId=MessageIdentity.forDraft(id,internetMessageId),sourceDraftId=sourceDraftId)

@@ -112,10 +112,10 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
     @Synchronized fun putMessage(m: MailItem) { putMessage(writableDatabase,m) }
     private fun putMessage(db: SQLiteDatabase,m: MailItem) {
         // A flag/header update from a list preview must never overwrite the stored full body.
-        val storedBody=if(m.previewOnly)db.rawQuery("SELECT data FROM messages WHERE id = ?",arrayOf(m.id)).use{c->if(c.moveToFirst())JSONObject(c.getString(0)).getString("body") else null}else null
-        val full=MailContent.forStorage(m,storedBody).let{it.copy(cacheBytes=if(it.contentCached)it.body.toByteArray(Charsets.UTF_8).size.toLong()else it.cacheBytes,cachedAt=it.cachedAt.takeIf{time->time>0}?:System.currentTimeMillis())}
+        val stored=if(m.previewOnly)db.rawQuery("SELECT data FROM messages WHERE id = ?",arrayOf(m.id)).use{c->if(c.moveToFirst())JSONObject(c.getString(0)) else null}else null
+        val full=MailContent.forStorage(m,stored?.getString("body"),stored?.optString("htmlBody"),stored?.optInt("contentVersion")).let{it.copy(cacheBytes=if(it.contentCached)MailContent.bytes(it)else it.cacheBytes,cachedAt=it.cachedAt.takeIf{time->time>0}?:System.currentTimeMillis())}
         db.insertWithOnConflict("messages",null,ContentValues().apply {
-            put("id",full.id); put("account_id",full.accountId); put("folder",full.localFolder); put("data",encodeMessage(full).toString());put("preview",encodeMessage(full.copy(body=full.body.take(MailContent.PREVIEW_LENGTH),previewOnly=true)).toString())
+            put("id",full.id); put("account_id",full.accountId); put("folder",full.localFolder); put("data",encodeMessage(full).toString());put("preview",encodeMessage(MailContent.preview(full)).toString())
         },SQLiteDatabase.CONFLICT_REPLACE)
     }
     @Synchronized fun removeMessage(id: String) { writableDatabase.delete("messages","id = ?",arrayOf(id)) }
@@ -150,11 +150,11 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
     }
     internal fun encodeMessage(m: MailItem) = JSONObject().put("id",m.id).put("account",m.accountId).put("uid",m.uid)
         .put("validity",m.validity).put("remoteFolder",m.remoteFolder).put("sender",m.sender).put("email",m.senderEmail)
-        .put("to",m.recipients).put("subject",m.subject).put("body",m.body).put("date",m.date).put("unread",m.unread)
+        .put("to",m.recipients).put("subject",m.subject).put("body",m.body).put("htmlBody",m.htmlBody).put("contentVersion",m.contentVersion).put("date",m.date).put("unread",m.unread)
         .put("starred",m.starred).put("folder",m.localFolder).put("delivery",m.delivery).put("contentCached",m.contentCached)
         .put("cacheBytes",m.cacheBytes).put("cachedAt",m.cachedAt).put("internetMessageId",m.internetMessageId).put("sourceDraftId",m.sourceDraftId).put("editRevision",m.editRevision).put("pendingDelete",m.pendingDelete)
         .put("forwarding",m.forwarding?.let(::encodeForward))
-        .put("attachments",JSONArray().apply { m.attachments.forEach { a->put(JSONObject().put("path",a.path).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
+        .put("attachments",JSONArray().apply { m.attachments.forEach { a->put(JSONObject().put("path",a.path).put("name",a.name).put("mime",a.mime).put("size",a.size).put("contentId",a.contentId)) } })
         .put("outgoing",JSONArray().apply { m.outgoing.forEach { a->put(JSONObject().put("uri",a.uri).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
     internal fun decodeMessage(j: JSONObject,preview: Boolean=false): MailItem {
         val attachments=j.optJSONArray("attachments")?:JSONArray()
@@ -162,8 +162,8 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         return MailItem(j.getString("id"),j.getString("account"),j.getLong("uid"),j.getLong("validity"),j.getString("remoteFolder"),
             HeaderText.decode(j.getString("sender")),j.getString("email"),HeaderText.recipients(j.getString("to")),HeaderText.decode(j.getString("subject")),j.getString("body").let{if(preview)it.take(MailContent.PREVIEW_LENGTH)else it},j.getLong("date"),
             j.getBoolean("unread"),j.getBoolean("starred"),j.getString("folder"),
-            List(attachments.length()) { i-> val a=attachments.getJSONObject(i);Attachment(a.getString("path"),a.getString("name"),a.getString("mime"),a.getInt("size")) },
-            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true),forwarding=j.optJSONObject("forwarding")?.let(::decodeForward),internetMessageId=j.optString("internetMessageId").ifBlank{if(j.getString("folder") in setOf("drafts","sent","outbox"))MessageIdentity.forDraft(j.getString("id"))else ""},sourceDraftId=j.optString("sourceDraftId").takeIf{it.isNotBlank() && it!="null"},editRevision=j.optLong("editRevision"),pendingDelete=j.optBoolean("pendingDelete"),cacheBytes=if(j.has("cacheBytes"))j.optLong("cacheBytes")else j.getString("body").length*2L,cachedAt=j.optLong("cachedAt",j.optLong("date")))
+            List(attachments.length()) { i-> val a=attachments.getJSONObject(i);Attachment(a.getString("path"),a.getString("name"),a.getString("mime"),a.getInt("size"),a.optString("contentId")) },
+            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true),forwarding=j.optJSONObject("forwarding")?.let(::decodeForward),internetMessageId=j.optString("internetMessageId").ifBlank{if(j.getString("folder") in setOf("drafts","sent","outbox"))MessageIdentity.forDraft(j.getString("id"))else ""},sourceDraftId=j.optString("sourceDraftId").takeIf{it.isNotBlank() && it!="null"},editRevision=j.optLong("editRevision"),pendingDelete=j.optBoolean("pendingDelete"),cacheBytes=if(j.has("cacheBytes"))j.optLong("cacheBytes")else j.getString("body").length*2L,cachedAt=j.optLong("cachedAt",j.optLong("date")),htmlBody=if(preview)"" else j.optString("htmlBody"),contentVersion=j.optInt("contentVersion"))
     }
     private fun encodeForward(p: ForwardPlan)=JSONObject().put("account",p.accountId).put("message",p.messageId)
         .put("uid",p.uid).put("validity",p.validity).put("folder",p.remoteFolder).put("sourceKey",p.sourceKey)

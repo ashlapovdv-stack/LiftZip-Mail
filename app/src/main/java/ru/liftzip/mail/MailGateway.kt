@@ -2,7 +2,6 @@ package ru.liftzip.mail
 
 import android.content.Context
 import android.net.Uri
-import android.text.Html
 import jakarta.activation.DataHandler
 import jakarta.activation.DataSource
 import jakarta.mail.*
@@ -193,8 +192,8 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
                         val remote=folder.getMessageByUID(m.uid)
                         if(remote==null)null else {
                             (remote as? IMAPMessage)?.setPeek(true)
-                            val decoded=MimeReader(checkCancelled=budget::check){Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
-                            m.copy(body=decoded.text,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true)
+                            val decoded=MimeReader(checkCancelled=budget::check).read(remote)
+                            m.copy(body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true)
                         }
                     }
                 },save=onItem,describe=::friendlyError,before=onStart,around=around)
@@ -209,8 +208,8 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             val remote=folder.getMessageByUID(message.uid)?:error("Письмо перемещено или удалено на сервере.")
             (remote as? IMAPMessage)?.setPeek(true)
             val budget=MailReadBudget(checkCancelled=checkCancelled)
-            val decoded=MimeReader(checkCancelled=budget::check){Html.fromHtml(it,Html.FROM_HTML_MODE_LEGACY).toString()}.read(remote)
-            message.copy(body=decoded.text,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true,internetMessageId=message.internetMessageId.ifBlank{(remote as? MimeMessage)?.messageID.orEmpty()},recipients=message.recipients.ifBlank{HeaderText.decode((remote as? MimeMessage)?.getHeader("To",null).orEmpty())})
+            val decoded=MimeReader(checkCancelled=budget::check).read(remote)
+            message.copy(body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true,internetMessageId=message.internetMessageId.ifBlank{(remote as? MimeMessage)?.messageID.orEmpty()},recipients=message.recipients.ifBlank{HeaderText.decode((remote as? MimeMessage)?.getHeader("To",null).orEmpty())})
         }finally{folder.close(false)}
     }
     suspend fun trashMany(a: MailAccount,password: String,messages: List<MailItem>,before: suspend ()->Boolean,onConfirmed: suspend (Set<Long>)->Boolean)=withContext(Dispatchers.IO) {

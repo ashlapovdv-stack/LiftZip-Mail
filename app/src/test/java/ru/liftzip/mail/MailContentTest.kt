@@ -57,4 +57,23 @@ class MailContentTest {
         assertEquals(99_999L,MailContent.preview(evicted).cacheBytes)
     }
 
+    @Test fun listPreviewsExcludeHtmlButTheirBudgetIncludesBothRepresentations() {
+        val m=mail("Text").copy(htmlBody="<p>Полное HTML письмо</p>",contentVersion=MailContent.FORMAT_VERSION)
+        val preview=MailContent.preview(m)
+        assertEquals("",preview.htmlBody);assertEquals(MailContent.bytes(m),preview.cacheBytes)
+        assertEquals(m.contentVersion,preview.contentVersion)
+    }
+    @Test fun previewFlagChangesRestoreHtmlAndItsVersionFromTheStoredMessage() {
+        val preview=mail("preview").copy(previewOnly=true,unread=true)
+        val restored=MailContent.forStorage(preview,"Complete text","<p>Complete</p>",1)
+        assertEquals("<p>Complete</p>",restored.htmlBody);assertEquals(1,restored.contentVersion);assertTrue(restored.unread)
+    }
+    @Test fun onlyLegacyRemoteBodiesNeedTheOneTimeFormatRefresh() {
+        val legacy=mail("old").copy(uid=10,validity=1)
+        assertTrue(MailContent.needsRenderUpdate(legacy))
+        assertFalse(MailContent.needsRenderUpdate(legacy.copy(contentVersion=MailContent.FORMAT_VERSION)))
+        assertFalse(MailContent.needsRenderUpdate(legacy.copy(contentCached=false)))
+        assertFalse(MailContent.needsRenderUpdate(legacy.copy(uid=0,localFolder="drafts")))
+    }
+
 }

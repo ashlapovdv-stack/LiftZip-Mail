@@ -80,4 +80,24 @@ class MailStoreDeviceTest {
         }finally{if(legacy.isOpen)legacy.close();helper.close();c.deleteDatabase("mail-v1.db")}
     }
 
+    @Test fun htmlAndInlineImageMetadataSurviveAFlagUpdateFromAListPreview() {
+        val c=context();val db=LocalStore(c)
+        try {
+            db.putAccount(account())
+            val full=message().copy(body="Complete body "+"word ".repeat(200),htmlBody="<style>p{margin:0}</style><p>Complete body</p><img src='cid:x'>",contentVersion=1,
+                attachments=listOf(Attachment("1","image.png","image/png",123,"x")))
+            db.putMessage(full)
+            val preview=db.messages().single()
+            assertEquals("",preview.htmlBody)
+            db.putMessage(preview.copy(unread=true,starred=true))
+            val saved=db.message(full.id)!!
+            assertEquals(full.body,saved.body);assertEquals(full.htmlBody,saved.htmlBody);assertEquals(1,saved.contentVersion)
+            assertEquals("x",saved.attachments.single().contentId);assertEquals(MailContent.bytes(full),saved.cacheBytes)
+            assertTrue(saved.unread);assertTrue(saved.starred)
+            val old=db.encodeMessage(full).apply{remove("htmlBody");remove("contentVersion");getJSONArray("attachments").getJSONObject(0).remove("contentId")}
+            val legacy=db.decodeMessage(old)
+            assertEquals("",legacy.htmlBody);assertEquals(0,legacy.contentVersion);assertEquals("",legacy.attachments.single().contentId)
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
+
 }

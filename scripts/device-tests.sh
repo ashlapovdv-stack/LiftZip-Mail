@@ -4,7 +4,7 @@ set -uo pipefail
 device_test_status=0
 bash ./gradlew --no-daemon :app:connectedDebugAndroidTest || device_test_status=$?
 mkdir -p ui-checks || exit 1
-for image in inbox drawer queue partial-panels hidden-panels mail-partial single-unread; do
+for image in inbox drawer queue partial-panels hidden-panels mail-partial single-unread html-newsletter html-remote html-inline; do
     remote_image="/data/local/tmp/liftzip-ui-checks/$image.png"
     if adb shell test -f "$remote_image"; then
         adb exec-out cat "$remote_image" > "ui-checks/$image.png" || device_test_status=1

@@ -122,6 +122,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             try{repo.notificationEnvironmentChanged()}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
         }
     }
+    suspend fun inlineImage(m: MailItem,file: Attachment)=repo.inlineImage(m,file)
     fun notificationOpened(id: String) {
         viewModelScope.launch {try{repo.dismissNotifications(setOf(id))}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}
     }

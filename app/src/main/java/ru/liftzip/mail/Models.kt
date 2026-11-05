@@ -18,7 +18,7 @@ data class MailAccount(
     val secret: String = "", val senderName: String = name, val enabled: Boolean = true, val authKind: AuthKind = AuthKind.PASSWORD
 )
 
-data class Attachment(val path: String, val name: String, val mime: String, val size: Int)
+data class Attachment(val path: String, val name: String, val mime: String, val size: Int,val contentId: String="")
 data class OutgoingFile(val uri: String, val name: String, val mime: String, val size: Long) : java.io.Serializable
 data class OpenedAttachment(val uri: String, val name: String, val mime: String) : java.io.Serializable
 data class InboxHistory(val total: Int? = null, val hasOlder: Boolean = true, val unread: Int? = null)
@@ -32,7 +32,8 @@ data class MailItem(
     val unread: Boolean = false, val starred: Boolean = false, val localFolder: String = "inbox",
     val attachments: List<Attachment> = emptyList(), val outgoing: List<OutgoingFile> = emptyList(),
     val delivery: String = "", val previewOnly: Boolean = false, val contentCached: Boolean = true,
-    val forwarding: ForwardPlan? = null, val internetMessageId: String="", val sourceDraftId: String?=null, val editRevision: Long=0, val pendingDelete: Boolean=false, val cacheBytes: Long=0, val cachedAt: Long=0
+    val forwarding: ForwardPlan? = null, val internetMessageId: String="", val sourceDraftId: String?=null, val editRevision: Long=0, val pendingDelete: Boolean=false, val cacheBytes: Long=0, val cachedAt: Long=0,
+    val htmlBody: String="", val contentVersion: Int=0
 )
 
 data class ComposeDraft(

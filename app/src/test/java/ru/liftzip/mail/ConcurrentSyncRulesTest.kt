@@ -91,4 +91,17 @@ class ConcurrentSyncRulesTest {
         assertEquals("b",SenderRules.forNewMessage(accounts,"a","a"))
         assertNull(SenderRules.forNewMessage(listOf(account("a",false)),"a","a"))
     }
+    @Test fun headerPollingPreservesTheCachedHtmlAndItsFormatVersion() {
+        val full=mail("a").copy(body="Full text",htmlBody="<p>Full HTML</p>",contentVersion=1)
+        val header=full.copy(body="",htmlBody="",contentVersion=0,contentCached=false,previewOnly=true)
+        val result=SyncRules.checkedPage(listOf(full),listOf(full),InboxPage(listOf(header),InboxHistory(1,false)),emptySet()).single()
+        assertEquals(full.htmlBody,result.htmlBody);assertEquals(1,result.contentVersion)
+    }
+    @Test fun aNewFormatCanReplaceAnOldCachedTextWithoutLosingTheHtmlAgain() {
+        val old=mail("a").copy(body="Old text",contentVersion=0)
+        val fresh=old.copy(body="Clean text",htmlBody="<p>Clean HTML</p>",contentVersion=1)
+        val result=SyncRules.checkedPage(listOf(old),listOf(old),InboxPage(listOf(fresh),InboxHistory(1,false)),emptySet()).single()
+        assertEquals(fresh.htmlBody,result.htmlBody);assertEquals("Clean text",result.body);assertEquals(1,result.contentVersion)
+    }
+
 }
