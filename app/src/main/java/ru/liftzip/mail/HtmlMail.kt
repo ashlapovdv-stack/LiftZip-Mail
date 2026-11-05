@@ -123,9 +123,10 @@ object HtmlMail {
             }?:return null
             if(image is MailImageSource.Remote)hasExternal=true
             if(image is MailImageSource.Remote && !external)return null
-            if(resources.size>=64)return null
             val old=resources.entries.firstOrNull{it.value==image}
-            val path=old?.key?:"${ORIGIN}image/$namespace/${resources.size}".also{resources[it]=image}
+            if(old!=null)return old.key to image
+            if(resources.size>=64)return null
+            val path="${ORIGIN}image/$namespace/${resources.size}".also{resources[it]=image}
             return path to image
         }
         doc.select("img").toList().forEach{img->
@@ -135,8 +136,7 @@ object HtmlMail {
             else{img.attr("src",resolved.first);img.removeAttr("srcset")}
         }
         // CSS images use the same isolated loader; external fonts and unknown resources stay blocked.
-        val cssUrls=Regex("(?i)url\\(\\s*['\"]?([^'\")]+)['\"]?\\s*\\)")
-        fun css(value: String)=cssUrls.replace(value){m->resource(m.groupValues[1].trim())?.let{"url('${it.first}')"}?:"none"}
+        fun css(value: String)=rewriteCss(value){resource(it)?.first}
         doc.select("[style]").forEach{it.attr("style",css(it.attr("style")))}
         doc.select("style").forEach{it.html(css(it.data()))}
         doc.select("a").forEach{it.removeAttr("target");it.attr("rel","noreferrer noopener")}
@@ -148,4 +148,33 @@ object HtmlMail {
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
         return MailHtmlDocument(wrapped,resources,hasExternal)
     }
+    /** One forward scan, including malformed input; nested url( text cannot cause regex backtracking. */
+    private fun rewriteCss(value: String,resolve: (String)->String?): String {
+        val out=StringBuilder();var cursor=0
+        while(cursor<value.length) {
+            val start=value.indexOf("url(",cursor,ignoreCase=true)
+            if(start<0){out.append(value,cursor,value.length);break}
+            out.append(value,cursor,start)
+            var index=start+4
+            while(index<value.length && value[index].isWhitespace())index++
+            val quote=value.getOrNull(index)?.takeIf{it=='\'' || it=='"'}
+            if(quote!=null)index++
+            val token=StringBuilder();var ended=false
+            while(index<value.length) {
+                val character=value[index++]
+                if(character=='\\' && index<value.length){if(token.length<=8192)token.append(value[index]);index++;continue}
+                if(quote!=null && character==quote || quote==null && character==')'){ended=true;break}
+                if(token.length<=8192)token.append(character)
+            }
+            if(ended && quote!=null) {
+                while(index<value.length && value[index].isWhitespace())index++
+                if(value.getOrNull(index)==')')index++ else ended=false
+            }
+            val target=if(ended && token.length<=8192)resolve(token.toString().trim())else null
+            if(target!=null)out.append("url('").append(target).append("')")else out.append("none")
+            cursor=index
+        }
+        return out.toString()
+    }
+
 }

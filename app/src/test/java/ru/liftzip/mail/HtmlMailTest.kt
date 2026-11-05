@@ -120,4 +120,17 @@ class HtmlMailTest {
         }
     }
 
+    @Test fun quotedCssImageUrlsKeepTheirParentheses() {
+        val source="<div style=\"background-image:url('https://img.example/hero_(Q4).png')\">Article</div>"
+        val doc=HtmlMail.document(source,"",emptyList(),external=true)
+        assertEquals(MailImageSource.Remote("https://img.example/hero_(Q4).png"),doc.images.values.single())
+        assertFalse(Jsoup.parse(doc.html).selectFirst("div")!!.attr("style").contains(".png"))
+    }
+    @Test fun longMalformedCssCannotReachAnyImageSourceOrDestroyReadableBodyText() {
+        val source="<div style=\"background:"+"url(".repeat(10_000)+"\">Readable body</div>"
+        val doc=HtmlMail.document(source,"",emptyList(),external=true)
+        assertTrue(doc.images.isEmpty());assertEquals("Readable body",Jsoup.parse(doc.html).body().text())
+        assertEquals("background:none",Jsoup.parse(doc.html).selectFirst("div")!!.attr("style"))
+    }
+
 }
