@@ -81,6 +81,18 @@ class WindowBackgroundDeviceTest {
                         val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
                         if(shot==null)false else try{close(canvas,shot.getPixel(shot.width/8,shot.height-bottom/2))}finally{shot.recycle()}
                     }
+                    // The nav overlay and its insets can settle after the background pixel.
+                    // Wait for both the measured controls and current system insets to agree.
+                    rule.waitUntil(15000) {
+                        rule.runOnIdle {
+                            val bars=rule.activity.window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
+                            top=bars.top;bottom=bars.bottom
+                        }
+                        val upper=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
+                        val lower=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInWindow
+                        val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                        if(shot==null)false else try{upper.top>=top && lower.bottom<=shot.height-bottom}finally{shot.recycle()}
+                    }
                     // Window insets and screenshots use window coordinates, which may differ
                     // from the Compose root after an Android navigation-mode change.
                     val menu=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
