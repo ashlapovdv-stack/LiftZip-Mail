@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.viewinterop.AndroidView
@@ -218,7 +219,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                     addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                 }catch(e: Exception){failed=true;loader.close()}
             }},
-                modifier=Modifier.fillMaxWidth().padding(vertical=10.dp).height(with(density){height.coerceAtMost(viewport).toDp()})
+                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=10.dp).height(with(density){height.coerceAtMost(viewport).toDp()})
                     .onGloballyPositioned{scroll?.position(it.positionInWindow().y.toInt())},
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})

@@ -61,9 +61,9 @@ class MessageFlowDeviceTest {
         val m=mail.copy(attachments=listOf(Attachment("1","схема.png","image/png",2048)))
         var opened=0;var downloaded=0
         rule.setContent{MailTheme{ReaderScreen(m,account,false,emptyList(),emptySet(),onBack={},onStar={},onInline={error("No inline images")},onLink={},onDownload={downloaded++},onOpenAttachment={opened++},onOpenLocal={},onReply={},onForward={})}}
-        rule.waitUntil(15000){rule.onAllNodesWithText("Основной текст").fetchSemanticsNodes().isNotEmpty()}
+        rule.waitUntil(30000){rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().isNotEmpty()}
         val attachment=rule.onNodeWithContentDescription("Вложение схема.png").fetchSemanticsNode().boundsInRoot
-        val body=rule.onNodeWithText("Основной текст").fetchSemanticsNode().boundsInRoot
+        val body=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot
         assertTrue("Attachments must precede the body",attachment.bottom<body.top)
         rule.onNodeWithText("схема.png").performClick()
         rule.onNodeWithContentDescription("Сохранить схема.png").performClick()

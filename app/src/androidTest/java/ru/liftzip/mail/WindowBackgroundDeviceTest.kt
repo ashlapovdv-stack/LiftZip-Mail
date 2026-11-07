@@ -81,8 +81,10 @@ class WindowBackgroundDeviceTest {
                         val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
                         if(shot==null)false else try{close(canvas,shot.getPixel(shot.width/8,shot.height-bottom/2))}finally{shot.recycle()}
                     }
-                    val menu=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInRoot
-                    val tabs=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInRoot
+                    // Window insets and screenshots use window coordinates, which may differ
+                    // from the Compose root after an Android navigation-mode change.
+                    val menu=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
+                    val tabs=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInWindow
                     val bitmap=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No full-window screenshot")
                     try {
                         saveDeviceBitmap(bitmap,"edge-${selected.key}-$mode")
