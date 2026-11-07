@@ -138,15 +138,15 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
                 (m as? IMAPMessage)?.setPeek(true)
                 val uid=folder.getUID(m)
                 val existing=cachedByUid[uid]
-                if(!loadOlder && existing!=null)return@map existing.copy(internetMessageId=existing.internetMessageId.ifBlank{(m as? MimeMessage)?.messageID.orEmpty()},localFolder=FolderRules.local(role),unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED))
+                if(!loadOlder && existing!=null)return@map existing.copy(internetMessageId=existing.internetMessageId.ifBlank{(m as? MimeMessage)?.messageID.orEmpty()},localFolder=FolderRules.local(role),unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),answered=existing.answered || m.isSet(Flags.Flag.ANSWERED),forwarded=existing.forwarded || m.flags.contains("\$Forwarded"))
                 val reused=existing?.takeIf{it.contentCached}
                 // Pagination must advance even if a particular MIME body cannot be read.
                 val content=if(reused!=null)DecodedMail(reused.body,reused.attachments) else DecodedMail("",emptyList())
-                if(existing!=null)return@map existing.copy(localFolder=FolderRules.local(role),body=content.text,attachments=content.attachments,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),previewOnly=reused?.previewOnly?:false,contentCached=reused!=null)
+                if(existing!=null)return@map existing.copy(localFolder=FolderRules.local(role),body=content.text,attachments=content.attachments,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),answered=existing.answered || m.isSet(Flags.Flag.ANSWERED),forwarded=existing.forwarded || m.flags.contains("\$Forwarded"),previewOnly=reused?.previewOnly?:false,contentCached=reused!=null)
                 val from=m.from?.firstOrNull() as? InternetAddress
                 MailItem(FolderRules.id(a.id,folderPath,folder.uidValidity,uid),a.id,uid,folder.uidValidity,folderPath,from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:(if(role==FolderRole.DRAFTS)"" else "Без темы"),content.text,
-                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false,localFolder=FolderRules.local(role),internetMessageId=(m as? MimeMessage)?.messageID.orEmpty())
+                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false,localFolder=FolderRules.local(role),internetMessageId=(m as? MimeMessage)?.messageID.orEmpty(),answered=m.isSet(Flags.Flag.ANSWERED),forwarded=m.flags.contains("\$Forwarded"))
             }
             val unread=if(loadOlder)null else folder.unreadMessageCount.takeIf{it>=0}
             InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1,unread),folder.uidValidity)
@@ -166,12 +166,12 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
                 val uid=folder.getUID(m)
                 val id="${a.id}:${folder.uidValidity}:$uid"
                 val existing=byId[id]
-                if(existing!=null)return@map existing.copy(internetMessageId=existing.internetMessageId.ifBlank{(m as? MimeMessage)?.messageID.orEmpty()},unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED))
+                if(existing!=null)return@map existing.copy(internetMessageId=existing.internetMessageId.ifBlank{(m as? MimeMessage)?.messageID.orEmpty()},unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),answered=existing.answered || m.isSet(Flags.Flag.ANSWERED),forwarded=existing.forwarded || m.flags.contains("\$Forwarded"))
                 val from=m.from?.firstOrNull() as? InternetAddress
                 MailItem(id,a.id,uid,folder.uidValidity,"INBOX",from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",existing?.body.orEmpty(),
                     (m.receivedDate?:m.sentDate)?.time?:0L,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),localFolder=existing?.localFolder?:"unread-cache",
-                    attachments=existing?.attachments.orEmpty(),previewOnly=existing?.previewOnly?:false,contentCached=existing?.contentCached?:false,internetMessageId=(m as? MimeMessage)?.messageID.orEmpty())
+                    attachments=existing?.attachments.orEmpty(),previewOnly=existing?.previewOnly?:false,contentCached=existing?.contentCached?:false,internetMessageId=(m as? MimeMessage)?.messageID.orEmpty(),answered=m.isSet(Flags.Flag.ANSWERED),forwarded=m.flags.contains("\$Forwarded"))
             }
             UnreadPage(folder.uidValidity,items,folder.messageCount)
         }finally{folder.close(false)}
@@ -246,6 +246,18 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             }finally{withContext(NonCancellable){runInterruptible{runCatching{folder.close(false)}}}}
             target.fullName
         }
+    }
+    fun markResponse(a: MailAccount,password: String,message: MailItem,forward: Boolean) = store(a,password).use { connection->
+        val folder=connection.getFolder(message.remoteFolder) as IMAPFolder
+        folder.open(Folder.READ_WRITE)
+        try {
+            require(message.validity==folder.uidValidity){"Папка изменилась. Обновите список писем."}
+            val remote=folder.getMessageByUID(message.uid)?:return@use
+            val permanent=folder.permanentFlags
+            val flags=if(forward)Flags("\$Forwarded") else Flags(Flags.Flag.ANSWERED)
+            val supported=if(forward)permanent.contains(Flags.Flag.USER) || permanent.contains("\$Forwarded") else permanent.contains(Flags.Flag.ANSWERED)
+            if(supported)folder.setFlags(arrayOf(remote),flags,true)
+        }finally{folder.close(false)}
     }
     fun flagsMany(a: MailAccount,password: String,messages: List<MailItem>,seen: Boolean?=null,starred: Boolean?=null): Set<Long> = store(a,password).use { store->
         if(messages.isEmpty())return@use emptySet()

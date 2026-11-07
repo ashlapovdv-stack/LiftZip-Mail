@@ -175,4 +175,26 @@ class InboxDeviceTest {
         rule.runOnIdle{assertTrue(progress.floatValue>0f);assertEquals(10,list.firstVisibleItemIndex);assertEquals(0,list.firstVisibleItemScrollOffset)}
         saveDeviceScreenshot(rule,"row-boundary")
     }
+    @Test fun hidingPanelsFirstMovesAClippedCardToTheNextBoundary() {
+        val progress=mutableFloatStateOf(1f);val controller=InboxChromeController(1f)
+        val list=LazyListState(10,100)
+        rule.setContent {
+            val fraction=remember{{progress.floatValue}}
+            val connection=remember{InboxScrollConnection(controller,progress,{false},{!list.canScrollBackward},{false},{},{},list)}
+            MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),
+                header={Text("Header",Modifier.fillMaxWidth().height(180.dp))},bottom={alpha->InboxFadingControl(alpha){Text("Tabs",Modifier.height(80.dp))}},list={padding->
+                    LazyColumn(Modifier.fillMaxSize().testTag("hide-boundary-list").nestedScroll(connection),state=list,contentPadding=padding) {
+                        items(100,key={it}){Text("Card $it",Modifier.fillMaxWidth().height(120.dp))}
+                    }
+                })}
+        }
+        rule.waitForIdle()
+        var remaining=0
+        rule.runOnIdle{val info=list.layoutInfo.visibleItemsInfo.first{it.index==list.firstVisibleItemIndex};remaining=info.size-list.firstVisibleItemScrollOffset;assertTrue(remaining>100)}
+        rule.onNodeWithTag("hide-boundary-list").performTouchInput{down(center);moveBy(Offset(0f,-60f));advanceEventTime(500);up()}
+        rule.waitForIdle();rule.runOnIdle{assertEquals(1f,progress.floatValue,0f);assertTrue(list.firstVisibleItemScrollOffset>100)}
+        rule.onNodeWithTag("hide-boundary-list").performTouchInput{down(center);moveBy(Offset(0f,-(remaining+160).toFloat()));advanceEventTime(500);up()}
+        rule.waitForIdle();rule.runOnIdle{assertTrue(progress.floatValue<1f);assertEquals(11,list.firstVisibleItemIndex);assertEquals(0,list.firstVisibleItemScrollOffset)}
+        saveDeviceScreenshot(rule,"hide-row-boundary")
+    }
 }

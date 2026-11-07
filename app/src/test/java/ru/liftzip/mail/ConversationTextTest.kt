@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationTextTest {
+    @Test fun quotedHistoryHidesInvisibleObjectsButPreservesTheOriginal() {
+        val body="Новый ответ\n\nOn 28 Oct 2026, Person <a@example.com> wrote:\n> Текст\uFFFC\u200B\u00A0письма"
+        val parsed=ConversationText.parse(body)
+        assertEquals("Текст письма",parsed.messages.single().body)
+        assertEquals(body,parsed.original)
+    }
     @Test fun phoneExampleSeparatesNearestReplyAndOlderReply() {
         val body="Новый ответ\n\nчетверг, 29 октября 2026г., 16:47\n+09:00 от Дмитрий sales@example.com :\n\n> Предыдущий ответ\n>\n> ────────────────────\n> Клиент пишет:\n> Первый вопрос\n>"
         val c=ConversationText.parse(body)

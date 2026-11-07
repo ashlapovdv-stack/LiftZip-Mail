@@ -10,6 +10,7 @@ class InboxChromeController(initialFraction: Float=1f) {
     fun show(){fraction=1f}
     fun beginFling(velocity: Float){flingActive=velocity.isFinite() && kotlin.math.abs(velocity)>0.01f}
     fun endFling(){flingActive=false}
+    fun follows(userInput: Boolean)=userInput || flingActive
     /** Consume only the movement used to shift the list's viewport. LazyColumn gets the rest,
      * otherwise the same drag would move the rows twice as far as the finger. */
     fun scroll(delta: Float,forced: Boolean=false,userInput: Boolean=true): Float {
@@ -28,6 +29,9 @@ object InboxInteractionRules {
     /** Finish uncovering the clipped row before opening panels above it. */
     fun revealAlignment(delta: Float,fraction: Float,rowOffset: Int)=
         if(delta.isFinite() && delta>0f && fraction==0f)minOf(delta,rowOffset.coerceAtLeast(0).toFloat())else 0f
+    fun hideAlignment(delta: Float,fraction: Float,rowOffset: Int,rowSize: Int)=
+        if(delta.isFinite() && delta<0f && fraction==1f && rowOffset>0 && rowSize>rowOffset)
+            -minOf(-delta,(rowSize-rowOffset).toFloat()) else 0f
     fun viewport(height: Int,header: Int,bottom: Int,fraction: Float): InboxViewportGeometry {
         val progress=fraction.coerceIn(0f,1f)
         val offset=kotlin.math.round(header*progress).toInt()

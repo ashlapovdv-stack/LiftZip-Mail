@@ -60,7 +60,7 @@ class WindowBackgroundDeviceTest {
             for((mode,overlay) in listOf("buttons" to "threebutton","gestures" to "gestural")) {
                 val result=command("cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.$overlay")
                 assertFalse(result,result.contains("Error",true))
-                rule.waitUntil(5000){currentOverlay()?.endsWith(".$overlay")==true}
+                rule.waitUntil(15000){currentOverlay()?.endsWith(".$overlay")==true}
                 // Framework overlay changes can recreate the plain test host. Production
                 // MainActivity configures every new window in onCreate; reproduce that here.
                 rule.activityRule.scenario.recreate()
@@ -77,12 +77,26 @@ class WindowBackgroundDeviceTest {
                         contrast=rule.activity.window.isNavigationBarContrastEnforced
                     }
                     assertTrue(top>0);assertTrue(bottom>0)
-                    rule.waitUntil(5000) {
+                    rule.waitUntil(15000) {
                         val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
                         if(shot==null)false else try{close(canvas,shot.getPixel(shot.width/8,shot.height-bottom/2))}finally{shot.recycle()}
                     }
-                    val menu=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInRoot
-                    val tabs=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInRoot
+                    // The nav overlay and its insets can settle after the background pixel.
+                    // Wait for both the measured controls and current system insets to agree.
+                    rule.waitUntil(15000) {
+                        rule.runOnIdle {
+                            val bars=rule.activity.window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
+                            top=bars.top;bottom=bars.bottom
+                        }
+                        val upper=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
+                        val lower=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInWindow
+                        val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                        if(shot==null)false else try{upper.top>=top && lower.bottom<=shot.height-bottom}finally{shot.recycle()}
+                    }
+                    // Window insets and screenshots use window coordinates, which may differ
+                    // from the Compose root after an Android navigation-mode change.
+                    val menu=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
+                    val tabs=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInWindow
                     val bitmap=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No full-window screenshot")
                     try {
                         saveDeviceBitmap(bitmap,"edge-${selected.key}-$mode")

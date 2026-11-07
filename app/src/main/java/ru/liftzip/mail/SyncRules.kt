@@ -35,6 +35,7 @@ object SyncRules {
         var result=incoming
         if(current?.contentCached==true && (incoming.previewOnly || incoming.contentVersion<=current.contentVersion))result=result.copy(body=current.body,htmlBody=current.htmlBody,contentVersion=current.contentVersion,cacheBytes=current.cacheBytes,attachments=current.attachments,contentCached=true,previewOnly=current.previewOnly)
         if(current!=null && protectFlags)result=result.copy(unread=current.unread,starred=current.starred)
+        if(current!=null)result=result.copy(answered=result.answered || current.answered,forwarded=result.forwarded || current.forwarded)
         return result
     }
     fun checkedPage(captured: List<MailItem>,current: List<MailItem>,page: InboxPage,protected: Set<String>): List<MailItem> {
@@ -61,7 +62,7 @@ object SyncRules {
     }
     fun contentBatch(current: List<MailItem>,batch: ContentBatch): List<MailItem> {
         val byId=batch.messages.associateBy{it.id}
-        return current.filter{it.id !in batch.missingIds}.map{m->byId[m.id]?.copy(unread=m.unread,starred=m.starred,localFolder=m.localFolder)?:m}
+        return current.filter{it.id !in batch.missingIds}.map{m->byId[m.id]?.let{it.copy(unread=m.unread,starred=m.starred,localFolder=m.localFolder,answered=it.answered || m.answered,forwarded=it.forwarded || m.forwarded)}?:m}
     }
     fun remoteInbox(message: MailItem)=message.localFolder=="inbox" || message.localFolder=="unread-cache"
     fun mergeWindow(cached: List<MailItem>,page: InboxPage): List<MailItem> {

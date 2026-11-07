@@ -10,6 +10,7 @@ data class QuotedConversation(val current: String,val messages: List<QuotedMessa
 
 /** Recognizes nested text quotations, not server threads. Ambiguous inline replies stay intact. */
 object ConversationText {
+    private fun cleanQuote(text: String)=text.replace("\uFFFC","").replace("\u200B","").replace("\uFEFF","").replace('\u00A0',' ')
     private data class Header(val lines: Int,val sender: String?=null,val date: String?=null,val attribution: String?=null)
     private val weekdays=Regex("^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье),?\\s+\\d.*",RegexOption.IGNORE_CASE)
     private val original=Regex("^-{2,}\\s*(Original Message|Исходное сообщение)\\s*-{2,}$",RegexOption.IGNORE_CASE)
@@ -26,7 +27,7 @@ object ConversationText {
             val header=header(lines)
             val text=peel(lines.drop(header?.lines?:0).dropWhile{it.isBlank()}).joinToString("\n").trim()
             val nested=ReplyText.split(text)
-            messages+=QuotedMessage(header?.sender,header?.date,if(nested.canCollapse)nested.current else text,header?.attribution)
+            messages+=QuotedMessage(header?.sender?.let(::cleanQuote),header?.date?.let(::cleanQuote),cleanQuote(if(nested.canCollapse)nested.current else text),header?.attribution?.let(::cleanQuote))
             if(!nested.canCollapse)return QuotedConversation(parts.current,messages,body)
             remaining=nested.quoted.orEmpty()
         }

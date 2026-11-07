@@ -1,11 +1,11 @@
 package ru.liftzip.mail
 
-enum class ActionKind { FLAGS, TRASH, SEND, APPEND_DRAFT, APPEND_SENT, REMOVE_DRAFT, SPAM, RESTORE_INBOX }
+enum class ActionKind { FLAGS, TRASH, SEND, APPEND_DRAFT, APPEND_SENT, REMOVE_DRAFT, SPAM, RESTORE_INBOX, MARK_ANSWERED, MARK_FORWARDED }
 data class MailAction(val id: String,val accountId: String,val messageId: String,val kind: ActionKind,val payload: String,
     val revision: Long=1,val subject: String="",val serverKey: String="",val unread: Boolean?=null,val starred: Boolean?=null,
     val created: Long=System.currentTimeMillis(),val attempt: Int=0,val nextAttempt: Long=0,val status: String="pending",val error: String="",val lease: String="") {
     val active get()=status in setOf("pending","running","sending","auth")
-    val title get()=when(kind){ActionKind.FLAGS->"Статус письма";ActionKind.TRASH->"Удаление";ActionKind.SEND->"Отправка";ActionKind.APPEND_DRAFT->"Черновик на сервере";ActionKind.APPEND_SENT->"Копия в Отправленных";ActionKind.REMOVE_DRAFT->"Удаление черновика";ActionKind.SPAM->"Перемещение в Спам";ActionKind.RESTORE_INBOX->"Возврат во Входящие"}
+    val title get()=when(kind){ActionKind.FLAGS->"Статус письма";ActionKind.TRASH->"Удаление";ActionKind.SEND->"Отправка";ActionKind.APPEND_DRAFT->"Черновик на сервере";ActionKind.APPEND_SENT->"Копия в Отправленных";ActionKind.REMOVE_DRAFT->"Удаление черновика";ActionKind.SPAM->"Перемещение в Спам";ActionKind.RESTORE_INBOX->"Возврат во Входящие";ActionKind.MARK_ANSWERED->"Отметка ответа";ActionKind.MARK_FORWARDED->"Отметка пересылки"}
 }
 
 object ActionRules {
@@ -21,5 +21,5 @@ object ActionRules {
         val deleting=actions.filter{(folderMove(it.kind) || it.kind==ActionKind.REMOVE_DRAFT) && it.active}.map{it.messageId}.toSet()
         return items.map{m->val a=pending[m.id];m.copy(unread=a?.unread?:m.unread,starred=a?.starred?:m.starred,pendingDelete=m.id in deleting)}
     }
-    fun protectedIds(actions: List<MailAction>)=actions.filter{it.kind==ActionKind.FLAGS || folderMove(it.kind)}.map{it.messageId}.toSet()
+    fun protectedIds(actions: List<MailAction>)=actions.filter{it.kind in setOf(ActionKind.FLAGS,ActionKind.MARK_ANSWERED,ActionKind.MARK_FORWARDED) || folderMove(it.kind)}.map{it.messageId}.toSet()
 }
