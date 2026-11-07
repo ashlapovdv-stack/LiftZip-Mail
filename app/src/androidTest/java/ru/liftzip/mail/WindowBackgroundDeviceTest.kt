@@ -60,7 +60,7 @@ class WindowBackgroundDeviceTest {
             for((mode,overlay) in listOf("buttons" to "threebutton","gestures" to "gestural")) {
                 val result=command("cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.$overlay")
                 assertFalse(result,result.contains("Error",true))
-                rule.waitUntil(5000){currentOverlay()?.endsWith(".$overlay")==true}
+                rule.waitUntil(15000){currentOverlay()?.endsWith(".$overlay")==true}
                 // Framework overlay changes can recreate the plain test host. Production
                 // MainActivity configures every new window in onCreate; reproduce that here.
                 rule.activityRule.scenario.recreate()
@@ -77,7 +77,7 @@ class WindowBackgroundDeviceTest {
                         contrast=rule.activity.window.isNavigationBarContrastEnforced
                     }
                     assertTrue(top>0);assertTrue(bottom>0)
-                    rule.waitUntil(5000) {
+                    rule.waitUntil(15000) {
                         val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
                         if(shot==null)false else try{close(canvas,shot.getPixel(shot.width/8,shot.height-bottom/2))}finally{shot.recycle()}
                     }

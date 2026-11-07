@@ -55,13 +55,13 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             id=j.getString("id"), name=j.getString("name"), email=j.getString("email"), username=j.getString("username"),
             provider=Provider.valueOf(j.getString("provider")), imapHost=j.getString("imapHost"), imapPort=j.getInt("imapPort"),
             imapStartTls=j.getBoolean("imapStartTls"), smtpHost=j.getString("smtpHost"), smtpPort=j.getInt("smtpPort"),
-            smtpStartTls=j.getBoolean("smtpStartTls"), secret=j.getString("secret"), senderName=j.optString("senderName",j.getString("name")),enabled=j.optBoolean("enabled",true),authKind=runCatching{AuthKind.valueOf(j.optString("authKind","PASSWORD"))}.getOrDefault(AuthKind.PASSWORD)
+            smtpStartTls=j.getBoolean("smtpStartTls"), secret=j.getString("secret"), senderName=j.optString("senderName",j.getString("name")),enabled=j.optBoolean("enabled",true),authKind=runCatching{AuthKind.valueOf(j.optString("authKind","PASSWORD"))}.getOrDefault(AuthKind.PASSWORD),colorSlot=j.optInt("colorSlot",-1)
         )) } }
     }
     @Synchronized fun putAccount(a: MailAccount) {
         val j=JSONObject().put("id",a.id).put("name",a.name).put("email",a.email).put("username",a.username)
             .put("provider",a.provider.name).put("imapHost",a.imapHost).put("imapPort",a.imapPort).put("imapStartTls",a.imapStartTls)
-            .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName).put("enabled",a.enabled).put("authKind",a.authKind.name)
+            .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName).put("enabled",a.enabled).put("authKind",a.authKind.name).put("colorSlot",a.colorSlot)
         writableDatabase.insertOrThrow("accounts",null,ContentValues().apply { put("id",a.id);put("data",j.toString()) })
     }
     @Synchronized fun updateAccount(a: MailAccount,resetInbox: Boolean) {
@@ -70,7 +70,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         try {
             val j=JSONObject().put("id",a.id).put("name",a.name).put("email",a.email).put("username",a.username)
                 .put("provider",a.provider.name).put("imapHost",a.imapHost).put("imapPort",a.imapPort).put("imapStartTls",a.imapStartTls)
-                .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName).put("enabled",a.enabled).put("authKind",a.authKind.name)
+                .put("smtpHost",a.smtpHost).put("smtpPort",a.smtpPort).put("smtpStartTls",a.smtpStartTls).put("secret",a.secret).put("senderName",a.senderName).put("enabled",a.enabled).put("authKind",a.authKind.name).put("colorSlot",a.colorSlot)
             // UPDATE preserves the account row and its drafts/sent; REPLACE would cascade-delete them.
             require(db.update("accounts",ContentValues().apply{put("data",j.toString())},"id = ?",arrayOf(a.id))==1)
             if(resetInbox) {
@@ -153,6 +153,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         .put("to",m.recipients).put("subject",m.subject).put("body",m.body).put("htmlBody",m.htmlBody).put("contentVersion",m.contentVersion).put("date",m.date).put("unread",m.unread)
         .put("starred",m.starred).put("folder",m.localFolder).put("delivery",m.delivery).put("contentCached",m.contentCached)
         .put("cacheBytes",m.cacheBytes).put("cachedAt",m.cachedAt).put("internetMessageId",m.internetMessageId).put("sourceDraftId",m.sourceDraftId).put("editRevision",m.editRevision).put("pendingDelete",m.pendingDelete)
+        .put("answered",m.answered).put("forwarded",m.forwarded).put("responseTo",m.responseTo).put("responseKind",m.responseKind)
         .put("forwarding",m.forwarding?.let(::encodeForward))
         .put("attachments",JSONArray().apply { m.attachments.forEach { a->put(JSONObject().put("path",a.path).put("name",a.name).put("mime",a.mime).put("size",a.size).put("contentId",a.contentId)) } })
         .put("outgoing",JSONArray().apply { m.outgoing.forEach { a->put(JSONObject().put("uri",a.uri).put("name",a.name).put("mime",a.mime).put("size",a.size)) } })
@@ -163,7 +164,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             HeaderText.decode(j.getString("sender")),j.getString("email"),HeaderText.recipients(j.getString("to")),HeaderText.decode(j.getString("subject")),j.getString("body").let{if(preview)it.take(MailContent.PREVIEW_LENGTH)else it},j.getLong("date"),
             j.getBoolean("unread"),j.getBoolean("starred"),j.getString("folder"),
             List(attachments.length()) { i-> val a=attachments.getJSONObject(i);Attachment(a.getString("path"),a.getString("name"),a.getString("mime"),a.getInt("size"),a.optString("contentId")) },
-            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true),forwarding=j.optJSONObject("forwarding")?.let(::decodeForward),internetMessageId=j.optString("internetMessageId").ifBlank{if(j.getString("folder") in setOf("drafts","sent","outbox"))MessageIdentity.forDraft(j.getString("id"))else ""},sourceDraftId=j.optString("sourceDraftId").takeIf{it.isNotBlank() && it!="null"},editRevision=j.optLong("editRevision"),pendingDelete=j.optBoolean("pendingDelete"),cacheBytes=if(j.has("cacheBytes"))j.optLong("cacheBytes")else j.getString("body").length*2L,cachedAt=j.optLong("cachedAt",j.optLong("date")),htmlBody=if(preview)"" else j.optString("htmlBody"),contentVersion=j.optInt("contentVersion"))
+            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true),forwarding=j.optJSONObject("forwarding")?.let(::decodeForward),internetMessageId=j.optString("internetMessageId").ifBlank{if(j.getString("folder") in setOf("drafts","sent","outbox"))MessageIdentity.forDraft(j.getString("id"))else ""},sourceDraftId=j.optString("sourceDraftId").takeIf{it.isNotBlank() && it!="null"},editRevision=j.optLong("editRevision"),pendingDelete=j.optBoolean("pendingDelete"),cacheBytes=if(j.has("cacheBytes"))j.optLong("cacheBytes")else j.getString("body").length*2L,cachedAt=j.optLong("cachedAt",j.optLong("date")),htmlBody=if(preview)"" else j.optString("htmlBody"),contentVersion=j.optInt("contentVersion"),answered=j.optBoolean("answered"),forwarded=j.optBoolean("forwarded"),responseTo=j.optString("responseTo").takeIf{it.isNotBlank() && it!="null"},responseKind=j.optString("responseKind"))
     }
     private fun encodeForward(p: ForwardPlan)=JSONObject().put("account",p.accountId).put("message",p.messageId)
         .put("uid",p.uid).put("validity",p.validity).put("folder",p.remoteFolder).put("sourceKey",p.sourceKey)

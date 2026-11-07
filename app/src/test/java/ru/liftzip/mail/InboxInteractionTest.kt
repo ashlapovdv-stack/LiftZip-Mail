@@ -27,6 +27,13 @@ class InboxInteractionTest {
         assertEquals(120f,alignment+consumed,0f)
         assertEquals(0.2f,controller.fraction,0.00001f)
     }
+    @Test fun hidingWaitsForThePartlyVisibleRowToMovePastTheHeader() {
+        assertEquals(-30f,InboxInteractionRules.hideAlignment(-30f,1f,80,200),0f)
+        assertEquals(-120f,InboxInteractionRules.hideAlignment(-200f,1f,80,200),0f)
+        assertEquals(0f,InboxInteractionRules.hideAlignment(-50f,1f,0,200),0f)
+        assertEquals(0f,InboxInteractionRules.hideAlignment(-50f,0.5f,80,200),0f)
+        assertEquals(0f,InboxInteractionRules.hideAlignment(50f,1f,80,200),0f)
+    }
     @Test fun reversingTheAnimationHasNoViewportResizeOrPositionJumpAtTheEndpoints() {
         val fractions=(0..100).map{it/100f}+(100 downTo 0).map{it/100f}
         val positions=fractions.map{InboxInteractionRules.viewport(800,218,152,it)}

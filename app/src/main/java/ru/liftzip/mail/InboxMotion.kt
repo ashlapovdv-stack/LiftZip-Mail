@@ -48,11 +48,16 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
         if(source==NestedScrollSource.UserInput)controller.endFling()
         val before=controller.fraction
         val force=forced()
-        val alignment=if(!force && listState!=null)InboxInteractionRules.revealAlignment(available.y,before,listState.firstVisibleItemScrollOffset)else 0f
+        val userInput=source==NestedScrollSource.UserInput
+        val alignment=if(!force && listState!=null && controller.follows(userInput)) {
+            val offset=listState.firstVisibleItemScrollOffset
+            val first=listState.layoutInfo.visibleItemsInfo.firstOrNull{it.index==listState.firstVisibleItemIndex}
+            InboxInteractionRules.revealAlignment(available.y,before,offset)+InboxInteractionRules.hideAlignment(available.y,before,offset,first?.size?:0)
+        }else 0f
         // dispatchRawDelta handles only this row fragment; the remaining motion is still
         // distributed through nested scroll, so neither the row nor the header moves twice.
-        val aligned=if(alignment>0f && listState!=null)-listState.dispatchRawDelta(-alignment)else 0f
-        val consumed=controller.scroll(available.y-aligned,forced=force,userInput=source==NestedScrollSource.UserInput)
+        val aligned=if(alignment!=0f && listState!=null)-listState.dispatchRawDelta(-alignment)else 0f
+        val consumed=controller.scroll(available.y-aligned,forced=force,userInput=userInput)
         progress.floatValue=controller.fraction
         if(before==1f && controller.fraction<1f)onHide()
         return Offset(0f,aligned+consumed)
@@ -67,16 +72,18 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
 
 /** Stable insets are read by LazyColumn in measurement, never by the screen's composition. */
 @Composable fun InboxViewport(fraction: ()->Float,onHeaderMeasured: (Float)->Unit,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable (contentAlpha: ()->Float)->Unit,
-    list: @Composable (bottomPadding: PaddingValues)->Unit,onPanelsMeasured: (InboxPanelMetrics)->Unit={},endInset: Dp=0.dp) {
+    list: @Composable (bottomPadding: PaddingValues)->Unit,onPanelsMeasured: (InboxPanelMetrics)->Unit={},endInset: Dp=0.dp,nearEnd: ()->Boolean={true}) {
     val density=LocalDensity.current
     val headerHeight=remember{mutableIntStateOf(0)}
     val bottomHeight=remember{mutableIntStateOf(0)}
-    val insets=remember(fraction,density,endInset){object: PaddingValues {
+    val insets=remember(fraction,density,endInset,nearEnd){object: PaddingValues {
         override fun calculateTopPadding()=0.dp
         override fun calculateLeftPadding(layoutDirection: LayoutDirection)=0.dp
         override fun calculateRightPadding(layoutDirection: LayoutDirection)=0.dp
         override fun calculateBottomPadding(): Dp {
-            val progress=fraction().coerceIn(0f,1f)
+            // Away from the end, reserve the maximum once instead of remeasuring
+            // every visible card for each pixel of panel animation.
+            val progress=if(nearEnd())fraction().coerceIn(0f,1f)else 1f
             return with(density){((headerHeight.intValue+bottomHeight.intValue)*progress).toDp()}+endInset*(1f-progress)+12.dp
         }
     }}

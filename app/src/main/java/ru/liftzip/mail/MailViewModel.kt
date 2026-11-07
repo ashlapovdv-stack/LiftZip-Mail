@@ -51,7 +51,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             }.distinctUntilChanged().collect{work->mutable.update{it.copy(historyWork=work)}}
         }
         viewModelScope.launch {
-            repo.snapshot.collect { snapshot->(getApplication<Application>() as MailApplication).fastMail.ensure();mutable.update { it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
+            repo.snapshot.collect { _->(getApplication<Application>() as MailApplication).fastMail.ensure();mutable.update { val snapshot=repo.snapshot.value;it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
                 poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage,style=snapshot.style) } }
         }
         viewModelScope.launch {
@@ -84,6 +84,12 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
     }
     fun search(text: String){query.value=text}
+    fun canOpen(id: String): Boolean {
+        val snapshot=repo.snapshot.value
+        if(snapshot.messages.any{it.id==id && !it.pendingDelete})return true
+        mutable.update{it.copy(messages=snapshot.messages,history=snapshot.history,actions=snapshot.actions)}
+        return false
+    }
     suspend fun notificationMessage(id: String)=repo.cachedMessage(id)
     suspend fun preserveDraft(draft: ComposeDraft) {
         if(mutable.value.busy)return
@@ -228,7 +234,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun setAutoHidePanels(enabled: Boolean){viewModelScope.launch{try{repo.setAutoHidePanels(enabled)}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}
     fun deleteMessages(ids: Set<String>,onRemoved: (Set<String>)->Unit)=work {
         val result=repo.deleteMessages(ids)
-        mutable.update{it.copy(opened=it.opened?.takeUnless{m->m.id in result.removed})}
+        mutable.update{val snapshot=repo.snapshot.value;it.copy(messages=snapshot.messages,history=snapshot.history,actions=snapshot.actions,opened=it.opened?.takeUnless{m->m.id in result.removed})}
         onRemoved(result.removed)
         notice((if(result.removed.isNotEmpty())"К удалению: ${result.removed.size}" else if(result.errors.isEmpty())"Письма уже удалены или перемещены" else "")+
             (if(result.errors.isNotEmpty())(if(result.removed.isNotEmpty())"\n" else "")+result.errors.joinToString("\n")else ""),error=result.errors.isNotEmpty())

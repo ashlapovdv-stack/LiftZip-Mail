@@ -139,5 +139,41 @@ class MailStoreDeviceTest {
             assertEquals(original.body,db.message(original.id)?.body)
         }finally{db.close();c.deleteDatabase("mail-v1.db")}
     }
+    @Test fun offlineDeletedUnreadMailDisappearsImmediatelyAndCancellationRestoresIt()=kotlinx.coroutines.runBlocking {
+        val c=context();val db=LocalStore(c)
+        try {
+            db.putAccount(account())
+            val original=message().copy(uid=12,validity=7,localFolder="unread-cache",unread=true)
+            db.putMessage(original)
+            c.getSharedPreferences("sync-baseline",Context.MODE_PRIVATE).edit().putInt("count:a",25).putInt("unread:a",7).commit()
+            val repo=MailRepository(c);repo.load()
+            assertEquals(setOf(original.id),repo.deleteMessages(setOf(original.id)).removed)
+            assertTrue(MailRules.filter(repo.snapshot.value.messages,null,MailFolder.UNREAD,"").isEmpty())
+            assertEquals(24,repo.snapshot.value.history["a"]?.total)
+            assertEquals(6,repo.snapshot.value.history["a"]?.unread)
+            assertEquals(original.body,db.message(original.id)?.body)
+            repo.cancelAction(repo.snapshot.value.actions.single().id)
+            assertEquals(original.id,MailRules.filter(repo.snapshot.value.messages,null,MailFolder.UNREAD,"").single().id)
+            assertEquals(25,repo.snapshot.value.history["a"]?.total)
+            assertEquals(7,repo.snapshot.value.history["a"]?.unread)
+            assertEquals(original.body,db.message(original.id)?.body)
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
+    @Test fun accountColorsAndResponseMarkersSurviveDatabaseReopenAndOldRecordsRemainReadable() {
+        val c=context();var db=LocalStore(c)
+        try {
+            val account=account().copy(colorSlot=7);db.putAccount(account)
+            val draft=message().copy(answered=true,forwarded=true,responseTo="a:7:3",responseKind="reply")
+            db.putMessage(draft)
+            val legacy=db.encodeMessage(draft).apply{remove("answered");remove("forwarded");remove("responseTo");remove("responseKind")}
+            val old=db.decodeMessage(legacy)
+            assertFalse(old.answered);assertFalse(old.forwarded);assertNull(old.responseTo)
+            db.close();db=LocalStore(c)
+            assertEquals(7,db.accounts().single().colorSlot)
+            assertTrue(db.message(draft.id)!!.answered);assertTrue(db.message(draft.id)!!.forwarded)
+            assertEquals("a:7:3",db.message(draft.id)!!.responseTo)
+            assertEquals("reply",db.message(draft.id)!!.responseKind)
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
 
 }

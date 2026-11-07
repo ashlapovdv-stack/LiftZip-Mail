@@ -104,6 +104,9 @@ class MailRepository(private val context: Context) {
         notifications.history(state.value)
     }
     suspend fun load()=withContext(Dispatchers.IO){coordinator.data{
+        val accounts=db.accounts()
+        AccountColorSlots.assign(accounts).zip(accounts).filter{(assigned,old)->assigned.colorSlot!=old.colorSlot}
+            .forEach{(assigned,_)->db.updateAccount(assigned,resetInbox=false)}
         val process=(context.applicationContext as MailApplication).processToken
         db.actions().forEach{a->val recovered=ActionRules.recovered(a,process);if(recovered!=a)db.putAction(recovered)}
         refresh()
@@ -148,8 +151,12 @@ class MailRepository(private val context: Context) {
         if(cached.contentCached && !MailContent.needsRenderUpdate(cached)){
             val now=System.currentTimeMillis()
             // Reopening the same letter must not repeatedly serialize its complete HTML to SQLite.
-            if(now-cached.cachedAt>=60_000L)db.putMessage(cached.copy(cachedAt=now))
-            return@content cached
+            if(now-cached.cachedAt<60_000L)return@content cached
+            return@content coordinator.data {
+                val current=db.message(id)?:return@data null
+                if(now-current.cachedAt>=60_000L)db.putMessage(current.copy(cachedAt=now))
+                current
+            }
         }
         try {
             coordinator.request(prepare={capture(cached.accountId)?.let{request->request to (db.message(id)?:cached)}},fetch={(request,m)->
@@ -158,7 +165,7 @@ class MailRepository(private val context: Context) {
             },commit={(request,_),full->
                 require(current(request)){"Ящик приостановлен или его настройки изменились."}
                 val now=state.value.messages.find{it.id==id}?:return@request null
-                val result=full.copy(unread=now.unread,starred=now.starred,localFolder=now.localFolder)
+                val result=full.copy(unread=now.unread,starred=now.starred,localFolder=now.localFolder,answered=full.answered || now.answered,forwarded=full.forwarded || now.forwarded)
                 db.putMessage(result.copy(cachedAt=System.currentTimeMillis()));StorageWorker.enqueue(context);refresh(messages=state.value.messages.map{if(it.id==id)MailContent.preview(result)else it});result
             })?:error("Включите ящик в меню, чтобы загрузить текст письма.")
         }catch(e: CancellationException){throw e}catch(e: Exception){if(cached.contentCached)cached else throw e}
@@ -170,7 +177,7 @@ class MailRepository(private val context: Context) {
         fun validate(){require(db.accounts().none{it.email.equals(account.email,true) && it.imapHost.equals(account.imapHost,true)}){"Этот ящик уже добавлен."}}
         coordinator.data{validate()}
         runInterruptible{gateway.verify(account,password)}
-        coordinator.data{validate();db.putAccount(account.copy(secret=vault.seal(account.id,password)));refresh()}
+        coordinator.data{validate();db.putAccount(account.copy(secret=vault.seal(account.id,password),colorSlot=AccountColorSlots.next(db.accounts().map{it.colorSlot})));refresh()}
         FolderWorker.enqueue(context)
     }
     suspend fun editAccount(account: MailAccount,password: String)=withContext(Dispatchers.IO) {
@@ -189,7 +196,7 @@ class MailRepository(private val context: Context) {
             if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("unread:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").apply()
             coordinator.invalidate(old.id)
             if(reset)attachmentCache.removeAccount(old.id)
-            db.updateAccount(account.copy(secret=vault.seal(old.id,secret),enabled=old.enabled),reset)
+            db.updateAccount(account.copy(secret=vault.seal(old.id,secret),enabled=old.enabled,colorSlot=old.colorSlot),reset)
             db.actions().filter{it.accountId==old.id && it.status=="auth" && it.serverKey==AuthRules.serverKey(account)}.forEach{db.putAction(it.copy(status="pending",nextAttempt=0,error=""))}
             val history=readHistory()
             if(reset && old.id in history.accountIds && history.active)writeHistory(history.copy(status="paused",error="Настройки ящика изменены. Продолжите загрузку истории."))
@@ -300,7 +307,7 @@ class MailRepository(private val context: Context) {
     private fun actionFor(m: MailItem,kind: ActionKind,unread: Boolean?=null,starred: Boolean?=null): MailAction {
         val id=kind.name+":"+m.id
         val previous=db.action(id)
-        val original=if(kind==ActionKind.FLAGS && previous!=null)JSONObject(previous.payload)else db.encodeMessage(if(kind==ActionKind.FLAGS || ActionRules.folderMove(kind) || kind==ActionKind.REMOVE_DRAFT)m.copy(body="",attachments=emptyList(),outgoing=emptyList(),forwarding=null)else m)
+        val original=if(kind==ActionKind.FLAGS && previous!=null)JSONObject(previous.payload)else db.encodeMessage(if(kind in setOf(ActionKind.FLAGS,ActionKind.MARK_ANSWERED,ActionKind.MARK_FORWARDED) || ActionRules.folderMove(kind) || kind==ActionKind.REMOVE_DRAFT)m.copy(body="",attachments=emptyList(),outgoing=emptyList(),forwarding=null)else m)
         m.sourceDraftId?.let{source->db.message(source)?.let{original.put("_origin",db.encodeMessage(it.copy(body="",attachments=emptyList(),outgoing=emptyList(),forwarding=null)))}}
         val account=state.value.accounts.find{it.id==m.accountId}?:error("Ящик не найден.")
         return MailAction(id,m.accountId,m.id,kind,original.toString(),maxOf((previous?.revision?:0)+1,m.editRevision),m.subject,AuthRules.serverKey(account),
@@ -642,7 +649,7 @@ class MailRepository(private val context: Context) {
         require(accounts.any{it.id==message.accountId}){"Исходный ящик не найден."}
         val draft=ComposeDraft(accountId=sender.id,subject=if(message.subject.startsWith("Fwd:",true))message.subject else "Fwd: ${message.subject}",
             body="\n\n──── Пересланное письмо ────\nОт: ${message.sender} <${message.senderEmail}>\nКому: ${message.recipients}\nТема: ${message.subject}\n\n${message.body}",
-            forwarding=ForwardRules.plan(message,accounts.first{it.id==message.accountId}))
+            forwarding=ForwardRules.plan(message,accounts.first{it.id==message.accountId}),responseTo=message.id,responseKind="forward")
         db.putMessage(draft.toMessage(sender,"drafts"));refresh()
         if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
         draft
@@ -781,7 +788,8 @@ class MailRepository(private val context: Context) {
                     val local=localCopies[m.internetMessageId]
                     val current=byId[m.id]
                     val reused=local?:current
-                    val withBody=if(reused?.contentCached==true)m.copy(id=local?.id?:m.id,body=reused.body,htmlBody=reused.htmlBody,contentVersion=reused.contentVersion,cacheBytes=reused.cacheBytes,attachments=reused.attachments,outgoing=reused.outgoing,contentCached=true,previewOnly=reused.previewOnly)else m
+                    val withBody=(if(reused?.contentCached==true)m.copy(id=local?.id?:m.id,body=reused.body,htmlBody=reused.htmlBody,contentVersion=reused.contentVersion,cacheBytes=reused.cacheBytes,attachments=reused.attachments,outgoing=reused.outgoing,contentCached=true,previewOnly=reused.previewOnly)else m)
+                        .copy(answered=m.answered || current?.answered==true,forwarded=m.forwarded || current?.forwarded==true)
                     if(local!=null) {
                         if(local.unread!=m.unread || local.starred!=m.starred)db.putAction(actionFor(withBody,ActionKind.FLAGS,unread=local.unread,starred=local.starred))
                         withBody.copy(unread=local.unread,starred=local.starred)
@@ -839,7 +847,7 @@ class MailRepository(private val context: Context) {
     private fun sameActionServer(a: MailAction)=db.accounts().any{it.id==a.accountId && AuthRules.serverKey(it)==a.serverKey}
     private fun actionMessage(a: MailAction)=db.decodeMessage(JSONObject(a.payload))
     private fun actionOrigin(a: MailAction)=JSONObject(a.payload).optJSONObject("_origin")?.let{db.decodeMessage(it)}
-    private fun MailItem.draft()=ComposeDraft(id,accountId,recipients,subject,body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date)
+    private fun MailItem.draft()=ComposeDraft(id,accountId,recipients,subject,body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date,responseTo,responseKind)
     suspend fun networkAvailable() {
         coordinator.data{refresh(messages=state.value.messages)}
         if(snapshot.value.accounts.any{it.enabled}){wakeActions();requestBodyWarmup()}
@@ -894,6 +902,11 @@ class MailRepository(private val context: Context) {
                             coordinator.invalidate(account.id);refresh()
                         }
                     }
+                    ActionKind.MARK_ANSWERED,ActionKind.MARK_FORWARDED -> {
+                        val original=actionMessage(first)
+                        runInterruptible{gateway.markResponse(account,password,original,first.kind==ActionKind.MARK_FORWARDED)}
+                        coordinator.data{if(sameActionServer(first))db.finishAction(first) else db.completeAction(first);refresh()}
+                    }
                     ActionKind.TRASH -> {
                         val source=actionMessage(first)
                         if(source.uid==0L) {
@@ -933,7 +946,11 @@ class MailRepository(private val context: Context) {
                             val sent=source.copy(localFolder="sent",delivery="accepted",pendingDelete=false)
                             val following=mutableListOf(actionFor(sent,ActionKind.APPEND_SENT))
                             actionOrigin(first)?.let{following+=actionFor(it,ActionKind.REMOVE_DRAFT)}
-                            db.finishAction(first,items=listOf(sent),enqueue=following);refresh()
+                            val original=source.responseTo?.let{db.message(it)}
+                            val marked=ResponseMarkers.accepted(original,source.responseKind)
+                            marked?.let{m->ResponseMarkers.serverAction(m,source.responseKind)?.let{following+=actionFor(m,it)}}
+                            if(db.finishAction(first,items=listOfNotNull(sent,marked),enqueue=following) && marked!=null)flagsChanged(listOf(marked.id))
+                            refresh()
                         }
                     }
                     ActionKind.APPEND_DRAFT,ActionKind.APPEND_SENT -> {
@@ -993,7 +1010,7 @@ class MailRepository(private val context: Context) {
                             if(a.kind==ActionKind.SEND && current!=null)db.putMessage(current.copy(delivery=if(status=="uncertain")"uncertain" else "queued"))
                             if(status=="failed" && current!=null && sameActionServer(a)) {
                                 val original=actionMessage(a)
-                                if(a.kind==ActionKind.SPAM || a.kind==ActionKind.RESTORE_INBOX)spamCounts(listOf(current),1)
+                                if(a.kind in setOf(ActionKind.TRASH,ActionKind.SPAM,ActionKind.RESTORE_INBOX))spamCounts(listOf(current),1)
                                 db.putMessage(current.copy(pendingDelete=false,unread=if(a.kind==ActionKind.FLAGS && a.unread!=null)original.unread else current.unread,
                                     starred=if(a.kind==ActionKind.FLAGS && a.starred!=null)original.starred else current.starred))
                             }
@@ -1009,7 +1026,7 @@ class MailRepository(private val context: Context) {
             val a=db.action(id)?:return@data
             require(a.status!="uncertain" || confirmUncertain){"Сначала проверьте доставку и подтвердите повторную отправку."}
             require(a.status !in setOf("running","sending")){"Действие уже выполняется."}
-            if(!a.active && (a.kind==ActionKind.SPAM || a.kind==ActionKind.RESTORE_INBOX) && sameActionServer(a))spamCounts(listOfNotNull(db.message(a.messageId)),-1)
+            if(!a.active && a.kind in setOf(ActionKind.TRASH,ActionKind.SPAM,ActionKind.RESTORE_INBOX) && sameActionServer(a))spamCounts(listOfNotNull(db.message(a.messageId)),-1)
             db.putAction(a.copy(status="pending",nextAttempt=0,error="",lease=""))
             if(a.kind==ActionKind.SEND)db.message(a.messageId)?.let{db.putMessage(it.copy(delivery="queued"))}
             refresh()
@@ -1026,7 +1043,7 @@ class MailRepository(private val context: Context) {
                 ActionKind.FLAGS->current?.copy(unread=if(a.unread!=null)original.unread else current.unread,starred=if(a.starred!=null)original.starred else current.starred)
                 else->null
             }
-            if(db.finishAction(a,items=listOfNotNull(restored)) && a.active && (a.kind==ActionKind.SPAM || a.kind==ActionKind.RESTORE_INBOX))spamCounts(listOfNotNull(restored),1)
+            if(db.finishAction(a,items=listOfNotNull(restored)) && a.active && a.kind in setOf(ActionKind.TRASH,ActionKind.SPAM,ActionKind.RESTORE_INBOX))spamCounts(listOfNotNull(restored),1)
             refresh()
         }
     }
@@ -1059,6 +1076,6 @@ class MailRepository(private val context: Context) {
         attachmentCache.opened(cachedAttachment(message,file,MailImageLimits.MAX_BYTES),file)
     }
     private fun ComposeDraft.toMessage(a: MailAccount,folder: String)=MailItem(id,accountId,sender=a.senderName,senderEmail=a.email,recipients=to,
-        subject=subject,body=body,date=if(folder in setOf("outbox","sent") && timestamp>0)timestamp else System.currentTimeMillis(),localFolder=folder,outgoing=attachments,forwarding=forwarding,internetMessageId=MessageIdentity.forDraft(id,internetMessageId),sourceDraftId=sourceDraftId)
+        subject=subject,body=body,date=if(folder in setOf("outbox","sent") && timestamp>0)timestamp else System.currentTimeMillis(),localFolder=folder,outgoing=attachments,forwarding=forwarding,internetMessageId=MessageIdentity.forDraft(id,internetMessageId),sourceDraftId=sourceDraftId,responseTo=responseTo,responseKind=responseKind)
 }
 
