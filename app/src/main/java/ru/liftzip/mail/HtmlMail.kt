@@ -24,6 +24,22 @@ object HtmlMail {
     private val links=Regex("""(?i)\b(?:https?://[^\s<>"']+|mailto:[^\s<>"']+|www\.[^\s<>"']+|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})""")
     private val unsafe="script,iframe,frame,frameset,object,embed,applet,form,input,button,select,textarea,link,base,meta,svg,math,video,audio,source,track,canvas,noscript,template"
     private val pixelWidth=Regex("(?i)(?:^|[;{])\\s*(?:min-)?width\\s*:\\s*(\\d{2,4})px(?:\\s*!important)?\\s*(?=[;}])")
+    private val neutralBackground=Regex("(?i)(background(?:-color)?\\s*:\\s*)(#[0-9a-f]{3,8}|rgba?\\([^)]*\\)|white|whitesmoke)(\\s*!important)?(?=\\s*[;}])")
+    /** Remove only near-white neutral fills. Coloured highlighting and dark panels stay intact. */
+    internal fun neutralFill(value: String): Boolean {
+        val v=value.trim().lowercase()
+        if(v in setOf("white","whitesmoke"))return true
+        val rgb=when {
+            v.matches(Regex("#[0-9a-f]{3}"))->v.drop(1).map{it.digitToInt(16)*17}
+            v.matches(Regex("#[0-9a-f]{6}"))->v.drop(1).chunked(2).map{it.toInt(16)}
+            v.matches(Regex("rgb\\(\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*\\)"))->Regex("\\d+").findAll(v).map{it.value.toInt()}.toList()
+            else->return false
+        }
+        return rgb.size==3 && rgb.all{it in 235..255} && (rgb.max()-rgb.min())<=20
+    }
+    internal fun transparentNeutralBackgrounds(css: String): String=neutralBackground.replace(css+";"){match->
+        if(neutralFill(match.groupValues[2]))match.groupValues[1]+"transparent"+match.groupValues[3] else match.value
+    }.dropLast(1)
     /** Give desktop tables their natural layout space, then let WebView fit that space to the screen. */
     fun layoutWidth(source: String): Int=layoutWidth(Jsoup.parse(source))
     private fun layoutWidth(doc: org.jsoup.nodes.Document): Int {
@@ -135,6 +151,9 @@ object HtmlMail {
         val source=html.takeIf{it.isNotBlank()}?.let{currentSource(it,hasHistory)}?:this.plain(plain)
         val namespace=MailImageLimits.hash(identity+source+external+attachments.joinToString{it.path+it.contentId})
         val doc=Jsoup.parseBodyFragment(cleanSource(source))
+        // White/grey page and text backgrounds blend into the selected reading theme.
+        // Keep colour highlights, dark areas, gradients and background images unchanged.
+        doc.select("[bgcolor]").forEach{element->if(neutralFill(element.attr("bgcolor")))element.removeAttr("bgcolor")}
         val resources=linkedMapOf<String,MailImageSource>();var hasExternal=false
         fun resource(raw: String): Pair<String,MailImageSource>? {
             val image=when {
@@ -157,7 +176,7 @@ object HtmlMail {
             else{img.attr("src",resolved.first);img.removeAttr("srcset")}
         }
         // CSS images use the same isolated loader; external fonts and unknown resources stay blocked.
-        fun css(value: String)=rewriteCss(value){resource(it)?.first}
+        fun css(value: String)=transparentNeutralBackgrounds(rewriteCss(value){resource(it)?.first})
         doc.select("[style]").forEach{it.attr("style",css(it.attr("style")))}
         doc.select("style").forEach{it.html(css(it.data()))}
         doc.select("a").forEach{it.removeAttr("target");it.attr("rel","noreferrer noopener")}

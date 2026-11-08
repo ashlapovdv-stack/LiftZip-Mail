@@ -83,6 +83,17 @@ class ConversationTextTest {
         assertFalse(m.isOwn(listOf("other-sales@example.com")))
         assertFalse(QuotedMessage("Дмитрий",null,"").isOwn(listOf("sales@example.com")))
     }
+    @Test fun forwardedMailKeepsItsSenderRecipientDateAndSubject() {
+        val text="Ответ\n\n-------- Пересланное письмо --------\nОт: Дмитрий <a@example.com>\nКому: ZIP <b@example.com>\nДата: 6 ноября 2026\nТема: Запрос\n\nДобрый день"
+        val parsed=ConversationText.parse(text)
+        val message=parsed.messages.single()
+        assertEquals("Дмитрий <a@example.com>",message.sender)
+        assertEquals("ZIP <b@example.com>",message.recipients)
+        assertEquals("6 ноября 2026",message.date)
+        assertEquals("Запрос",message.subject)
+        assertEquals("Добрый день",message.body)
+        assertEquals(text,parsed.original)
+    }
     @Test fun missingEnglishAddressKeepsOriginalAttributionWithoutInventedSender() {
         val m=ConversationText.parse("OK\nOn 28 Oct 2026, Person wrote:\n> Old").messages.single()
         assertNull(m.sender)

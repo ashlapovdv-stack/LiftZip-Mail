@@ -102,10 +102,14 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         opening=viewModelScope.launch {
             try {
                 // Show offline content before waiting for content coordination, legacy refresh or LRU writes.
-                repo.cachedMessage(id)?.takeIf{it.contentCached}?.let { cached->
-                    mutable.update{it.copy(opened=cached)}
-                }
-                val message=repo.message(id)?:error("Письмо не найдено.")
+                val cached=repo.cachedMessage(id)?.takeIf{it.contentCached}
+                if(cached!=null && !MailContent.needsRenderUpdate(cached))mutable.update{it.copy(opened=cached)}
+                // Give the full formatted version a short head start. If the network is slow,
+                // keep the existing offline text available instead of blocking the reader.
+                val fallback=if(cached!=null && MailContent.needsRenderUpdate(cached))launch {
+                    delay(800);mutable.update{if(it.opened?.id==id)it else it.copy(opened=cached)}
+                }else null
+                val message=try{repo.message(id)?:error("Письмо не найдено.")}finally{fallback?.cancel()}
                 mutable.update{it.copy(opened=message)}
                 read(message)
             }catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
@@ -133,6 +137,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
     }
     suspend fun inlineImage(m: MailItem,file: Attachment)=repo.inlineImage(m,file)
+    suspend fun thumbnailImage(m: MailItem,file: Attachment)=repo.thumbnailImage(m,file)
     fun notificationOpened(id: String) {
         viewModelScope.launch {try{repo.dismissNotifications(setOf(id))}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}
     }

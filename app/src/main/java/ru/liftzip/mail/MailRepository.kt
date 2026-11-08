@@ -1075,6 +1075,11 @@ class MailRepository(private val context: Context) {
         require(file.size.toLong()<=MailImageLimits.MAX_BYTES*2){"Изображение слишком большое для просмотра в письме."}
         attachmentCache.opened(cachedAttachment(message,file,MailImageLimits.MAX_BYTES),file)
     }
+    suspend fun thumbnailImage(message: MailItem,file: Attachment): OpenedAttachment=withContext(Dispatchers.IO){
+        require(file.mime.startsWith("image/",true) && message.attachments.any{it.path==file.path}){"Изображение не найдено в письме."}
+        require(file.size>=0 && file.size.toLong()<=2L*1024*1024){"Изображение слишком большое для миниатюры."}
+        attachmentCache.opened(cachedAttachment(message,file,2L*1024*1024),file)
+    }
     private fun ComposeDraft.toMessage(a: MailAccount,folder: String)=MailItem(id,accountId,sender=a.senderName,senderEmail=a.email,recipients=to,
         subject=subject,body=body,date=if(folder in setOf("outbox","sent") && timestamp>0)timestamp else System.currentTimeMillis(),localFolder=folder,outgoing=attachments,forwarding=forwarding,internetMessageId=MessageIdentity.forDraft(id,internetMessageId),sourceDraftId=sourceDraftId,responseTo=responseTo,responseKind=responseKind)
 }

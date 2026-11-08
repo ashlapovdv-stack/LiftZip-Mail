@@ -20,6 +20,35 @@ class MessageFlowDeviceTest {
     private val mail=MailItem("m","a",12,7,sender="Клиент",senderEmail="client@example.com",recipients="a@example.com",subject="Тема письма",body="Основной текст",date=1)
     private fun back(){rule.waitForIdle();rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()};rule.waitForIdle()}
 
+    @Test fun selectingAnotherAccountKeepsDrawerOpenAndShowsItsFolders() {
+        var selected by mutableStateOf<String?>(null)
+        val other=account.copy(id="b",name="Личный",email="b@example.com")
+        val data=UiState(loaded=true,accounts=listOf(account,other),folders=listOf(ServerFolder("a","FolderA","Папка A"),ServerFolder("b","FolderB","Папка B")))
+        rule.setContent {
+            val holder=rememberSaveableStateHolder();val drawer=rememberDrawerState(DrawerValue.Closed)
+            val memories=remember{mutableMapOf<String,InboxMemory>()}
+            val key=selected?:"all";val memory=memories.getOrPut(key){InboxMemory()}
+            MailTheme {holder.SaveableStateProvider(key){InboxScreen(data,selected,MailFolder.INBOX,null,memory,drawerState=drawer,onAccount={selected=it},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}}
+        }
+        rule.onNodeWithContentDescription("Выбрать ящик").performClick()
+        rule.onNodeWithTag("drawer-account:a").performClick();rule.onNodeWithText("Папка A").assertIsDisplayed()
+        rule.onNodeWithTag("drawer-account:b").performClick();rule.onNodeWithText("Папка B").assertIsDisplayed()
+        rule.onNodeWithTag("drawer-account:b").performClick();rule.onNodeWithText("Папки на сервере").assertIsNotDisplayed()
+        rule.onNodeWithContentDescription("Выбрать ящик").performClick();rule.onNodeWithText("Все ящики").performClick()
+        rule.runOnIdle{assertNull(selected)}
+        rule.onAllNodesWithText("Папки на сервере").assertCountEquals(0)
+    }
+
+    @Test fun multipleRecipientsExpandAndCollapseWithoutLosingAddresses() {
+        rule.setContent {MailTheme {RecipientSummary("m","А <a@example.com>, Б <b@example.com>, В <c@example.com>")}}
+        rule.onNodeWithText("ещё 2",substring=true).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Показать всех получателей").performClick()
+        rule.onNodeWithText("b@example.com",substring=true).assertIsDisplayed()
+        rule.onNodeWithText("c@example.com",substring=true).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Свернуть получателей").performClick()
+        rule.onNodeWithText("ещё 2",substring=true).assertIsDisplayed()
+    }
+
     @Test fun attachmentBackReturnsToLetterThenToTheSameServerFolder() {
         var route by mutableStateOf("inbox")
         var folder by mutableStateOf(MailFolder.INBOX)
@@ -78,7 +107,22 @@ class MessageFlowDeviceTest {
         rule.onNodeWithText("Предыдущие сообщения · 2").performClick()
         rule.onNodeWithText("Содержимое первого").assertIsDisplayed()
         rule.onNodeWithText("Содержимое второго").assertIsDisplayed()
-        rule.onAllNodesWithContentDescription("Свернуть сообщение").assertCountEquals(2)
+        rule.onNodeWithText("Первый",substring=true).assertIsDisplayed()
+        rule.onNodeWithText("Второй",substring=true).assertIsDisplayed()
         saveDeviceScreenshot(rule,"expanded-history")
+    }
+    @Test fun imageAttachmentsOpenAndDownloadFromCompactPreviews() {
+        val image=Attachment("1","фото.png","image/png",2048)
+        val m=mail.copy(attachments=listOf(image))
+        val file=java.io.File(rule.activity.cacheDir,"thumbnail-test.png")
+        android.graphics.Bitmap.createBitmap(24,24,android.graphics.Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.RED);file.outputStream().use{compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};recycle()}
+        var opened=0;var downloaded=0
+        rule.setContent{MailTheme{ReaderScreen(m,account,false,emptyList(),emptySet(),onBack={},onStar={},onInline={error("unused")},onLink={},onDownload={downloaded++},onOpenAttachment={opened++},onOpenLocal={},onReply={},onForward={},onThumbnail={OpenedAttachment(android.net.Uri.fromFile(file).toString(),"фото.png","image/png")})}}
+        rule.waitUntil(15000){rule.onAllNodes(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,"Миниатюра загружена")).fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithContentDescription("Открыть изображение фото.png").assertIsDisplayed().performClick()
+        rule.onNodeWithContentDescription("Сохранить фото.png").performClick()
+        rule.runOnIdle{assertEquals(1,opened);assertEquals(1,downloaded)}
+        saveDeviceScreenshot(rule,"image-thumbnails")
+        file.delete()
     }
 }

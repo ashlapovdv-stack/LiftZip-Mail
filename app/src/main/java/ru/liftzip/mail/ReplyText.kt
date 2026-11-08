@@ -7,7 +7,7 @@ data class ReplyParts(val current: String, val quoted: String? = null) {
 /** Conservative text-only quote folding. The complete body is always retained. */
 object ReplyText {
     private val weekdays = Regex("^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье),?\\s+\\d.*", RegexOption.IGNORE_CASE)
-    private val original = Regex("^-{2,}\\s*(Original Message|Исходное сообщение)\\s*-{2,}$", RegexOption.IGNORE_CASE)
+    private val original = Regex("^-{2,}\\s*(Original Message|Forwarded Message|Исходное сообщение|Пересланное письмо)\\s*-{2,}$", RegexOption.IGNORE_CASE)
     private val date = Regex("\\b\\d{1,4}\\b")
     private val headerEnd = Regex("(?:\\bwrote|(?<!\\p{L})писал(?:а|\\(а\\))?):\\s*$", RegexOption.IGNORE_CASE)
     private val englishEnd = Regex("\\bwrote:\\s*$", RegexOption.IGNORE_CASE)

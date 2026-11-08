@@ -26,6 +26,9 @@ object HeaderText {
     fun recipients(value: String): String = runCatching {
         addresses(InternetAddress.parseHeader(value, false))
     }.getOrElse { decode(value) }
+    fun recipientList(value: String): List<String> = runCatching {
+        InternetAddress.parseHeader(value,false).map{addresses(arrayOf(it))}.filter{it.isNotBlank()}.ifEmpty{listOf(value)}
+    }.getOrElse{listOf(value)}
     /** The editor accepts mailbox addresses; preserve every recipient while removing display names. */
     fun editableRecipients(value: String): String=runCatching {
         val parsed=InternetAddress.parseHeader(value,true).flatMap{address->if(address.isGroup)address.getGroup(true)?.toList().orEmpty()else listOf(address)}
