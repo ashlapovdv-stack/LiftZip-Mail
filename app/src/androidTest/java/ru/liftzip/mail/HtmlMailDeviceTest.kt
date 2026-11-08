@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -111,13 +112,14 @@ class HtmlMailDeviceTest {
         val attachment=Attachment("1","chart.png","image/png",png.bytes.size,"chart")
         val message=MailItem("theme-html","a",sender="S",senderEmail="s@example.com",recipients="r@example.com",subject="Test",body="Текст",date=1,htmlBody="<p>Текст</p><img src='cid:chart'>",contentVersion=MailContent.FORMAT_VERSION,attachments=listOf(attachment))
         try {
-            rule.setContent {MailTheme(MailStyle.COZY) {Column(Modifier.fillMaxSize().background(Color(0xFFFFF8EF)).verticalScroll(rememberScrollState())) {
+            rule.setContent {MaterialTheme(colorScheme=lightColorScheme(surface=Color(0xFFFFF8EF))) {Column(Modifier.fillMaxSize().background(Color(0xFFFFF8EF)).verticalScroll(rememberScrollState())) {
                 MailHtmlBody(message,message.body,false,onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
             }}}
             rule.waitUntil(15_000){requests.get()==1};rule.waitUntil(10_000){greenPixels()>50}
             val pixels=rule.onRoot().captureToImage().toPixelMap()
             val canvas=pixels[pixels.width-2,(40*c.resources.displayMetrics.density).toInt()]
-            assertTrue("HTML canvas must match the warm theme",canvas.red>0.98f && canvas.green>0.95f && canvas.blue>0.91f && canvas.blue<0.96f)
+            saveDeviceScreenshot(rule,"html-warm-theme")
+            assertTrue("HTML canvas must match the warm theme: $canvas",canvas.red>0.98f && canvas.green>0.95f && canvas.blue>0.91f && canvas.blue<0.96f)
         }finally{file.delete()}
     }
     @Test fun theProductionReaderLoadsAnInlineImageAndExpandsToItsActualHeight() {
