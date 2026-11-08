@@ -5,6 +5,7 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.mutableFloatStateOf
 
 class InboxMemory(val list: LazyListState = LazyListState(),var restore: InboxPosition? = null,initialControls: Float=1f) {
+    var visibleRows: List<MailItem>? = null
     var pinned = restore?.atTop ?: true
     var firstId: String? = null
     val controlsProgress=mutableFloatStateOf(initialControls.coerceIn(0f,1f))
