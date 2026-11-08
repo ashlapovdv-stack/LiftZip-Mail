@@ -183,8 +183,10 @@ object HtmlMail {
         val csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src $ORIGIN; font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'"
         val layout=if(html.isNotBlank())layoutWidth(doc)else 0
         val viewport=if(layout>0)layout.toString()else "device-width"
+        val inset=if(html.isBlank() || !Regex("(?i)(padding|margin)\\s*[:=]").containsMatchIn(html))"16px" else "0"
         val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
             html,body{margin:0;padding:0;max-width:100%;overflow-wrap:break-word;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
+            body{box-sizing:border-box;padding-left:$inset;padding-right:$inset}
             img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
             .mail-plain{white-space:pre-wrap}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
