@@ -7,6 +7,7 @@ import jakarta.mail.internet.MimeUtility
 /** RFC 2047 encoded words are transport syntax, never a display name. */
 object HeaderText {
     fun decode(value: String): String = runCatching { MimeUtility.decodeText(value) }.getOrDefault(value)
+    fun displayName(value: String): String = decode(value).replace("\\\"", "\"")
 
     fun addresses(values: Array<out Address>?): String = values?.joinToString(", ") { address ->
         if (address !is InternetAddress) decode(address.toString())
