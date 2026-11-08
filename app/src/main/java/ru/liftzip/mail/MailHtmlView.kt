@@ -7,11 +7,13 @@ import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.View
 import android.widget.FrameLayout
 import android.widget.OverScroller
 import android.webkit.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -58,6 +60,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     init {
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        val contentInset=(22f*resources.displayMetrics.density).roundToInt()
+        setPadding(contentInset,0,contentInset,0)
+        scrollBarStyle=View.SCROLLBARS_OUTSIDE_OVERLAY
         settings.apply {
             javaScriptEnabled=false;javaScriptCanOpenWindowsAutomatically=false;domStorageEnabled=false
             allowFileAccess=false;allowContentAccess=false;setSupportMultipleWindows(false)
@@ -184,7 +189,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
 }
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,onZoomChanged: (Boolean)->Unit={}) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,onZoomChanged: (Boolean)->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
@@ -212,9 +217,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     else if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
-        if(ready.externalImages || ready.layoutWidth>0)Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
+        if(!zoomed && (ready.externalImages || ready.layoutWidth>0))Row(Modifier.fillMaxWidth().padding(horizontal=22.dp),horizontalArrangement=Arrangement.SpaceBetween) {
             if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
-            if(ready.layoutWidth>0)TextButton(onClick={web?.fitWidth()}){Text("По ширине")}
+            if(ready.layoutWidth>0)IconButton(onClick={web?.fitWidth()}){Icon(androidx.compose.material.icons.Icons.Outlined.FitScreen,"Подогнать по ширине")}
         }
         key(message.id,message.contentVersion) {
             AndroidView(factory={c->FrameLayout(c).apply {
@@ -226,7 +231,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                     addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                 }catch(e: Exception){failed=true;loader.close()}
             }},
-                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=10.dp).height(with(density){height.coerceAtMost(viewport).toDp()})
+                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=if(zoomed)0.dp else 10.dp).height(with(density){(if(zoomed)scroll?.viewportHeight?.takeIf{it>0}?:viewport else height.coerceAtMost(viewport)).toDp()})
                     .onGloballyPositioned{scroll?.position(it.positionInWindow().y.toInt())},
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
