@@ -78,7 +78,21 @@ class MessageFlowDeviceTest {
         rule.onNodeWithText("Предыдущие сообщения · 2").performClick()
         rule.onNodeWithText("Содержимое первого").assertIsDisplayed()
         rule.onNodeWithText("Содержимое второго").assertIsDisplayed()
-        rule.onAllNodesWithContentDescription("Свернуть сообщение").assertCountEquals(2)
+        rule.onNodeWithText("Первый",substring=true).assertIsDisplayed()
+        rule.onNodeWithText("Второй",substring=true).assertIsDisplayed()
         saveDeviceScreenshot(rule,"expanded-history")
+    }
+    @Test fun imageAttachmentsOpenAndDownloadFromCompactPreviews() {
+        val image=Attachment("1","фото.png","image/png",2048)
+        val m=mail.copy(attachments=listOf(image))
+        val file=java.io.File(rule.activity.cacheDir,"thumbnail-test.png")
+        android.graphics.Bitmap.createBitmap(24,24,android.graphics.Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.RED);file.outputStream().use{compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};recycle()}
+        var opened=0;var downloaded=0
+        rule.setContent{MailTheme{ReaderScreen(m,account,false,emptyList(),emptySet(),onBack={},onStar={},onInline={error("unused")},onLink={},onDownload={downloaded++},onOpenAttachment={opened++},onOpenLocal={},onReply={},onForward={},onThumbnail={OpenedAttachment(android.net.Uri.fromFile(file).toString(),"фото.png","image/png")})}}
+        rule.waitUntil(15000){rule.onAllNodes(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,"Миниатюра загружена")).fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithContentDescription("Открыть изображение фото.png").assertIsDisplayed().performClick()
+        rule.onNodeWithContentDescription("Сохранить фото.png").performClick()
+        rule.runOnIdle{assertEquals(1,opened);assertEquals(1,downloaded)}
+        file.delete()
     }
 }

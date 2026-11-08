@@ -11,6 +11,7 @@ import android.widget.FrameLayout
 import android.widget.OverScroller
 import android.webkit.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -186,7 +187,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     var web by remember(message.id,message.contentVersion){mutableStateOf<MailHtmlWebView?>(null)}
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
     val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
-    val background=if(message.htmlBody.isNotBlank())"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
+    val background=if(message.htmlBody.isNotBlank() && isSystemInDarkTheme())"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
     val document by produceState<MailHtmlDocument?>(null,message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,hasHistory,external,foreground,background) {
         try {
             value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,hasHistory,external,foreground,background))}

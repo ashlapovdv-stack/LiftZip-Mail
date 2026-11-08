@@ -262,7 +262,7 @@ private val Paper=Color(0xFFF8F9F6)
                     val message=full?.let{if(summary==null)it else it.copy(unread=summary.unread,starred=summary.starred)}?:summary
                     if(message==null)MissingMessageScreen(onBack={goInbox()})
                     else ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,ownAddresses=s.accounts.map{it.email},attachmentBusy=s.attachmentBusy,onBack={goInbox()},onStar={vm.star(message)},
-                        onInline={file->vm.inlineImage(message,file)},onLink={url->HtmlMail.link(url)?.let{safe->runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(safe)).addCategory(Intent.CATEGORY_BROWSABLE))}.onFailure{vm.notice("Не удалось открыть ссылку",error=true)}}},
+                        onInline={file->vm.inlineImage(message,file)},onThumbnail={file->vm.thumbnailImage(message,file)},onLink={url->HtmlMail.link(url)?.let{safe->runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(safe)).addCategory(Intent.CATEGORY_BROWSABLE))}.onFailure{vm.notice("Не удалось открыть ссылку",error=true)}}},
                         onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
@@ -445,7 +445,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.7",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.8",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -602,7 +602,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     if(!card)HorizontalDivider(Modifier.padding(start=75.dp),color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.45f))
 }
 
-@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null) {
+@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null,onThumbnail: (suspend (Attachment)->OpenedAttachment)?=null) {
     val conversation by produceState<QuotedConversation?>(null,m.id,m.body) {
         value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.conversation(m.body)}
     }
@@ -632,8 +632,10 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             if(m.localFolder=="sent")InfoCard("Письмо принято SMTP-сервером. Копия ожидает сохранения в серверной папке «Отправленные».")
             if(m.attachments.isNotEmpty() || m.outgoing.isNotEmpty()) {
                 Text("Вложения",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(bottom=6.dp))
+                val images=if(onThumbnail!=null)m.attachments.filter{it.mime.startsWith("image/",true)}else emptyList()
+                if(images.isNotEmpty())AttachmentThumbnails(images,!busy,onThumbnail!!,onOpenAttachment,onDownload)
                 FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth().padding(bottom=8.dp)) {
-                    m.attachments.forEach { file->
+                    m.attachments.filter{it !in images}.forEach { file->
                         val preparing="${m.id}|${file.path}" in attachmentBusy
                         CompactAttachment(file.name,preparing,!busy,onOpen={onOpenAttachment(file)},onDownload={onDownload(file)})
                     }
