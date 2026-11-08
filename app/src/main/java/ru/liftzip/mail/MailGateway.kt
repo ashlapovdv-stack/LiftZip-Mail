@@ -146,7 +146,7 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
                 val from=m.from?.firstOrNull() as? InternetAddress
                 MailItem(FolderRules.id(a.id,folderPath,folder.uidValidity,uid),a.id,uid,folder.uidValidity,folderPath,from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:(if(role==FolderRole.DRAFTS)"" else "Без темы"),content.text,
-                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false,localFolder=FolderRules.local(role),internetMessageId=(m as? MimeMessage)?.messageID.orEmpty(),answered=m.isSet(Flags.Flag.ANSWERED),forwarded=m.flags.contains("\$Forwarded"))
+                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false,localFolder=FolderRules.local(role),internetMessageId=(m as? MimeMessage)?.messageID.orEmpty(),answered=m.isSet(Flags.Flag.ANSWERED),forwarded=m.flags.contains("\$Forwarded"),cc=HeaderText.addresses(m.getRecipients(Message.RecipientType.CC)))
             }
             val unread=if(loadOlder)null else folder.unreadMessageCount.takeIf{it>=0}
             InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1,unread),folder.uidValidity)
@@ -171,7 +171,7 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
                 MailItem(id,a.id,uid,folder.uidValidity,"INBOX",from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
                     HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:"Без темы",existing?.body.orEmpty(),
                     (m.receivedDate?:m.sentDate)?.time?:0L,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),localFolder=existing?.localFolder?:"unread-cache",
-                    attachments=existing?.attachments.orEmpty(),previewOnly=existing?.previewOnly?:false,contentCached=existing?.contentCached?:false,internetMessageId=(m as? MimeMessage)?.messageID.orEmpty(),answered=m.isSet(Flags.Flag.ANSWERED),forwarded=m.flags.contains("\$Forwarded"))
+                    attachments=existing?.attachments.orEmpty(),previewOnly=existing?.previewOnly?:false,contentCached=existing?.contentCached?:false,internetMessageId=(m as? MimeMessage)?.messageID.orEmpty(),answered=m.isSet(Flags.Flag.ANSWERED),forwarded=m.flags.contains("\$Forwarded"),cc=HeaderText.addresses(m.getRecipients(Message.RecipientType.CC)))
             }
             UnreadPage(folder.uidValidity,items,folder.messageCount)
         }finally{folder.close(false)}
@@ -209,7 +209,7 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             (remote as? IMAPMessage)?.setPeek(true)
             val budget=MailReadBudget(checkCancelled=checkCancelled)
             val decoded=MimeReader(checkCancelled=budget::check).read(remote)
-            message.copy(body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true,internetMessageId=message.internetMessageId.ifBlank{(remote as? MimeMessage)?.messageID.orEmpty()},recipients=message.recipients.ifBlank{HeaderText.decode((remote as? MimeMessage)?.getHeader("To",null).orEmpty())})
+            message.copy(body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true,internetMessageId=message.internetMessageId.ifBlank{(remote as? MimeMessage)?.messageID.orEmpty()},recipients=message.recipients.ifBlank{HeaderText.decode((remote as? MimeMessage)?.getHeader("To",null).orEmpty())},cc=HeaderText.addresses(remote.getRecipients(Message.RecipientType.CC)))
         }finally{folder.close(false)}
     }
     suspend fun trashMany(a: MailAccount,password: String,messages: List<MailItem>,before: suspend ()->Boolean,onConfirmed: suspend (Set<Long>)->Boolean) {
