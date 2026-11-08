@@ -31,16 +31,28 @@ class ReaderDeviceTest {
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
     }
     @Test fun zoomingHtmlHidesToolbarAndRetainsTheSameWebView() {
-        val short=message.copy(htmlBody="<p>Текст письма для увеличения</p><table width='720'><tr><td>Содержимое</td></tr></table>",body="Текст письма для увеличения")
+        val short=message.copy(htmlBody="<p>Текст письма для увеличения</p><img src='https://example.com/example.png'><table width='720'><tr><td>Содержимое</td></tr></table>",body="Текст письма для увеличения",attachments=listOf(Attachment("1","file.pdf","application/pdf",100)))
         rule.setContent{MailTheme{reader(short)}}
         val view=loaded()
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
+        rule.onAllNodesWithText("По ширине").assertCountEquals(0)
         rule.runOnIdle{view.zoomBy(2f)}
         rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Назад").fetchSemanticsNodes().isEmpty()}
+        rule.onAllNodesWithText("Длинное письмо").assertCountEquals(0)
+        rule.onAllNodesWithText("Вложения").assertCountEquals(0)
+        rule.onAllNodesWithText("Показать изображения").assertCountEquals(0)
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
-        rule.runOnIdle{assertSame(view,webView());view.fitWidth()}
+        rule.runOnIdle{
+            assertSame(view,webView())
+            val location=IntArray(2);view.getLocationOnScreen(location)
+            assertEquals("HTML must reach the left screen edge",0,location[0])
+            assertEquals("HTML must reach the right screen edge",view.resources.displayMetrics.widthPixels,location[0]+view.width)
+            view.fitWidth()
+        }
         rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Назад").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
         rule.runOnIdle{assertSame(view,webView())}
     }
     @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
