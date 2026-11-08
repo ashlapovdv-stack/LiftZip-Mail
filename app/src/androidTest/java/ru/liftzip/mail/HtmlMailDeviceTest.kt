@@ -105,6 +105,21 @@ class HtmlMailDeviceTest {
         rule.waitUntil(15_000){loaded.get()};assertEquals(1,images.get())
         rule.waitUntil(10_000){greenPixels()>50};saveDeviceScreenshot(rule,"html-remote")
     }
+    @Test fun lightHtmlCanvasMatchesTheSelectedTheme() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val png=image();val requests=AtomicInteger()
+        val file=File(c.cacheDir,"theme-inline.png").apply{writeBytes(png.bytes)}
+        val attachment=Attachment("1","chart.png","image/png",png.bytes.size,"chart")
+        val message=MailItem("theme-html","a",sender="S",senderEmail="s@example.com",recipients="r@example.com",subject="Test",body="Текст",date=1,htmlBody="<p>Текст</p><img src='cid:chart'>",contentVersion=MailContent.FORMAT_VERSION,attachments=listOf(attachment))
+        try {
+            rule.setContent {MailTheme(MailStyle.COZY) {Column(Modifier.fillMaxSize().background(Color(0xFFFFF8EF)).verticalScroll(rememberScrollState())) {
+                MailHtmlBody(message,message.body,false,onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
+            }}}
+            rule.waitUntil(15_000){requests.get()==1};rule.waitUntil(10_000){greenPixels()>50}
+            val pixels=rule.onRoot().captureToImage().toPixelMap()
+            val canvas=pixels[pixels.width-2,(40*c.resources.displayMetrics.density).toInt()]
+            assertTrue("HTML canvas must match the warm theme",canvas.red>0.98f && canvas.green>0.95f && canvas.blue>0.91f && canvas.blue<0.96f)
+        }finally{file.delete()}
+    }
     @Test fun theProductionReaderLoadsAnInlineImageAndExpandsToItsActualHeight() {
         val c=ApplicationProvider.getApplicationContext<Context>();val png=image();val requests=AtomicInteger()
         val file=File(c.cacheDir,"html-inline-fixture.png").apply{writeBytes(png.bytes)}
