@@ -9,6 +9,7 @@ import kotlin.math.roundToInt
 
 /** One continuous scroll: header -> bounded HTML viewport -> attachments and reply controls. */
 class ReaderScroll(val outer: ScrollState) {
+    var zoomed=false
     var viewportTop=0
         set(value){bodyAnchor+=field-value;field=value}
     var viewportHeight by mutableIntStateOf(0)
@@ -23,6 +24,7 @@ class ReaderScroll(val outer: ScrollState) {
     }
     fun scroll(pixels: Float): Float {
         val body=view?:return outer.dispatchRawDelta(pixels)
+        if(zoomed)return body.scrollContent(pixels.roundToInt()).toFloat()
         val anchor=bodyAnchor.coerceIn(0,outer.maxValue)
         var left=pixels
         // Only consume the header/footer portion preceding the body in this direction.
