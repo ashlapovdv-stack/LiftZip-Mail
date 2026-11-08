@@ -12,6 +12,11 @@ import android.widget.FrameLayout
 import android.widget.OverScroller
 import android.webkit.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.material3.*
 import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.runtime.*
@@ -60,7 +65,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     init {
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        val contentInset=(22f*resources.displayMetrics.density).roundToInt()
+        val contentInset=(16f*resources.displayMetrics.density).roundToInt()
         setPadding(contentInset,0,contentInset,0)
         scrollBarStyle=View.SCROLLBARS_OUTSIDE_OVERLAY
         settings.apply {
@@ -115,6 +120,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         // assuming that the sender's nominal table width is the final page width.
         val factor=width.toFloat()/computeHorizontalScrollRange().coerceAtLeast(width)
         if(factor.isFinite() && factor>0f)zoomBy(factor.coerceIn(0.01f,100f))
+    }
+    fun resetZoom() {
+        val base=initialScale?:return
+        if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
     }
     fun viewport(pixels: Int) {
         val next=pixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
@@ -217,10 +226,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     else if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
-        if(!zoomed && (ready.externalImages || ready.layoutWidth>0))Row(Modifier.fillMaxWidth().padding(horizontal=22.dp),horizontalArrangement=Arrangement.SpaceBetween) {
+        AnimatedVisibility(visible=!zoomed && (ready.externalImages || ready.layoutWidth>0),enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()) {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
             if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
             if(ready.layoutWidth>0)IconButton(onClick={web?.fitWidth()}){Icon(androidx.compose.material.icons.Icons.Outlined.FitScreen,"Подогнать по ширине")}
-        }
+        }}
         key(message.id,message.contentVersion) {
             AndroidView(factory={c->FrameLayout(c).apply {
                 try {
