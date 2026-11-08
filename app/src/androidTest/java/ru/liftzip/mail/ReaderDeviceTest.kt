@@ -49,11 +49,22 @@ class ReaderDeviceTest {
             val location=IntArray(2);view.getLocationOnScreen(location)
             assertEquals("HTML must reach the left screen edge",0,location[0])
             assertEquals("HTML must reach the right screen edge",view.resources.displayMetrics.widthPixels,location[0]+view.width)
-            view.fitWidth()
         }
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertIsDisplayed().performClick()
         rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Назад").fetchSemanticsNodes().isNotEmpty()}
         rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
         rule.runOnIdle{assertSame(view,webView())}
+    }
+    @Test fun longPressCopiesFullSubjectWithoutOpeningIt() {
+        val subject="Очень длинная тема письма ".repeat(12)
+        rule.setContent{MailTheme{reader(message.copy(subject=subject,htmlBody="<p>Письмо</p>"))}}
+        val node=rule.onNodeWithText(subject)
+        node.performTouchInput{longClick()}
+        rule.runOnIdle {
+            val clipboard=rule.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            assertEquals(subject,clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+        node.performClick();node.assertIsDisplayed()
     }
     @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
         rule.setContent{MailTheme{reader()}}
