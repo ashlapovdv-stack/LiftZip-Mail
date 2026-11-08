@@ -117,7 +117,7 @@ class HtmlMailDeviceTest {
             }}}
             rule.waitUntil(15_000){requests.get()==1};rule.waitUntil(10_000){greenPixels()>50}
             val pixels=rule.onRoot().captureToImage().toPixelMap()
-            val canvas=pixels[pixels.width-2,(40*c.resources.displayMetrics.density).toInt()]
+            val canvas=pixels[pixels.width*3/4,(40*c.resources.displayMetrics.density).toInt()]
             saveDeviceScreenshot(rule,"html-warm-theme")
             assertTrue("HTML canvas must match the warm theme: $canvas",canvas.red>0.98f && canvas.green>0.95f && canvas.blue>0.91f && canvas.blue<0.96f)
         }finally{file.delete()}
