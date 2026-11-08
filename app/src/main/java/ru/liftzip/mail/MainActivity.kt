@@ -453,7 +453,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.12",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.13",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -629,6 +629,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
+    var previousOuterOffset by remember(m.id){mutableIntStateOf(0)}
+    LaunchedEffect(htmlZoomed){if(htmlZoomed)outer.scrollTo(0) else if(previousOuterOffset>0)outer.scrollTo(previousOuterOffset)}
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
@@ -645,7 +647,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     })}) { padding->
         Box(Modifier.padding(padding).fillMaxSize()) {
         Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
-            .nestedScroll(scroll.connection).verticalScroll(outer).padding(horizontal=22.dp)) {
+            .nestedScroll(scroll.connection).verticalScroll(outer)) {
+            if(!htmlZoomed)Column(Modifier.fillMaxWidth().padding(horizontal=22.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().clickable{subjectExpanded=!subjectExpanded}.padding(top=8.dp,bottom=12.dp))
             Row(verticalAlignment=Alignment.CenterVertically) {
@@ -673,13 +676,17 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 }
             }
             HorizontalDivider(Modifier.padding(vertical=10.dp))
+            }
             val parsed=conversation
             if(m.previewOnly || parsed==null)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             else {
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,onZoomChanged={htmlZoomed=it})
-                if(parsed.messages.isNotEmpty())ConversationHistory(m.id,parsed,ownAddresses)
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,onZoomChanged={zoomed->
+                    if(zoomed && !htmlZoomed)previousOuterOffset=outer.value
+                    scroll.zoomed=zoomed;htmlZoomed=zoomed
+                })
+                if(!htmlZoomed && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
             }
-            Spacer(Modifier.height(100.dp))
+            if(!htmlZoomed)Spacer(Modifier.height(100.dp))
         }
         if(actionsExpanded)Box(Modifier.matchParentSize().background(Color.White.copy(alpha=0.78f)).clickable{actionsExpanded=false}.semantics{contentDescription="Закрыть действия"})
         }
