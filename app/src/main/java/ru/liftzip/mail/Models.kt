@@ -35,7 +35,7 @@ data class MailItem(
     val delivery: String = "", val previewOnly: Boolean = false, val contentCached: Boolean = true,
     val forwarding: ForwardPlan? = null, val internetMessageId: String="", val sourceDraftId: String?=null, val editRevision: Long=0, val pendingDelete: Boolean=false, val cacheBytes: Long=0, val cachedAt: Long=0,
     val htmlBody: String="", val contentVersion: Int=0,
-    val answered: Boolean=false, val forwarded: Boolean=false, val responseTo: String?=null, val responseKind: String=""
+    val answered: Boolean=false, val forwarded: Boolean=false, val responseTo: String?=null, val responseKind: String="", val cc: String=""
 )
 
 data class ComposeDraft(
