@@ -30,6 +30,19 @@ class ReaderDeviceTest {
         rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.contentHeight>0 && it.height>20}?:false};ready}
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
     }
+    @Test fun zoomingHtmlHidesToolbarAndRetainsTheSameWebView() {
+        val short=message.copy(htmlBody="<p>Текст письма для увеличения</p><table width='720'><tr><td>Содержимое</td></tr></table>",body="Текст письма для увеличения")
+        rule.setContent{MailTheme{reader(short)}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.runOnIdle{view.zoomBy(2f)}
+        rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Назад").fetchSemanticsNodes().isEmpty()}
+        rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
+        rule.runOnIdle{assertSame(view,webView());view.fitWidth()}
+        rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Назад").fetchSemanticsNodes().isNotEmpty()}
+        rule.runOnIdle{assertSame(view,webView())}
+    }
     @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
