@@ -518,11 +518,11 @@ private val Paper=Color(0xFFF8F9F6)
                     }
                 }
                 Column(Modifier.fillMaxWidth().graphicsLayer{this.alpha=fade().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
-                Box(if(style==MailStyle.STANDARD)Modifier else Modifier.padding(horizontal=8.dp,vertical=6.dp)) {
+                Box(if(style==MailStyle.STANDARD)Modifier else Modifier.padding(horizontal=8.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
-                        modifier=Modifier.then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
+                        modifier=Modifier.height(64.dp).then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
                         MailFolder.entries.forEach{f->NavigationBarItem(colors=if(style==MailStyle.STANDARD)NavigationBarItemDefaults.colors()else NavigationBarItemDefaults.colors(
-                            selectedIconColor=navigationAccent,selectedTextColor=navigationAccent,indicatorColor=navigationAccent.copy(alpha=0.08f)),selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
+                            selectedIconColor=navigationAccent,selectedTextColor=navigationAccent,indicatorColor=navigationAccent.copy(alpha=0.08f)),selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null,Modifier.size(22.dp))},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
                     }
                 }
                 }
