@@ -117,9 +117,9 @@ class WindowBackgroundDeviceTest {
                     val list=rule.onNodeWithTag("inbox-list").fetchSemanticsNode().boundsInRoot
                     val full=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No hidden window screenshot")
                     try {
+                        saveDeviceBitmap(full,"edge-hidden-${selected.key}-$mode")
                         assertEquals("List must reach the top physical edge",0f,list.top,1f)
                         assertEquals("List must reach the bottom physical edge",full.height.toFloat(),list.bottom,1f)
-                        saveDeviceBitmap(full,"edge-hidden-${selected.key}-$mode")
                     }finally{full.recycle()}
                 }
             }
