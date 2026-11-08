@@ -647,7 +647,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
         }
-    },topBar={Box(Modifier.zoomCollapse(zoomProgress)) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -660,7 +660,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         Box(Modifier.padding(padding).fillMaxSize()) {
         Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
             .nestedScroll(scroll.connection).verticalScroll(outer)) {
-            Box(Modifier.zoomCollapse(zoomProgress)) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
+            if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().combinedClickable(onClick={subjectExpanded=!subjectExpanded},onLongClick={
                 val clipboard=readerContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
