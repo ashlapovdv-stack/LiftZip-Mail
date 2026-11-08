@@ -31,12 +31,12 @@ class MessageFlowDeviceTest {
             MailTheme {holder.SaveableStateProvider(key){InboxScreen(data,selected,MailFolder.INBOX,null,memory,drawerState=drawer,onAccount={selected=it},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}}
         }
         rule.onNodeWithContentDescription("Выбрать ящик").performClick()
-        rule.onNodeWithText("Рабочая").performClick();rule.onNodeWithText("Папка A").assertIsDisplayed()
-        rule.onNodeWithText("Личный").performClick();rule.onNodeWithText("Папка B").assertIsDisplayed()
-        rule.onNodeWithText("Личный").performClick();rule.onNodeWithText("Папки на сервере").assertIsNotDisplayed()
+        rule.onNodeWithTag("drawer-account:a").performClick();rule.onNodeWithText("Папка A").assertIsDisplayed()
+        rule.onNodeWithTag("drawer-account:b").performClick();rule.onNodeWithText("Папка B").assertIsDisplayed()
+        rule.onNodeWithTag("drawer-account:b").performClick();rule.onNodeWithText("Папки на сервере").assertIsNotDisplayed()
         rule.onNodeWithContentDescription("Выбрать ящик").performClick();rule.onNodeWithText("Все ящики").performClick()
         rule.runOnIdle{assertNull(selected)}
-        rule.onNodeWithText("Папки на сервере").assertIsNotDisplayed()
+        rule.onAllNodesWithText("Папки на сервере").assertCountEquals(0)
     }
 
     @Test fun multipleRecipientsExpandAndCollapseWithoutLosingAddresses() {
