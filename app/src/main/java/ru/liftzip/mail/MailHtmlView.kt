@@ -33,9 +33,11 @@ import kotlin.math.roundToInt
 
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
-    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={}): WebView(context) {
+    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Boolean)->Unit={}): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
     private var renderScale=resources.displayMetrics.density
+    private var initialScale: Float?=null
+    private var expandedZoom=false
     private var lastHeight=0
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
@@ -85,8 +87,11 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 (parent as? ViewGroup)?.removeView(this@MailHtmlWebView)
                 release(rendererGone=true);failed();return true
             }
-            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight()}
-            override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){publishHeight();ready()}}})}
+            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();initialScale?.let{base->
+                val next=if(expandedZoom)newScale>base*1.02f else newScale>base*1.05f
+                if(next!=expandedZoom){expandedZoom=next;post{if(live)zoomChanged(next)}}
+            }}
+            override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){if(initialScale==null)initialScale=renderScale;publishHeight();ready()}}})}
         }
     }
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
@@ -179,7 +184,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
 }
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,onZoomChanged: (Boolean)->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
@@ -195,6 +200,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
+    val latestZoom by rememberUpdatedState(onZoomChanged)
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     val ready=document
@@ -213,7 +219,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         key(message.id,message.contentVersion) {
             AndroidView(factory={c->FrameLayout(c).apply {
                 try {
-                    val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{height=it},failed={failed=true;loader.close()})
+                    val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{height=it},failed={failed=true;loader.close();latestZoom(false)},zoomChanged={latestZoom(it)})
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)
