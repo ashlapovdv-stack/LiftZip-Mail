@@ -38,6 +38,9 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
         rule.onAllNodesWithText("По ширине").assertCountEquals(0)
+        rule.runOnIdle{view.zoomBy(1.2f)}
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("Назад").assertExists()
         rule.runOnIdle{view.zoomBy(2f)}
         rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Назад").fetchSemanticsNodes().isEmpty()}
         rule.onAllNodesWithText("Длинное письмо").assertCountEquals(0)

@@ -40,11 +40,11 @@ import kotlin.math.roundToInt
 
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
-    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Boolean)->Unit={}): WebView(context) {
+    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={}): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
     private var renderScale=resources.displayMetrics.density
     private var initialScale: Float?=null
-    private var expandedZoom=false
+    private var establishingScale=false
     private var lastHeight=0
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
@@ -65,8 +65,6 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     init {
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        val contentInset=(16f*resources.displayMetrics.density).roundToInt()
-        setPadding(contentInset,0,contentInset,0)
         scrollBarStyle=View.SCROLLBARS_OUTSIDE_OVERLAY
         settings.apply {
             javaScriptEnabled=false;javaScriptCanOpenWindowsAutomatically=false;domStorageEnabled=false
@@ -97,11 +95,11 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 (parent as? ViewGroup)?.removeView(this@MailHtmlWebView)
                 release(rendererGone=true);failed();return true
             }
-            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();initialScale?.let{base->
-                val next=if(expandedZoom)newScale>base*1.02f else newScale>base*1.05f
-                if(next!=expandedZoom){expandedZoom=next;post{if(live)zoomChanged(next)}}
+            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale;establishingScale=false}else initialScale?.let{base->
+                val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
+                post{if(live)zoomChanged(progress)}
             }}
-            override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){if(initialScale==null)initialScale=renderScale;publishHeight();ready()}}})}
+            override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){if(initialScale==null){initialScale=renderScale;establishingScale=true;val before=renderScale;fitWidth();post{if(establishingScale && renderScale==before)establishingScale=false}};publishHeight();ready()}}})}
         }
     }
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
@@ -198,7 +196,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
 }
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,onZoomChanged: (Boolean)->Unit={}) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,zoomProgress: Float=0f,onZoomChanged: (Float)->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
@@ -226,21 +224,20 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     else if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
-        AnimatedVisibility(visible=!zoomed && (ready.externalImages || ready.layoutWidth>0),enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()) {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
+        if(ready.externalImages && zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
             if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
-            if(ready.layoutWidth>0)IconButton(onClick={web?.fitWidth()}){Icon(androidx.compose.material.icons.Icons.Outlined.FitScreen,"Подогнать по ширине")}
         }}
         key(message.id,message.contentVersion) {
             AndroidView(factory={c->FrameLayout(c).apply {
                 try {
-                    val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{height=it},failed={failed=true;loader.close();latestZoom(false)},zoomChanged={latestZoom(it)})
+                    val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{height=it},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)})
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)
                     addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                 }catch(e: Exception){failed=true;loader.close()}
             }},
-                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=if(zoomed)0.dp else 10.dp).height(with(density){(if(zoomed)scroll?.viewportHeight?.takeIf{it>0}?:viewport else height.coerceAtMost(viewport)).toDp()})
+                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=(10f*(1f-zoomProgress)).dp).height(with(density){val normal=height.coerceAtMost(viewport);val expanded=scroll?.viewportHeight?.takeIf{it>0}?:viewport;(normal+(expanded-normal)*zoomProgress).toDp()})
                     .onGloballyPositioned{scroll?.position(it.positionInWindow().y.toInt())},
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})

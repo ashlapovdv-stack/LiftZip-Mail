@@ -24,6 +24,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.positionInWindow
@@ -116,6 +118,13 @@ class MainActivity: ComponentActivity() {
 
 private val Olive=Color(0xFF4C5D47)
 private val Paper=Color(0xFFF8F9F6)
+
+internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLayer { alpha=1f-progress.coerceIn(0f,1f) }
+    .clipToBounds().layout { measurable,constraints ->
+        val placeable=measurable.measure(constraints.copy(minHeight=0))
+        val height=(placeable.height*(1f-progress.coerceIn(0f,1f))).toInt().coerceIn(0,constraints.maxHeight)
+        layout(placeable.width,height){placeable.placeRelative(0,0)}
+    }
 
 @Composable internal fun MailTheme(style: MailStyle=MailStyle.STANDARD,content: @Composable ()->Unit) {
     val dark=isSystemInDarkTheme()
@@ -453,7 +462,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.14",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.15",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -518,11 +527,11 @@ private val Paper=Color(0xFFF8F9F6)
                     }
                 }
                 Column(Modifier.fillMaxWidth().graphicsLayer{this.alpha=fade().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
-                Box(if(style==MailStyle.STANDARD)Modifier else Modifier.padding(horizontal=8.dp,vertical=6.dp)) {
+                Box(if(style==MailStyle.STANDARD)Modifier else Modifier.padding(horizontal=8.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
-                        modifier=Modifier.then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
+                        modifier=Modifier.height(64.dp).then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
                         MailFolder.entries.forEach{f->NavigationBarItem(colors=if(style==MailStyle.STANDARD)NavigationBarItemDefaults.colors()else NavigationBarItemDefaults.colors(
-                            selectedIconColor=navigationAccent,selectedTextColor=navigationAccent,indicatorColor=navigationAccent.copy(alpha=0.08f)),selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null)},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
+                            selectedIconColor=navigationAccent,selectedTextColor=navigationAccent,indicatorColor=navigationAccent.copy(alpha=0.08f)),selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null,Modifier.size(22.dp))},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
                     }
                 }
                 }
@@ -628,9 +637,9 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
+    var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
     val readerContext=LocalContext.current
     var previousOuterOffset by remember(m.id){mutableIntStateOf(0)}
-    LaunchedEffect(htmlZoomed){if(htmlZoomed)outer.scrollTo(0) else if(previousOuterOffset>0)outer.scrollTo(previousOuterOffset)}
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
@@ -638,7 +647,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
         }
-    },topBar={AnimatedVisibility(visible=!htmlZoomed,enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -651,7 +660,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         Box(Modifier.padding(padding).fillMaxSize()) {
         Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
             .nestedScroll(scroll.connection).verticalScroll(outer)) {
-            AnimatedVisibility(visible=!htmlZoomed,enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
+            if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().combinedClickable(onClick={subjectExpanded=!subjectExpanded},onLongClick={
                 val clipboard=readerContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -687,7 +696,9 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             val parsed=conversation
             if(m.previewOnly || parsed==null)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             else {
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,onZoomChanged={zoomed->
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,zoomProgress=zoomProgress,onZoomChanged={progress->
+                    zoomProgress=progress
+                    val zoomed=progress>0.001f
                     if(zoomed && !htmlZoomed)previousOuterOffset=outer.value
                     scroll.zoomed=zoomed;htmlZoomed=zoomed
                 })
