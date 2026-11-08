@@ -633,7 +633,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             if(m.attachments.isNotEmpty() || m.outgoing.isNotEmpty()) {
                 Text("Вложения",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(bottom=6.dp))
                 val images=if(onThumbnail!=null)m.attachments.filter{it.mime.startsWith("image/",true)}else emptyList()
-                if(images.isNotEmpty())AttachmentThumbnails(images,!busy,onThumbnail!!,onOpenAttachment,onDownload)
+                if(images.isNotEmpty())key(m.id){AttachmentThumbnails(images,!busy,onThumbnail!!,onOpenAttachment,onDownload)}
                 FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth().padding(bottom=8.dp)) {
                     m.attachments.filter{it !in images}.forEach { file->
                         val preparing="${m.id}|${file.path}" in attachmentBusy

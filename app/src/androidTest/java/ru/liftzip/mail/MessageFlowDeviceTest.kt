@@ -93,6 +93,7 @@ class MessageFlowDeviceTest {
         rule.onNodeWithContentDescription("Открыть изображение фото.png").assertIsDisplayed().performClick()
         rule.onNodeWithContentDescription("Сохранить фото.png").performClick()
         rule.runOnIdle{assertEquals(1,opened);assertEquals(1,downloaded)}
+        saveDeviceScreenshot(rule,"image-thumbnails")
         file.delete()
     }
 }

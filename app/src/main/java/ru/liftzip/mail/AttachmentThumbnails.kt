@@ -34,8 +34,8 @@ import kotlinx.coroutines.withContext
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom=8.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
         files.forEachIndexed { index,file->
             val context=LocalContext.current
-            val bitmap by produceState<android.graphics.Bitmap?>(null,file.path,file.size) {
-                if(index>=6 || file.size<0 || file.size>2*1024*1024)return@produceState
+            val bitmap by produceState<android.graphics.Bitmap?>(null,file.path,file.size,enabled) {
+                if(!enabled || index>=6 || file.size<0 || file.size>2*1024*1024)return@produceState
                 value=try {
                     val opened=load(file)
                     withContext(Dispatchers.IO) {
@@ -58,7 +58,7 @@ import kotlinx.coroutines.withContext
                     val image=bitmap
                     if(image!=null)Image(image.asImageBitmap(),null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
                     else Icon(Icons.Outlined.Image,null,tint=MaterialTheme.colorScheme.onSurfaceVariant)
-                    if(file.size>0)Text("${(file.size+1023)/1024} КБ",Modifier.align(Alignment.BottomStart).background(Color.Black.copy(alpha=0.55f)).padding(horizontal=5.dp,vertical=2.dp),color=Color.White,style=MaterialTheme.typography.labelSmall)
+                    if(file.size>0)Text("${(file.size.toLong()+1023)/1024} КБ",Modifier.align(Alignment.BottomStart).background(Color.Black.copy(alpha=0.55f)).padding(horizontal=5.dp,vertical=2.dp),color=Color.White,style=MaterialTheme.typography.labelSmall)
                 }
                 Row(verticalAlignment=Alignment.CenterVertically) {
                     Text(file.name,style=MaterialTheme.typography.labelSmall,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f))
