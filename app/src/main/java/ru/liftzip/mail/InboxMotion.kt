@@ -110,11 +110,10 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
     }
 }
 
-/** Each control keeps a solid neutral backplate while its contents fade. This prevents
- * list glyphs mixing with navigation labels or the floating compose button. */
+/** Fade the complete control, including its background, over the message list. */
 @Composable fun InboxFadingControl(fraction: ()->Float,modifier: Modifier=Modifier,shape: Shape=RectangleShape,content: @Composable ()->Unit) {
-    Box(modifier.background(MaterialTheme.colorScheme.surface,shape)) {
-        Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){content()}
+    Box(modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface,shape)) {
+        content()
     }
 }
 
