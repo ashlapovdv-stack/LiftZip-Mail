@@ -7,6 +7,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HtmlMailTest {
+    @Test fun neutralMessageBackgroundsBlendIntoThemeButColoredHighlightSurvives() {
+        val html="""<body bgcolor="#ffffff"><p style="background:rgb(248,248,250)">Текст <span style="background-color:#fff">подпись</span><span style="background:#ffff00">важно</span></p><div style="background-color:#102030;color:white">тёмный блок</div><style>.note {background-color: whitesmoke;}</style></body>"""
+        val doc=Jsoup.parse(HtmlMail.document(html,"",emptyList(),background="#fff8ef").html)
+        assertTrue(doc.selectFirst("p")!!.attr("style").contains("background:transparent"))
+        assertTrue(doc.selectFirst("span")!!.attr("style").contains("background-color:transparent"))
+        assertTrue(doc.select("span")[1].attr("style").contains("#ffff00"))
+        assertTrue(doc.select("div").any{it.attr("style").contains("#102030")})
+        assertTrue(doc.select("style").any{it.data().contains("background-color: transparent")})
+        assertTrue(doc.select("[bgcolor]").none{HtmlMail.neutralFill(it.attr("bgcolor"))})
+    }
     private val newsletter="""<html><head><style>p{margin:0}table{border-collapse:collapse} @media screen and (max-width:600px){.section{width:100%!important}}</style></head><body><p>Аналитики поделились прогнозом на Q4</p><a href="https://example.com/report?q=4&amp;x=1">Читать прогноз</a><img src="https://images.example.com/hero.png" alt="График"></body></html>"""
     @Test fun newsletterStylesNeverBecomeMessageTextOrObjectGlyphs() {
         val text=HtmlMail.text(newsletter)
