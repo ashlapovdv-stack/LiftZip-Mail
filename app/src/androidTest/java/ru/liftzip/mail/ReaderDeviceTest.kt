@@ -43,7 +43,8 @@ class ReaderDeviceTest {
         rule.onRoot().performTouchInput{down(center);up()}
         rule.runOnIdle{view.scrollContent(Int.MAX_VALUE);assertFalse(view.canScrollVertically(1))}
         rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-450f),600)}
-        rule.waitForIdle();rule.onNodeWithText("Переслать").assertIsDisplayed()
+        rule.waitForIdle();rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed().performClick()
+        rule.onNodeWithText("Переслать").assertIsDisplayed();rule.onNodeWithContentDescription("Закрыть действия").performClick()
         saveDeviceScreenshot(rule,"html-long")
         rule.runOnIdle{view.scrollContent(Int.MIN_VALUE)}
         // Returning also traverses the footer and header, which together exceed 500 physical
@@ -62,7 +63,7 @@ class ReaderDeviceTest {
             rule.runOnIdle{assertNull(previous.parent);visible.value=true}
             val next=loaded();assertNotSame(previous,next)
         }
-        rule.onNodeWithText("Переслать").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
     }
     @Test fun losingTheWebRendererShowsSavedTextAndLeavesReplyControlsWorking() {
         val short=message.copy(htmlBody="<p>Текст после сбоя просмотрщика</p>",body="Текст после сбоя просмотрщика")
@@ -72,7 +73,8 @@ class ReaderDeviceTest {
         rule.runOnIdle{view.loadUrl("chrome://crash")}
         rule.waitUntil(15_000){rule.onAllNodesWithText("Показываем текстовую версию письма").fetchSemanticsNodes().isNotEmpty()}
         rule.onNodeWithText("Текст после сбоя просмотрщика").assertIsDisplayed()
-        rule.onNodeWithText("Ответить").assertIsDisplayed().assertHasClickAction()
+        rule.onNodeWithContentDescription("Ответить или переслать").performClick()
+        rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
         rule.runOnIdle{assertNull(webView())}
         saveDeviceScreenshot(rule,"html-fallback")
     }
