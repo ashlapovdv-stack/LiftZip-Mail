@@ -35,7 +35,7 @@ fun ComponentActivity.edgeMailWindow() {
     val density=LocalDensity.current
     val top=with(density){WindowInsets.safeDrawing.getTop(density).toDp()}
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-        if(style!=MailStyle.STANDARD)Box(Modifier.fillMaxWidth().height(140.dp+top)) {
+        if(style!=MailStyle.STANDARD)Box(Modifier.fillMaxWidth().height(112.dp+top)) {
             Image(painterResource(style.artwork),null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
             // Keep the shared artwork visible while protecting dark clock/icons over foliage.
             Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(top+24.dp)
