@@ -452,7 +452,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.9",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.10",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -539,7 +539,7 @@ private val Paper=Color(0xFFF8F9F6)
                                 Text(if(query.isNotBlank())"Попробуйте другое слово" else "Потяните список вниз для проверки почты",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }}
-                        items(visible,key={it.id}){m->MailRow(m,s.accounts.find{it.id==m.accountId},onOpen={if(selectionMode)toggle(m.id)else onOpen(m)},
+                        items(visible,key={it.id}){m->MailRow(m,s.accounts.find{it.id==m.accountId},onOpen={if(selectionMode)toggle(m.id)else {memory.rememberPosition();onOpen(m)}},
                             onSelect={toggle(m.id)},selectionMode=selectionMode,checked=m.id in selected,onStar={onStar(m)},busy=s.busy)}
                         if(historyFooter)item(key="history-footer") {
                             Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=20.dp),horizontalAlignment=Alignment.CenterHorizontally) {
@@ -640,14 +640,12 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             if(m.localFolder=="sent")InfoCard("Письмо принято SMTP-сервером. Копия ожидает сохранения в серверной папке «Отправленные».")
             if(m.attachments.isNotEmpty() || m.outgoing.isNotEmpty()) {
                 Text("Вложения",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(bottom=6.dp))
-                val images=if(onThumbnail!=null)m.attachments.filter{it.mime.startsWith("image/",true)}else emptyList()
-                if(images.isNotEmpty())key(m.id){AttachmentThumbnails(images,!busy,onThumbnail!!,onOpenAttachment,onDownload)}
-                FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp),modifier=Modifier.fillMaxWidth().padding(bottom=8.dp)) {
-                    m.attachments.filter{it !in images}.forEach { file->
-                        val preparing="${m.id}|${file.path}" in attachmentBusy
-                        CompactAttachment(file.name,preparing,!busy,onOpen={onOpenAttachment(file)},onDownload={onDownload(file)})
-                    }
-                    m.outgoing.forEach { file->CompactAttachment(file.name,false,!busy,onOpen={onOpenLocal(file)}) }
+                if(m.attachments.isNotEmpty())key(m.id){AttachmentThumbnails(m.attachments,!busy,onThumbnail,onOpenAttachment,onDownload,
+                    busyPaths=m.attachments.filter{"${m.id}|${it.path}" in attachmentBusy}.map{it.path}.toSet())}
+                if(m.outgoing.isNotEmpty()) {
+                    val local=m.outgoing.map{file->Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt())}
+                    key(m.id,"local"){AttachmentThumbnails(local,!busy,{file->OpenedAttachment(file.path,file.name,AttachmentRules.mime(file.name,file.mime))},
+                        onOpen={file->m.outgoing.firstOrNull{it.uri==file.path}?.let(onOpenLocal)})}
                 }
             }
             HorizontalDivider(Modifier.padding(vertical=10.dp))
@@ -677,20 +675,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             if(collapsible)Icon(if(expanded)Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,if(expanded)"Свернуть получателей" else "Показать всех получателей",Modifier.size(24.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if(expanded)recipients.drop(1).forEach{recipient->Text(recipient,Modifier.padding(top=4.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
-    }
-}
-
-@Composable private fun CompactAttachment(name: String,preparing: Boolean,enabled: Boolean,onOpen: ()->Unit,onDownload: (() -> Unit)?=null) {
-    Surface(shape=RoundedCornerShape(14.dp),color=MaterialTheme.colorScheme.surfaceContainer,
-        modifier=Modifier.widthIn(max=260.dp).heightIn(min=44.dp).semantics{contentDescription="Вложение $name"}) {
-        Row(Modifier.clickable(enabled=enabled && !preparing,onClick=onOpen).padding(start=10.dp,end=if(onDownload==null)10.dp else 2.dp),verticalAlignment=Alignment.CenterVertically) {
-            if(preparing)CircularProgressIndicator(Modifier.size(16.dp),strokeWidth=2.dp)
-            else Icon(Icons.Outlined.AttachFile,null,Modifier.size(16.dp),tint=MaterialTheme.colorScheme.primary)
-            Text(name,Modifier.padding(start=6.dp).widthIn(max=150.dp),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelMedium)
-            if(onDownload!=null && !preparing)IconButton(onClick=onDownload,enabled=enabled,modifier=Modifier.size(40.dp)) {
-                Icon(Icons.Outlined.Download,"Сохранить $name",Modifier.size(18.dp))
-            }
-        }
     }
 }
 

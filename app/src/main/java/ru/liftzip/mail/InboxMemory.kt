@@ -8,6 +8,7 @@ class InboxMemory(val list: LazyListState = LazyListState(),var restore: InboxPo
     var firstId: String? = null
     fun position()=InboxPosition(list.layoutInfo.visibleItemsInfo.firstOrNull()?.key as? String,
         list.firstVisibleItemIndex,list.firstVisibleItemScrollOffset)
+    fun rememberPosition(){restore=position()}
 }
 
 // Kept above navigation: each mailbox/folder owns a live list state even while its reader is open.

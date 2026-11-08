@@ -49,6 +49,32 @@ class MessageFlowDeviceTest {
         rule.onNodeWithText("ещё 2",substring=true).assertIsDisplayed()
     }
 
+    @Test fun androidBackFromLetterRestoresTheScrolledMessageList() {
+        var route by mutableStateOf("inbox")
+        val memory=InboxMemory()
+        val messages=(0..59).map{i->mail.copy(id="scroll-$i",subject="Сообщение $i",date=2_000_000L-i)}
+        val state=UiState(loaded=true,accounts=listOf(account),messages=messages)
+        rule.setContent {
+            val holder=rememberSaveableStateHolder()
+            MailTheme {
+                RouteBackHandler(route,onPreview={},onMessage={route="inbox"},onCompose={},onHome={route="inbox"})
+                if(route=="inbox")holder.SaveableStateProvider("inbox") {InboxScreen(state,"a",MailFolder.INBOX,null,memory,onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={route="reader"})}
+                else Text("Открытое письмо")
+            }
+        }
+        rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:scroll-0").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithTag("inbox-list").performScrollToIndex(20)
+        var index=0;var offset=0
+        rule.runOnIdle{index=memory.list.firstVisibleItemIndex;offset=memory.list.firstVisibleItemScrollOffset}
+        assertTrue("The fixture must be scrolled",index>=18)
+        rule.onNodeWithTag("mail-row:scroll-20").performClick()
+        rule.onNodeWithText("Открытое письмо").assertIsDisplayed()
+        back()
+        rule.waitUntil(15000){memory.restore==null && memory.list.firstVisibleItemIndex==index}
+        rule.runOnIdle{assertEquals(index,memory.list.firstVisibleItemIndex);assertEquals(offset,memory.list.firstVisibleItemScrollOffset)}
+        rule.onNodeWithTag("mail-row:scroll-20").assertIsDisplayed()
+    }
+
     @Test fun attachmentBackReturnsToLetterThenToTheSameServerFolder() {
         var route by mutableStateOf("inbox")
         var folder by mutableStateOf(MailFolder.INBOX)
@@ -87,15 +113,16 @@ class MessageFlowDeviceTest {
     }
 
     @Test fun compactAttachmentsAppearBeforeTheBodyAndKeepBothActions() {
-        val m=mail.copy(attachments=listOf(Attachment("1","схема.png","image/png",2048)))
+        val m=mail.copy(attachments=listOf(Attachment("1","схема.pdf","application/pdf",2048)))
         var opened=0;var downloaded=0
         rule.setContent{MailTheme{ReaderScreen(m,account,false,emptyList(),emptySet(),onBack={},onStar={},onInline={error("No inline images")},onLink={},onDownload={downloaded++},onOpenAttachment={opened++},onOpenLocal={},onReply={},onForward={})}}
         rule.waitUntil(30000){rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().isNotEmpty()}
-        val attachment=rule.onNodeWithContentDescription("Вложение схема.png").fetchSemanticsNode().boundsInRoot
+        val attachment=rule.onNodeWithContentDescription("Вложение схема.pdf").fetchSemanticsNode().boundsInRoot
         val body=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot
         assertTrue("Attachments must precede the body",attachment.bottom<body.top)
-        rule.onNodeWithText("схема.png").performClick()
-        rule.onNodeWithContentDescription("Сохранить схема.png").performClick()
+        rule.onNodeWithText("PDF").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Вложение схема.pdf").performClick()
+        rule.onNodeWithContentDescription("Сохранить схема.pdf").performClick()
         rule.runOnIdle{assertEquals(1,opened);assertEquals(1,downloaded)}
         saveDeviceScreenshot(rule,"compact-attachments")
     }
@@ -112,7 +139,7 @@ class MessageFlowDeviceTest {
         saveDeviceScreenshot(rule,"expanded-history")
     }
     @Test fun imageAttachmentsOpenAndDownloadFromCompactPreviews() {
-        val image=Attachment("1","фото.png","image/png",2048)
+        val image=Attachment("1","фото.png","application/octet-stream",4_372*1024)
         val m=mail.copy(attachments=listOf(image))
         val file=java.io.File(rule.activity.cacheDir,"thumbnail-test.png")
         android.graphics.Bitmap.createBitmap(24,24,android.graphics.Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.RED);file.outputStream().use{compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};recycle()}

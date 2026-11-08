@@ -1076,9 +1076,9 @@ class MailRepository(private val context: Context) {
         attachmentCache.opened(cachedAttachment(message,file,MailImageLimits.MAX_BYTES),file)
     }
     suspend fun thumbnailImage(message: MailItem,file: Attachment): OpenedAttachment=withContext(Dispatchers.IO){
-        require(file.mime.startsWith("image/",true) && message.attachments.any{it.path==file.path}){"Изображение не найдено в письме."}
-        require(file.size>=0 && file.size.toLong()<=2L*1024*1024){"Изображение слишком большое для миниатюры."}
-        attachmentCache.opened(cachedAttachment(message,file,2L*1024*1024),file)
+        require(AttachmentRules.isImage(file.name,file.mime) && message.attachments.any{it.path==file.path}){"Изображение не найдено в письме."}
+        require(file.size>=0 && file.size.toLong()<=AttachmentRules.THUMBNAIL_MAX_BYTES){"Изображение слишком большое для миниатюры."}
+        attachmentCache.opened(cachedAttachment(message,file,AttachmentRules.THUMBNAIL_MAX_BYTES),file)
     }
     private fun ComposeDraft.toMessage(a: MailAccount,folder: String)=MailItem(id,accountId,sender=a.senderName,senderEmail=a.email,recipients=to,
         subject=subject,body=body,date=if(folder in setOf("outbox","sent") && timestamp>0)timestamp else System.currentTimeMillis(),localFolder=folder,outgoing=attachments,forwarding=forwarding,internetMessageId=MessageIdentity.forDraft(id,internetMessageId),sourceDraftId=sourceDraftId,responseTo=responseTo,responseKind=responseKind)

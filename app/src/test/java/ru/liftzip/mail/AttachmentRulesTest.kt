@@ -17,6 +17,10 @@ class AttachmentRulesTest {
         assertEquals("application/pdf",AttachmentRules.mime("Счёт.PDF","application/octet-stream"))
         assertEquals("image/jpeg",AttachmentRules.mime("photo.jpeg",""))
         assertEquals("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",AttachmentRules.mime("price.xlsx","application/octet-stream"))
+        assertTrue(AttachmentRules.isImage("photo-1.jpg","application/octet-stream"))
+        assertTrue(AttachmentRules.isImage("photo-1.jpg","text/plain"))
+        assertEquals("ODS",AttachmentRules.format("остатки.ods","application/octet-stream"))
+        assertTrue(AttachmentRules.THUMBNAIL_MAX_BYTES>4_372L*1024)
     }
     @Test fun explicitServerMimeIsPreservedAndParametersRemoved() {
         assertEquals("text/plain",AttachmentRules.mime("message.bin","text/plain; charset=UTF-8"))
