@@ -498,7 +498,7 @@ private val Paper=Color(0xFFF8F9F6)
                     colors=if(style==MailStyle.STANDARD)OutlinedTextFieldDefaults.colors()else OutlinedTextFieldDefaults.colors(
                         focusedContainerColor=MaterialTheme.colorScheme.surfaceContainer,unfocusedContainerColor=MaterialTheme.colorScheme.surfaceContainer,
                         focusedBorderColor=Color.Transparent,unfocusedBorderColor=Color.Transparent),
-                    modifier=Modifier.fillMaxWidth().padding(horizontal=if(style==MailStyle.STANDARD)18.dp else 14.dp,vertical=4.dp).height(52.dp))
+                    modifier=Modifier.fillMaxWidth().padding(horizontal=if(style==MailStyle.STANDARD)18.dp else 14.dp,vertical=4.dp).heightIn(min=52.dp))
                 if(s.notificationAccess.backgroundRestricted || s.notificationAccess.dataRestricted || s.notificationAccess.standbyRestricted || s.poll.backgroundMinutes==0)
                     TextButton(onClick=onDelivery,modifier=Modifier.fillMaxWidth()){Text("Фоновая проверка ограничена · настроить")}
                 Row(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically) {
