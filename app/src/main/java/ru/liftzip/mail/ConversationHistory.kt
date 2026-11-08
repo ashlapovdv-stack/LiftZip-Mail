@@ -30,6 +30,12 @@ import androidx.compose.ui.unit.sp
                     Row(Modifier.fillMaxWidth().padding(start=(index.coerceAtMost(4)*8).dp,bottom=18.dp).drawBehind{drawLine(lineColor,androidx.compose.ui.geometry.Offset(1.dp.toPx(),0f),androidx.compose.ui.geometry.Offset(1.dp.toPx(),size.height),2.dp.toPx())}) {
                         Column(Modifier.weight(1f).padding(start=10.dp)) {
                             Text(heading,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            if(message.recipients!=null || message.subject!=null) {
+                                message.sender?.let{Text("От: $it",style=MaterialTheme.typography.bodyMedium)}
+                                message.recipients?.let{Text("Кому: $it",style=MaterialTheme.typography.bodyMedium)}
+                                message.date?.let{Text("Дата: $it",style=MaterialTheme.typography.bodyMedium)}
+                                message.subject?.let{Text("Тема: $it",style=MaterialTheme.typography.bodyMedium)}
+                            }
                             Spacer(Modifier.height(8.dp))
                             Text(message.body.ifBlank{"Нет текстового содержимого."},style=MaterialTheme.typography.bodyLarge,lineHeight=25.sp)
                         }

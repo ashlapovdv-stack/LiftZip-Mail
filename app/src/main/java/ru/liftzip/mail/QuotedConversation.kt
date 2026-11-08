@@ -1,6 +1,6 @@
 package ru.liftzip.mail
 
-data class QuotedMessage(val sender: String?,val date: String?,val body: String,val attribution: String?=null) {
+data class QuotedMessage(val sender: String?,val date: String?,val body: String,val attribution: String?=null,val recipients: String?=null,val subject: String?=null) {
     fun isOwn(addresses: Collection<String>): Boolean {
         val emails=Regex("[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}").findAll(sender.orEmpty()).map{it.value.lowercase()}.toSet()
         return addresses.any{it.lowercase() in emails}
@@ -11,9 +11,9 @@ data class QuotedConversation(val current: String,val messages: List<QuotedMessa
 /** Recognizes nested text quotations, not server threads. Ambiguous inline replies stay intact. */
 object ConversationText {
     private fun cleanQuote(text: String)=text.replace("\uFFFC","").replace("\u200B","").replace("\uFEFF","").replace('\u00A0',' ')
-    private data class Header(val lines: Int,val sender: String?=null,val date: String?=null,val attribution: String?=null)
+    private data class Header(val lines: Int,val sender: String?=null,val date: String?=null,val attribution: String?=null,val recipients: String?=null,val subject: String?=null)
     private val weekdays=Regex("^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье),?\\s+\\d.*",RegexOption.IGNORE_CASE)
-    private val original=Regex("^-{2,}\\s*(Original Message|Исходное сообщение)\\s*-{2,}$",RegexOption.IGNORE_CASE)
+    private val original=Regex("^-{2,}\\s*(Original Message|Forwarded Message|Исходное сообщение|Пересланное письмо)\\s*-{2,}$",RegexOption.IGNORE_CASE)
     private val russianDate=Regex("^(\\d{1,2}\\s+\\p{L}+\\s+\\d{4}(?:\\s*г\\.?)?(?:[, ]+\\d{1,2}:\\d{2}(?::\\d{2})?)?(?:\\s*[+-]\\d{2}:?\\d{2})?)\\s+(.+)$")
 
     fun parse(body: String): QuotedConversation {
@@ -27,7 +27,7 @@ object ConversationText {
             val header=header(lines)
             val text=peel(lines.drop(header?.lines?:0).dropWhile{it.isBlank()}).joinToString("\n").trim()
             val nested=ReplyText.split(text)
-            messages+=QuotedMessage(header?.sender?.let(::cleanQuote),header?.date?.let(::cleanQuote),cleanQuote(if(nested.canCollapse)nested.current else text),header?.attribution?.let(::cleanQuote))
+            messages+=QuotedMessage(header?.sender?.let(::cleanQuote),header?.date?.let(::cleanQuote),cleanQuote(if(nested.canCollapse)nested.current else text),header?.attribution?.let(::cleanQuote),header?.recipients?.let(::cleanQuote),header?.subject?.let(::cleanQuote))
             if(!nested.canCollapse)return QuotedConversation(parts.current,messages,body)
             remaining=nested.quoted.orEmpty()
         }
@@ -51,16 +51,16 @@ object ConversationText {
             if(author.endsWith("пишет:",true))return Header(index+1,sender=author.dropLast("пишет:".length).trim(),attribution=author)
         }
         if(original.matches(first)) {
-            var sender: String?=null;var date: String?=null;var end=1
+            var sender: String?=null;var date: String?=null;var recipients: String?=null;var subject: String?=null;var end=1
             for(i in 1 until minOf(lines.size,18)) {
                 val line=lines[i].trim()
                 if(line.isEmpty()){end=i+1;break}
                 val label=line.substringBefore(':').lowercase()
                 val value=line.substringAfter(':',"").trim()
-                when(label){"from","от"->sender=value;"sent","date","отправлено","дата"->date=value;"to","кому","subject","тема","cc","копия"->Unit;else->break}
+                when(label){"from","от"->sender=value;"sent","date","отправлено","дата"->date=value;"to","кому"->recipients=value;"subject","тема"->subject=value;"cc","копия"->Unit;else->break}
                 end=i+1
             }
-            return Header(end,sender,date,first)
+            return Header(end,sender,date,first,recipients,subject)
         }
         if(weekdays.matches(first)) {
             for(end in 1..minOf(lines.size,4)) {
