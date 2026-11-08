@@ -453,7 +453,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.13",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.14",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -498,10 +498,10 @@ private val Paper=Color(0xFFF8F9F6)
                     colors=if(style==MailStyle.STANDARD)OutlinedTextFieldDefaults.colors()else OutlinedTextFieldDefaults.colors(
                         focusedContainerColor=MaterialTheme.colorScheme.surfaceContainer,unfocusedContainerColor=MaterialTheme.colorScheme.surfaceContainer,
                         focusedBorderColor=Color.Transparent,unfocusedBorderColor=Color.Transparent),
-                    modifier=Modifier.fillMaxWidth().padding(horizontal=if(style==MailStyle.STANDARD)18.dp else 14.dp,vertical=10.dp))
+                    modifier=Modifier.fillMaxWidth().padding(horizontal=if(style==MailStyle.STANDARD)18.dp else 14.dp,vertical=4.dp).height(52.dp))
                 if(s.notificationAccess.backgroundRestricted || s.notificationAccess.dataRestricted || s.notificationAccess.standbyRestricted || s.poll.backgroundMinutes==0)
                     TextButton(onClick=onDelivery,modifier=Modifier.fillMaxWidth()){Text("Фоновая проверка ограничена · настроить")}
-                Row(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically) {
                     Text(if(query.isNotBlank())"Поиск среди загруженных писем" else "${visible.size} писем · $visibleUnread непрочитанных",
                         style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -518,8 +518,7 @@ private val Paper=Color(0xFFF8F9F6)
                     }
                 }
                 Column(Modifier.fillMaxWidth().graphicsLayer{this.alpha=fade().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
-                InboxFadingControl({1f},shape=RoundedCornerShape(if(style==MailStyle.STANDARD)0.dp else 26.dp),
-                    modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.background(MaterialTheme.colorScheme.surface).padding(horizontal=8.dp,vertical=6.dp)) {
+                Box(if(style==MailStyle.STANDARD)Modifier else Modifier.padding(horizontal=8.dp,vertical=6.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
                         modifier=Modifier.then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
                         MailFolder.entries.forEach{f->NavigationBarItem(colors=if(style==MailStyle.STANDARD)NavigationBarItemDefaults.colors()else NavigationBarItemDefaults.colors(
@@ -571,7 +570,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     val card=style!=MailStyle.STANDARD
     val background=when{card && !checked->MaterialTheme.colorScheme.surfaceContainer;checked->MaterialTheme.colorScheme.primaryContainer;m.unread->MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.28f);else->MaterialTheme.colorScheme.surface}
     val shape=RoundedCornerShape(20.dp)
-    val frame=if(card)Modifier.padding(horizontal=14.dp,vertical=5.dp).shadow(2.dp,shape).clip(shape)else Modifier
+    val frame=if(card)Modifier.padding(horizontal=14.dp,vertical=3.dp).shadow(2.dp,shape).clip(shape)else Modifier
     val unreadColor=MaterialTheme.colorScheme.primary
     val mailboxColor=accountColor(account)
     val date=remember(m.date,System.currentTimeMillis()/60_000L){displayDate(m.date)}
@@ -579,20 +578,20 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         .drawBehind{if(m.unread)drawRect(unreadColor,size=androidx.compose.ui.geometry.Size(4.dp.toPx(),size.height))}.testTag("mail-row:${m.id}")
         .combinedClickable(onClick=onOpen,onLongClick=onSelect,onLongClickLabel="Выделить письмо")
         .semantics{stateDescription=if(m.unread)"Не прочитано" else "Прочитано";selected=checked}) {
-        Row(Modifier.weight(1f).padding(start=18.dp,top=15.dp,bottom=15.dp,end=8.dp),verticalAlignment=Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).padding(start=14.dp,top=7.dp,bottom=7.dp,end=8.dp),verticalAlignment=Alignment.CenterVertically) {
             if(selectionMode)Checkbox(checked=checked,onCheckedChange={onSelect()},modifier=Modifier.size(44.dp))else {
                 val color=remember(m.sender){listOf(Color(0xFFE6EAD8),Color(0xFFE8E2D7),Color(0xFFDCE7E9),Color(0xFFEBDDDD))[(m.sender.hashCode() and Int.MAX_VALUE)%4]}
-                Surface(shape=CircleShape,color=color,modifier=Modifier.size(44.dp)){Box(contentAlignment=Alignment.Center){Text(m.sender.take(1).uppercase(),fontWeight=FontWeight.Medium,color=Color(0xFF475042),fontSize=18.sp)}}
+                Surface(shape=CircleShape,color=color,modifier=Modifier.size(38.dp)){Box(contentAlignment=Alignment.Center){Text(m.sender.take(1).uppercase(),fontWeight=FontWeight.Medium,color=Color(0xFF475042),fontSize=18.sp)}}
             }
-            Column(Modifier.weight(1f).padding(start=13.dp)) {
+            Column(Modifier.weight(1f).padding(start=10.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
                     Text(m.sender,Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=if(m.unread || card)FontWeight.Bold else FontWeight.Normal,fontSize=14.sp)
                     Text(date,Modifier.padding(start=8.dp),style=MaterialTheme.typography.labelSmall,color=if(m.unread)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Spacer(Modifier.height(4.dp));Text(m.subject.ifBlank{"Без темы"},maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=if(m.unread)FontWeight.Bold else FontWeight.Normal,fontSize=14.sp)
+                Spacer(Modifier.height(2.dp));Text(m.subject.ifBlank{"Без темы"},maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=if(m.unread)FontWeight.Bold else FontWeight.Normal,fontSize=14.sp)
                 val snippet=remember(m.body){MailContent.snippet(m.body)}
                 Text(if(!m.contentCached)"Текст загрузится при открытии" else snippet,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=3.dp))
-                Row(Modifier.padding(top=7.dp),verticalAlignment=Alignment.CenterVertically) {
+                Row(Modifier.padding(top=3.dp),verticalAlignment=Alignment.CenterVertically) {
                     if(m.unread){Box(Modifier.size(7.dp).background(MaterialTheme.colorScheme.primary,CircleShape));Spacer(Modifier.width(5.dp))}
                     Text((if(m.unread && !card)"Не прочитано · " else "")+account?.name.orEmpty(),Modifier.weight(1f,fill=false)
                         .background(mailboxColor.background,RoundedCornerShape(12.dp)).padding(horizontal=8.dp,vertical=3.dp),maxLines=1,overflow=TextOverflow.Ellipsis,
@@ -629,13 +628,17 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
+    val readerContext=LocalContext.current
     var previousOuterOffset by remember(m.id){mutableIntStateOf(0)}
     LaunchedEffect(htmlZoomed){if(htmlZoomed)outer.scrollTo(0) else if(previousOuterOffset>0)outer.scrollTo(previousOuterOffset)}
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
+        Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
-    },topBar={if(!htmlZoomed)TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+        }
+    },topBar={AnimatedVisibility(visible=!htmlZoomed,enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -644,13 +647,17 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     onClick={messageMenu=false;onSpam()})
             }
         }
-    })}) { padding->
+    })}}) { padding->
         Box(Modifier.padding(padding).fillMaxSize()) {
         Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
             .nestedScroll(scroll.connection).verticalScroll(outer)) {
-            if(!htmlZoomed)Column(Modifier.fillMaxWidth().padding(horizontal=22.dp)) {
+            AnimatedVisibility(visible=!htmlZoomed,enter=expandVertically()+fadeIn(),exit=shrinkVertically()+fadeOut()) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
-            Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().clickable{subjectExpanded=!subjectExpanded}.padding(top=8.dp,bottom=12.dp))
+            Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().combinedClickable(onClick={subjectExpanded=!subjectExpanded},onLongClick={
+                val clipboard=readerContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Тема письма",HeaderText.decode(m.subject)))
+                android.widget.Toast.makeText(readerContext,"Тема скопирована",android.widget.Toast.LENGTH_SHORT).show()
+            },onLongClickLabel="Скопировать тему").padding(top=8.dp,bottom=12.dp))
             Row(verticalAlignment=Alignment.CenterVertically) {
                 if(account!=null)AccountMark(account)
                 Column(Modifier.padding(start=12.dp).weight(1f)) {Text(HeaderText.displayName(m.sender),fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis);Text(m.senderEmail,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)}
@@ -676,7 +683,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 }
             }
             HorizontalDivider(Modifier.padding(vertical=10.dp))
-            }
+            }}
             val parsed=conversation
             if(m.previewOnly || parsed==null)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             else {
