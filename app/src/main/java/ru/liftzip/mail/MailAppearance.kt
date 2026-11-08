@@ -33,7 +33,7 @@ val MailStyle.accent: Color get()=if(this==MailStyle.COZY)Color(0xFF784BCE)else 
 val MailStyle.navAccent: Color get()=if(this==MailStyle.COZY)Color(0xFF356331)else accent
 
 @Composable fun DecorativeHeader(title: String,account: String,onMenu: ()->Unit) {
-    Box(Modifier.fillMaxWidth().height(140.dp)) {
+    Box(Modifier.fillMaxWidth().height(112.dp)) {
         Row(Modifier.align(Alignment.CenterStart).padding(start=14.dp,top=20.dp).fillMaxWidth(0.76f),verticalAlignment=Alignment.CenterVertically) {
             HeaderButton(onMenu){Icon(Icons.Outlined.Menu,"Выбрать ящик")}
             Column(Modifier.padding(start=12.dp)) {
