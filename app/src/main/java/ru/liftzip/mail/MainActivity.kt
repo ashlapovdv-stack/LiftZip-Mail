@@ -508,6 +508,7 @@ private val Paper=Color(0xFFF8F9F6)
                 }
             }
         },bottom={alpha->
+            val fade=alpha
             Column(Modifier.fillMaxWidth().testTag("inbox-bottom")) {
                 if(!selectionMode)Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp),contentAlignment=Alignment.CenterEnd) {
                     InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp)) {
@@ -516,7 +517,7 @@ private val Paper=Color(0xFFF8F9F6)
                             contentColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.onPrimaryContainer else Color.White,modifier=Modifier.semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top}) {Icon(Icons.Outlined.Edit,null)}
                     }
                 }
-                Column(Modifier.fillMaxWidth().graphicsLayer{alpha=alpha().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
+                Column(Modifier.fillMaxWidth().graphicsLayer{this.alpha=fade().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
                 InboxFadingControl({1f},shape=RoundedCornerShape(if(style==MailStyle.STANDARD)0.dp else 26.dp),
                     modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.background(MaterialTheme.colorScheme.surface).padding(horizontal=8.dp,vertical=6.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
