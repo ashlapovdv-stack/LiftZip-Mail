@@ -348,13 +348,14 @@ private val Paper=Color(0xFFF8F9F6)
     val chrome=remember(memory){InboxChromeController(controlsProgress.floatValue)}
 
     LaunchedEffect(query){onSearch(query)}
-    val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf<List<MailItem>?>(null)}
+    val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf<List<MailItem>?>(if(query.isBlank())memory.visibleRows else null)}
     LaunchedEffect(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
         visibleState.value=withContext(kotlinx.coroutines.Dispatchers.Default) {
             val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
             val source=if(query.isBlank())active else active.filter{s.searchQuery==query && it.id in s.searchIds}
             if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
         }
+        if(query.isBlank())memory.visibleRows=visibleState.value
     }
     val visible=visibleState.value.orEmpty()
     val visibleIds=remember(visible){visible.map{it.id}}
@@ -452,7 +453,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.10",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.12",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -515,8 +516,8 @@ private val Paper=Color(0xFFF8F9F6)
                             contentColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.onPrimaryContainer else Color.White,modifier=Modifier.semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top}) {Icon(Icons.Outlined.Edit,null)}
                     }
                 }
-                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
-                InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)0.dp else 26.dp),
+                Column(Modifier.fillMaxWidth().graphicsLayer{alpha=alpha().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
+                InboxFadingControl({1f},shape=RoundedCornerShape(if(style==MailStyle.STANDARD)0.dp else 26.dp),
                     modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.background(MaterialTheme.colorScheme.surface).padding(horizontal=8.dp,vertical=6.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
                         modifier=Modifier.then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
@@ -624,11 +625,14 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
     var messageMenu by remember(m.id){mutableStateOf(false)}
     var actionsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
+    var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
+    var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
+    var htmlZoomed by remember(m.id){mutableStateOf(false)}
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
-    },topBar={TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    },topBar={if(!htmlZoomed)TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -642,13 +646,20 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
             .nestedScroll(scroll.connection).verticalScroll(outer).padding(horizontal=22.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
-            Text(m.subject,style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.SemiBold,modifier=Modifier.padding(top=12.dp,bottom=22.dp))
+            Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().clickable{subjectExpanded=!subjectExpanded}.padding(top=8.dp,bottom=12.dp))
             Row(verticalAlignment=Alignment.CenterVertically) {
                 if(account!=null)AccountMark(account)
-                Column(Modifier.padding(start=12.dp).weight(1f)) {Text(m.sender,fontWeight=FontWeight.SemiBold);Text(m.senderEmail,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                Column(Modifier.padding(start=12.dp).weight(1f)) {Text(HeaderText.displayName(m.sender),fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis);Text(m.senderEmail,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)}
                 Text(displayDate(m.date),style=MaterialTheme.typography.labelSmall)
+                IconButton(onClick={detailsExpanded=!detailsExpanded}){Icon(if(detailsExpanded)Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,if(detailsExpanded)"Свернуть сведения" else "Показать сведения")}
             }
-            RecipientSummary(m.id,m.recipients,account?.email)
+            if(detailsExpanded)Column(Modifier.fillMaxWidth().padding(start=12.dp,top=8.dp,bottom=8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                Text("От: ${HeaderText.displayName(m.sender)} <${m.senderEmail}>",style=MaterialTheme.typography.bodySmall)
+                if(m.recipients.isNotBlank())Text("Кому: ${HeaderText.recipients(m.recipients)}",style=MaterialTheme.typography.bodySmall)
+                if(m.cc.isNotBlank())Text("Копия: ${HeaderText.recipients(m.cc)}",style=MaterialTheme.typography.bodySmall)
+                Text("Дата: ${SimpleDateFormat("dd.MM.yyyy HH:mm",Locale.getDefault()).format(Date(m.date))}",style=MaterialTheme.typography.bodySmall)
+            }
+            Spacer(Modifier.height(10.dp))
             if(m.localFolder=="sent")InfoCard("Письмо принято SMTP-сервером. Копия ожидает сохранения в серверной папке «Отправленные».")
             if(m.attachments.isNotEmpty() || m.outgoing.isNotEmpty()) {
                 Text("Вложения",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(bottom=6.dp))
@@ -664,7 +675,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             val parsed=conversation
             if(m.previewOnly || parsed==null)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             else {
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll)
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,onZoomChanged={htmlZoomed=it})
                 if(parsed.messages.isNotEmpty())ConversationHistory(m.id,parsed,ownAddresses)
             }
             Spacer(Modifier.height(100.dp))
