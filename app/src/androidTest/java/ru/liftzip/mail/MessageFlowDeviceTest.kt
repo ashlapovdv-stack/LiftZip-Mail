@@ -22,6 +22,18 @@ class MessageFlowDeviceTest {
     private val mail=MailItem("m","a",12,7,sender="Клиент",senderEmail="client@example.com",recipients="a@example.com",subject="Тема письма",body="Основной текст",date=1)
     private fun back(){rule.waitForIdle();rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()};rule.waitForIdle()}
 
+    @Test fun readerDisplaysCompactHeaderAndExpandableDetails() {
+        val m=mail.copy(sender="\\\"Компания, Иван\\\"",cc="copy@example.com",subject="Очень длинная тема письма ".repeat(10))
+        rule.setContent {MailTheme {ReaderScreen(m,account,false,emptyList(),emptySet(),onBack={},onStar={},onInline={error("unused")},onLink={},onDownload={},onOpenAttachment={},onOpenLocal={},onReply={},onForward={})}}
+        rule.onNodeWithText("\"Компания, Иван\"").assertIsDisplayed()
+        rule.onAllNodesWithText("Кому:",substring=true).assertCountEquals(0)
+        rule.onNodeWithContentDescription("Показать сведения").performClick()
+        rule.onNodeWithText("Кому: a@example.com",substring=true).assertIsDisplayed()
+        rule.onNodeWithText("Копия: copy@example.com",substring=true).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Свернуть сведения").performClick()
+        rule.onAllNodesWithText("Кому:",substring=true).assertCountEquals(0)
+    }
+
     @Test fun selectingAnotherAccountKeepsDrawerOpenAndShowsItsFolders() {
         var selected by mutableStateOf<String?>(null)
         val other=account.copy(id="b",name="Личный",email="b@example.com")
