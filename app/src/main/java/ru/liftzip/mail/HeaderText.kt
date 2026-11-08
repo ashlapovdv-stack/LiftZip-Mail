@@ -29,6 +29,12 @@ object HeaderText {
     fun recipientList(value: String): List<String> = runCatching {
         InternetAddress.parseHeader(value,false).map{addresses(arrayOf(it))}.filter{it.isNotBlank()}.ifEmpty{listOf(value)}
     }.getOrElse{listOf(value)}
+    fun preferredRecipientIndex(recipients: List<String>,ownAddress: String?): Int {
+        if(ownAddress.isNullOrBlank())return 0
+        return recipients.indexOfFirst { item->
+            runCatching{InternetAddress.parseHeader(item,false).any{it.address.equals(ownAddress,true)}}.getOrDefault(false)
+        }.takeIf{it>=0}?:0
+    }
     /** The editor accepts mailbox addresses; preserve every recipient while removing display names. */
     fun editableRecipients(value: String): String=runCatching {
         val parsed=InternetAddress.parseHeader(value,true).flatMap{address->if(address.isGroup)address.getGroup(true)?.toList().orEmpty()else listOf(address)}
