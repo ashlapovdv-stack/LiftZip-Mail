@@ -9,6 +9,16 @@ import androidx.compose.runtime.*
 class WindowTestActivity : ComponentActivity() {
     companion object {
         var content by mutableStateOf<(@Composable () -> Unit)?>(null)
+        var current: WindowTestActivity?=null
+            private set
+    }
+    override fun onResume() {
+        super.onResume()
+        current=this
+    }
+    override fun onPause() {
+        if(current===this)current=null
+        super.onPause()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

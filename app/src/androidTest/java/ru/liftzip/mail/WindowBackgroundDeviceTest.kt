@@ -45,6 +45,11 @@ class WindowBackgroundDeviceTest {
         }
         }
         rule.waitForIdle()
+        rule.waitUntil(15000) {
+            var focused=false
+            rule.runOnUiThread { focused=WindowTestActivity.current?.hasWindowFocus()==true }
+            focused
+        }
     }
     @org.junit.After fun clearScreen() {
         rule.runOnUiThread { WindowTestActivity.content=null }
@@ -62,9 +67,9 @@ class WindowBackgroundDeviceTest {
                 val result=command("cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.$overlay")
                 assertFalse(result,result.contains("Error",true))
                 rule.waitUntil(15000){currentOverlay()?.endsWith(".$overlay")==true}
-                // Framework overlay changes can recreate the plain test host. Production
-                // MainActivity configures every new window in onCreate; reproduce that here.
-                rule.activityRule.scenario.recreate()
+                // The framework owns recreation after an overlay change. A simultaneous
+                // scenario.recreate() races its destroyed instance. The debug host restores
+                // its content and edge-to-edge configuration in every onCreate instead.
                 screen()
                 for(selected in MailStyle.entries) {
                     rule.runOnIdle{style.value=selected};rule.waitForIdle()
@@ -73,9 +78,9 @@ class WindowBackgroundDeviceTest {
                     // Insets and SystemUI composition settle independently of the Compose clock.
                     var top=0;var bottom=0;var contrast=true
                     rule.runOnIdle {
-                        val insets=rule.activity.window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
+                        val insets=checkNotNull(WindowTestActivity.current).window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
                         top=insets.top;bottom=insets.bottom
-                        contrast=rule.activity.window.isNavigationBarContrastEnforced
+                        contrast=checkNotNull(WindowTestActivity.current).window.isNavigationBarContrastEnforced
                     }
                     assertTrue(top>0);assertTrue(bottom>0)
                     try {
@@ -94,7 +99,7 @@ class WindowBackgroundDeviceTest {
                     // Wait for both the measured controls and current system insets to agree.
                     rule.waitUntil(15000) {
                         rule.runOnIdle {
-                            val bars=rule.activity.window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
+                            val bars=checkNotNull(WindowTestActivity.current).window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
                             top=bars.top;bottom=bars.bottom
                         }
                         val upper=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
