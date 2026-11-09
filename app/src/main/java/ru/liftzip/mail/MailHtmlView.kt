@@ -46,6 +46,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var initialScale: Float?=null
     private var establishingScale=false
     private var lastHeight=0
+    private var heightRevision=0
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     var scrollPage: ((Float)->Float)?=null
@@ -95,10 +96,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 (parent as? ViewGroup)?.removeView(this@MailHtmlWebView)
                 release(rendererGone=true);failed();return true
             }
-            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale;establishingScale=false}else initialScale?.let{base->
+            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;heightRevision++;lastHeight=0;if(establishingScale){initialScale=newScale;establishingScale=false}else initialScale?.let{base->
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
                 post{if(live)zoomChanged(progress)}
-            }}
+            };post{publishHeight()}}
             override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){if(initialScale==null){initialScale=renderScale;establishingScale=true;val before=renderScale;fitWidth();post{if(establishingScale && renderScale==before)establishingScale=false}};publishHeight();ready()}}})}
         }
     }
@@ -182,15 +183,16 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight()}
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) {
         super.onSizeChanged(w,h,oldw,oldh)
-        if(h!=oldh && atInitialScale()){lastHeight=0;post{publishHeight()}}
+        if(h!=oldh){heightRevision++;if(atInitialScale()){lastHeight=0;post{publishHeight()}}}
     }
     private fun publishHeight() {
-        if(!live)return
+        if(!live || !atInitialScale())return
         val content=contentHeight
         val value=HtmlMail.height(content,renderScale,viewport)
         if(value==lastHeight || content<=0)return
         lastHeight=value
-        post{if(live)heightChanged(value)}
+        val revision=heightRevision
+        post{if(live && revision==heightRevision && atInitialScale())heightChanged(value)}
     }
     fun release(rendererGone: Boolean=false){
         if(!live)return
