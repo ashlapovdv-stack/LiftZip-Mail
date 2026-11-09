@@ -1,7 +1,9 @@
 package ru.liftzip.mail
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreHoriz
@@ -9,7 +11,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -17,9 +23,15 @@ import androidx.compose.ui.unit.sp
 @Composable fun ConversationHistory(id: String,conversation: QuotedConversation,ownAddresses: List<String>) {
     var expanded by rememberSaveable(id){mutableStateOf(false)}
     var original by rememberSaveable(id){mutableStateOf(false)}
-    OutlinedButton(onClick={expanded=!expanded},modifier=Modifier.padding(bottom=8.dp)) {
-        Icon(Icons.Outlined.MoreHoriz,null);Spacer(Modifier.width(8.dp))
-        Text(if(expanded)"Скрыть историю · ${conversation.messages.size}" else "Предыдущие сообщения · ${conversation.messages.size}")
+    if(conversation.messages.isNotEmpty())Box(Modifier.sizeIn(minWidth=64.dp,minHeight=48.dp).clickable{expanded=!expanded}.semantics{
+        contentDescription="Предыдущие сообщения: ${conversation.messages.size}"
+        stateDescription=if(expanded)"Развернуто" else "Свернуто"
+    },contentAlignment=Alignment.CenterStart) {
+        Surface(shape=RoundedCornerShape(19.dp),color=MaterialTheme.colorScheme.surfaceContainerHigh) {
+            Row(Modifier.height(38.dp).padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
+                Icon(Icons.Outlined.MoreHoriz,null,Modifier.size(22.dp));Spacer(Modifier.width(5.dp));Text(conversation.messages.size.toString())
+            }
+        }
     }
     if(expanded) {
         SelectionContainer {
