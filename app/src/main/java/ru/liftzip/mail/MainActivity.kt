@@ -24,6 +24,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -364,11 +365,16 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
     LaunchedEffect(query){onSearch(query)}
     val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf<List<MailItem>?>(if(query.isBlank())memory.visibleRows else null)}
     LaunchedEffect(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
-        visibleState.value=withContext(kotlinx.coroutines.Dispatchers.Default) {
+        val updated=withContext(kotlinx.coroutines.Dispatchers.Default) {
             val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
             val source=if(query.isBlank())active else active.filter{s.searchQuery==query && it.id in s.searchIds}
             if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
         }
+        val atTop=!memory.list.isScrollInProgress && memory.list.firstVisibleItemIndex==0 && memory.list.firstVisibleItemScrollOffset==0
+        if(atTop && memory.restore==null && visibleState.value?.firstOrNull()?.id!=updated.firstOrNull()?.id && updated.isNotEmpty()) {
+            memory.list.requestScrollToItem(0)
+        }
+        visibleState.value=updated
         if(query.isBlank())memory.visibleRows=visibleState.value
     }
     val visible=visibleState.value.orEmpty()
@@ -420,7 +426,6 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
         if(visibleIds.isNotEmpty()) {
             val restore=memory.restore
             if(restore!=null){memory.list.scrollToItem(restore.indexIn(visibleIds),if(restore.atTop)0 else restore.offset);memory.pinned=restore.atTop;memory.restore=null}
-            else if(memory.pinned && memory.firstId!=visibleIds.firstOrNull())memory.list.requestScrollToItem(0)
             memory.firstId=visibleIds.firstOrNull()
         }
     }
@@ -539,6 +544,21 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                             selectedIconColor=navigationAccent,selectedTextColor=navigationAccent,indicatorColor=navigationAccent.copy(alpha=0.08f)),selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null,Modifier.size(22.dp))},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
                     }
                 }
+                }
+            }
+        },overlay={
+            val showTop by remember(memory){derivedStateOf {
+                val state=memory.list;val info=state.layoutInfo
+                val row=info.visibleItemsInfo.firstOrNull()?.size?:1
+                state.firstVisibleItemIndex.toLong()*row+state.firstVisibleItemScrollOffset>info.viewportSize.height
+            }}
+            Box(Modifier.fillMaxSize().padding(end=16.dp,bottom=safeBottom+148.dp),contentAlignment=Alignment.BottomEnd) {
+                AnimatedVisibility(visible=showTop && !selectionMode,enter=fadeIn(animationSpec=tween(180)),exit=fadeOut(animationSpec=tween(180))) {
+                    SmallFloatingActionButton(onClick={scope.launch {
+                        chrome.show();controlsProgress.floatValue=1f
+                        if(memory.list.firstVisibleItemIndex>8)memory.list.scrollToItem(8)
+                        memory.list.animateScrollToItem(0)
+                    }},shape=CircleShape,modifier=Modifier.size(48.dp).semantics{contentDescription="Вернуться к началу списка"}) {Icon(Icons.Outlined.ArrowUpward,null)}
                 }
             }
         },list={bottomPadding->
