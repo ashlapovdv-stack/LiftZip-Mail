@@ -155,6 +155,11 @@ class ReaderDeviceTest {
         rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()}
         rule.waitUntil(10000){drawer.currentValue==DrawerValue.Closed}
         rule.runOnIdle{assertSame(view,webView())}
+        rule.onRoot().performTouchInput{swipe(Offset(x,height*0.7f),Offset(x+150f,height*0.7f),400)}
+        rule.waitUntil(10000){drawer.currentValue==DrawerValue.Open}
+        rule.onRoot().performTouchInput{swipe(Offset(width*0.65f,height*0.5f),Offset(width*0.1f,height*0.5f),400)}
+        rule.waitUntil(10000){drawer.currentValue==DrawerValue.Closed}
+        rule.runOnIdle{assertSame(view,webView())}
     }
     @Test fun pinchOnHistoryDoesNotOpenIt() {
         val body="Текущий текст\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
