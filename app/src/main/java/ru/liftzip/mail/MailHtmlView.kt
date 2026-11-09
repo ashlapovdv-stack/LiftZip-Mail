@@ -237,7 +237,11 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             AndroidView(factory={c->FrameLayout(c).apply {
                 try {
                     val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{measured->
-                        if(!latestExpanded && web?.atInitialScale()!=false)height=measured
+                        // The WebView may report its expanded viewport as content height
+                        // while Compose is still shrinking it after a scale reset.
+                        val actual=web?.height?:0
+                        val restored=height<=8 || actual<=height+with(density){2.dp.roundToPx()}
+                        if(!latestExpanded && web?.atInitialScale()!=false && restored)height=measured
                     },failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)})
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}

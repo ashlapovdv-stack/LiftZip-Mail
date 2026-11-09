@@ -22,6 +22,49 @@ class MessageFlowDeviceTest {
     private val mail=MailItem("m","a",12,7,sender="Клиент",senderEmail="client@example.com",recipients="a@example.com",subject="Тема письма",body="Основной текст",date=1)
     private fun back(){rule.waitForIdle();rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()};rule.waitForIdle()}
 
+    @Test fun arrivalsRespectPositionAndReturnToTop() {
+        val memory=InboxMemory()
+        var messages by mutableStateOf((0..59).map{i->mail.copy(id="arrive-$i",subject="Письмо $i",date=2_000_000L-i)})
+        rule.setContent {MailTheme {InboxScreen(UiState(loaded=true,accounts=listOf(account),messages=messages),"a",MailFolder.INBOX,null,memory,
+            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}}
+        rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:arrive-0").fetchSemanticsNodes().isNotEmpty()}
+        rule.runOnIdle{messages=listOf(mail.copy(id="new-1",subject="Новое письмо",date=3_000_000L))+messages}
+        rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:new-1").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithTag("mail-row:new-1").assertIsDisplayed()
+        rule.onNodeWithTag("inbox-list").performScrollToIndex(20)
+        rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуться к началу списка").fetchSemanticsNodes().isNotEmpty()}
+        val oldKey=memory.list.layoutInfo.visibleItemsInfo.first().key
+        val oldOffset=memory.list.firstVisibleItemScrollOffset
+        rule.runOnIdle{messages=listOf(mail.copy(id="new-2",date=4_000_000L))+messages}
+        rule.waitUntil(15000){memory.visibleRows?.firstOrNull()?.id=="new-2"}
+        rule.runOnIdle{assertEquals(oldKey,memory.list.layoutInfo.visibleItemsInfo.first().key);assertEquals(oldOffset,memory.list.firstVisibleItemScrollOffset)}
+        rule.onNodeWithContentDescription("Вернуться к началу списка").performClick()
+        rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:new-2").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithTag("mail-row:new-2").assertIsDisplayed()
+    }
+
+    @Test fun compareScrollFrameTimesWithAutomaticPanelsEnabledAndDisabled() {
+        val enabled=mutableStateOf(true)
+        val messages=(0..99).map{i->mail.copy(id="perf-$i",subject="Письмо $i",date=2_000_000L-i)}
+        rule.setContent {val memory=remember{InboxMemory()};MailTheme {InboxScreen(UiState(loaded=true,accounts=listOf(account),messages=messages,autoHidePanels=enabled.value),"a",MailFolder.INBOX,null,memory,
+            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}}
+        rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:perf-0").fetchSemanticsNodes().isNotEmpty()}
+        for(auto in listOf(true,false)) {
+            rule.runOnIdle{enabled.value=auto}
+            rule.onNodeWithTag("inbox-list").performScrollToIndex(0)
+            rule.waitForIdle()
+            val samples=java.util.Collections.synchronizedList(mutableListOf<Long>())
+            val listener=android.view.Window.OnFrameMetricsAvailableListener { _,metrics,_->samples.add(metrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION)) }
+            rule.runOnUiThread{rule.activity.window.addOnFrameMetricsAvailableListener(listener,android.os.Handler(android.os.Looper.getMainLooper()))}
+            repeat(3){rule.onNodeWithTag("inbox-list").performTouchInput{swipe(Offset(center.x,height*0.75f),Offset(center.x,height*0.25f),500)}}
+            rule.waitForIdle()
+            rule.runOnUiThread{rule.activity.window.removeOnFrameMetricsAvailableListener(listener)}
+            val sorted=samples.toList().sorted()
+            assertTrue("Expected frame measurements",sorted.isNotEmpty())
+            android.util.Log.i("MailScrollPerf","auto=$auto frames=${sorted.size} p90_ms=${sorted[(sorted.size*9/10).coerceAtMost(sorted.lastIndex)]/1_000_000.0} over_16ms=${sorted.count{it>16_666_667}}")
+        }
+    }
+
     @Test fun readerDisplaysCompactHeaderAndExpandableDetails() {
         val m=mail.copy(sender="\\\"Компания, Иван\\\"",cc="copy@example.com",subject="Очень длинная тема письма ".repeat(10))
         rule.setContent {MailTheme {ReaderScreen(m,account,false,emptyList(),emptySet(),onBack={},onStar={},onInline={error("unused")},onLink={},onDownload={},onOpenAttachment={},onOpenLocal={},onReply={},onForward={})}}

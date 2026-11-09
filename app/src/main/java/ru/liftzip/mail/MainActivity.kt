@@ -24,6 +24,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -276,7 +277,9 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                     val full=s.opened?.takeIf{it.id==selected}?:notificationFallback?.takeIf{it.id==selected}
                     val message=full?.let{if(summary==null)it else it.copy(unread=summary.unread,starred=summary.starred)}?:summary
                     if(message==null)MissingMessageScreen(onBack={goInbox()})
-                    else ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,ownAddresses=s.accounts.map{it.email},attachmentBusy=s.attachmentBusy,onBack={goInbox()},onStar={vm.star(message)},
+                    else ReaderDrawer(s,currentAccount,serverPath,onAccount={currentAccount=it;serverPath=null;goInbox()},onEnable=vm::setAccountEnabled,
+                        onFolder={folder=it;serverPath=null;goInbox()},onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path;goInbox()},
+                        onQueue={route="actions"},onAdd={route="add"},onSettings={route="settings"}) { ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,ownAddresses=s.accounts.map{it.email},attachmentBusy=s.attachmentBusy,onBack={goInbox()},onStar={vm.star(message)},
                         onInline={file->vm.inlineImage(message,file)},onThumbnail={file->vm.thumbnailImage(message,file)},onLink={url->HtmlMail.link(url)?.let{safe->runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(safe)).addCategory(Intent.CATEGORY_BROWSABLE))}.onFailure{vm.notice("Не удалось открыть ссылку",error=true)}}},
                         onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
@@ -287,7 +290,7 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                         onForward={
                             val senderId=SenderRules.forNewMessage(s.accounts,s.defaultAccountId,message.accountId)?:message.accountId
                             vm.forward(message,senderId){ready->if(route=="reader" && selected==message.id)compose(ready)else vm.notice("Пересылка подготовлена в черновиках")}
-                        })
+                        }) }
                 }
                 s.accounts.isEmpty() -> Welcome(onAdd={route="add"})
                 else -> {
@@ -327,6 +330,83 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
     }
 }
 
+@Composable internal fun ReaderDrawer(s: UiState,accountId: String?,serverPath: String?,onAccount: (String?)->Unit,
+    onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,onServerFolder: (ServerFolder)->Unit,
+    onQueue: ()->Unit,onAdd: ()->Unit,onSettings: ()->Unit,content: @Composable ()->Unit) {
+    val drawer=rememberDrawerState(DrawerValue.Closed)
+    val scope=rememberCoroutineScope()
+    val density=LocalDensity.current
+    val edgeStart=with(density){16.dp.toPx()};val edgeEnd=with(density){32.dp.toPx()}
+    ModalNavigationDrawer(drawerState=drawer,gesturesEnabled=false,drawerContent={
+        MailDrawerContent(s,accountId,serverPath,drawer,onAccount,onEnable,onFolder,onServerFolder,onQueue,onAdd,onSettings)
+    }) {
+        Box(Modifier.fillMaxSize().pointerInput(drawer,edgeStart,edgeEnd) {
+            awaitEachGesture {
+                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                val eligible=drawer.currentValue==DrawerValue.Closed && down.position.x in edgeStart..edgeEnd
+                var decided=!eligible
+                do {
+                    val event=awaitPointerEvent(PointerEventPass.Initial)
+                    if(event.changes.count{it.pressed}>1)decided=true
+                    val pointer=event.changes.firstOrNull{it.id==down.id}
+                    if(!decided && pointer!=null) {
+                        val delta=pointer.position-down.position
+                        if(kotlin.math.abs(delta.y)>viewConfiguration.touchSlop)decided=true
+                        else if(delta.x>viewConfiguration.touchSlop && delta.x>kotlin.math.abs(delta.y)*1.5f) {
+                            decided=true;pointer.consume();scope.launch{drawer.open()}
+                        } else if(delta.x < -viewConfiguration.touchSlop)decided=true
+                    }
+                }while(event.changes.any{it.pressed})
+            }
+        }) {
+            content()
+            BackHandler(enabled=drawer.currentValue!=DrawerValue.Closed || drawer.targetValue!=DrawerValue.Closed){scope.launch{drawer.close()}}
+        }
+    }
+}
+
+@Composable private fun MailDrawerContent(s: UiState,accountId: String?,serverPath: String?,drawer: DrawerState,
+    onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,onServerFolder: (ServerFolder)->Unit,
+    onQueue: ()->Unit,onAdd: ()->Unit,onSettings: ()->Unit) {
+    val scope=rememberCoroutineScope()
+    val current=s.accounts.find{it.id==accountId}
+        ModalDrawerSheet {
+            LazyColumn {
+            item { Column(Modifier.padding(24.dp)){Text("Почта",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Ваши почтовые ящики",style=MaterialTheme.typography.bodySmall)} }
+            item { NavigationDrawerItem(label={Text("Все ящики")},selected=accountId==null,icon={Icon(Icons.Outlined.AllInbox,null)},modifier=Modifier.padding(horizontal=12.dp),onClick={scope.launch{drawer.close();onAccount(null)}}) }
+            items(s.accounts,key={it.id}){a->Row(Modifier.fillMaxWidth().padding(end=12.dp),verticalAlignment=Alignment.CenterVertically) {
+                NavigationDrawerItem(label={Column{Text(a.name,maxLines=1,overflow=TextOverflow.Ellipsis);Text(a.email,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelSmall);if(!a.enabled)Text("Синхронизация выключена",style=MaterialTheme.typography.labelSmall)}},selected=a.id==accountId,
+                    icon={AccountMark(a)},modifier=Modifier.testTag("drawer-account:${a.id}").weight(1f).padding(start=12.dp,end=4.dp),onClick={if(a.id==accountId)scope.launch{drawer.close()}else onAccount(a.id)})
+                val unread=s.history[a.id]?.unread?:UnreadCounts.cached(s.messages,a.id)
+                val color=accountColor(a)
+                Surface(shape=RoundedCornerShape(10.dp),color=color.background,
+                    modifier=Modifier.padding(end=8.dp).semantics{contentDescription="${a.name}: непрочитанных $unread"}) {
+                    Text(unread.toString(),Modifier.padding(horizontal=8.dp,vertical=4.dp),fontWeight=if(unread>0)FontWeight.Bold else FontWeight.Normal,
+                        style=MaterialTheme.typography.labelMedium,color=color.foreground)
+                }
+                Switch(checked=a.enabled,onCheckedChange={onEnable(a.id,it)},modifier=Modifier.semantics{contentDescription="Синхронизация ящика ${a.name}"})
+            }}
+            item { HorizontalDivider(Modifier.padding(horizontal=24.dp,vertical=12.dp)) }
+            if(current!=null) {
+                item { Text("Папки на сервере",Modifier.padding(horizontal=24.dp,vertical=8.dp),style=MaterialTheme.typography.labelLarge) }
+                items(s.folders.filter{it.accountId==current.id},key={"folder:"+it.path}){f->
+                    NavigationDrawerItem(label={Text(f.title,maxLines=1,overflow=TextOverflow.Ellipsis)},selected=serverPath==f.path,
+                        icon={Icon(serverFolderIcon(f.role),null)},badge={f.unread?.takeIf{it>0}?.let{Text(it.toString())}},modifier=Modifier.padding(horizontal=12.dp),
+                        onClick={scope.launch{drawer.close();if(f.role==FolderRole.INBOX){onAccount(f.accountId);onFolder(MailFolder.INBOX)}else onServerFolder(f)}})
+                }
+            }
+            item { NavigationDrawerItem(label={Text("Исходящие и синхронизация")},selected=false,icon={Icon(Icons.Outlined.Outbox,null)},
+                badge={s.actions.size.takeIf{it>0}?.let{Text(it.toString())}},modifier=Modifier.padding(horizontal=12.dp),onClick={scope.launch{drawer.close();onQueue()}}) }
+            item {
+            TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
+
+            TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
+            Text("Почта · 0.5.17",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            }
+        }
+}
+
 @Composable internal fun InboxScreen(s: UiState,accountId: String?,folder: MailFolder,serverPath: String?,memory: InboxMemory,onAccount: (String?)->Unit,onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,
     onServerFolder: (ServerFolder)->Unit,onQueue: ()->Unit,
     onAdd: ()->Unit,onExit: ()->Unit,onNoticeAnchor: (Float?)->Unit,onSettings: ()->Unit,onDelivery: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
@@ -363,12 +443,17 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
 
     LaunchedEffect(query){onSearch(query)}
     val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf<List<MailItem>?>(if(query.isBlank())memory.visibleRows else null)}
+    var pinFirstId by remember(accountId,folder,serverPath,query){mutableStateOf<String?>(null)}
     LaunchedEffect(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
-        visibleState.value=withContext(kotlinx.coroutines.Dispatchers.Default) {
+        val updated=withContext(kotlinx.coroutines.Dispatchers.Default) {
             val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
             val source=if(query.isBlank())active else active.filter{s.searchQuery==query && it.id in s.searchIds}
             if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
         }
+        val atTop=!memory.list.isScrollInProgress && memory.list.firstVisibleItemIndex==0 && memory.list.firstVisibleItemScrollOffset==0
+        val pinNewFirst=atTop && memory.restore==null && visibleState.value?.firstOrNull()?.id!=updated.firstOrNull()?.id && updated.isNotEmpty()
+        visibleState.value=updated
+        pinFirstId=if(pinNewFirst)updated.firstOrNull()?.id else null
         if(query.isBlank())memory.visibleRows=visibleState.value
     }
     val visible=visibleState.value.orEmpty()
@@ -420,7 +505,8 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
         if(visibleIds.isNotEmpty()) {
             val restore=memory.restore
             if(restore!=null){memory.list.scrollToItem(restore.indexIn(visibleIds),if(restore.atTop)0 else restore.offset);memory.pinned=restore.atTop;memory.restore=null}
-            else if(memory.pinned && memory.firstId!=visibleIds.firstOrNull())memory.list.requestScrollToItem(0)
+            else if(pinFirstId==visibleIds.firstOrNull() && !memory.list.isScrollInProgress)memory.list.requestScrollToItem(0)
+            pinFirstId=null
             memory.firstId=visibleIds.firstOrNull()
         }
     }
@@ -436,41 +522,7 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
     SystemBarIcons(decorativeStatus=artworkStatus)
     InboxCanvas(style) {
     ModalNavigationDrawer(drawerState=drawer,drawerContent={
-        ModalDrawerSheet {
-            LazyColumn {
-            item { Column(Modifier.padding(24.dp)){Text("Почта",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Ваши почтовые ящики",style=MaterialTheme.typography.bodySmall)} }
-            item { NavigationDrawerItem(label={Text("Все ящики")},selected=accountId==null,icon={Icon(Icons.Outlined.AllInbox,null)},modifier=Modifier.padding(horizontal=12.dp),onClick={scope.launch{drawer.close();onAccount(null)}}) }
-            items(s.accounts,key={it.id}){a->Row(Modifier.fillMaxWidth().padding(end=12.dp),verticalAlignment=Alignment.CenterVertically) {
-                NavigationDrawerItem(label={Column{Text(a.name,maxLines=1,overflow=TextOverflow.Ellipsis);Text(a.email,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelSmall);if(!a.enabled)Text("Синхронизация выключена",style=MaterialTheme.typography.labelSmall)}},selected=a.id==accountId,
-                    icon={AccountMark(a)},modifier=Modifier.testTag("drawer-account:${a.id}").weight(1f).padding(start=12.dp,end=4.dp),onClick={if(a.id==accountId)scope.launch{drawer.close()}else onAccount(a.id)})
-                val unread=s.history[a.id]?.unread?:UnreadCounts.cached(s.messages,a.id)
-                val color=accountColor(a)
-                Surface(shape=RoundedCornerShape(10.dp),color=color.background,
-                    modifier=Modifier.padding(end=8.dp).semantics{contentDescription="${a.name}: непрочитанных $unread"}) {
-                    Text(unread.toString(),Modifier.padding(horizontal=8.dp,vertical=4.dp),fontWeight=if(unread>0)FontWeight.Bold else FontWeight.Normal,
-                        style=MaterialTheme.typography.labelMedium,color=color.foreground)
-                }
-                Switch(checked=a.enabled,onCheckedChange={onEnable(a.id,it)},modifier=Modifier.semantics{contentDescription="Синхронизация ящика ${a.name}"})
-            }}
-            item { HorizontalDivider(Modifier.padding(horizontal=24.dp,vertical=12.dp)) }
-            if(current!=null) {
-                item { Text("Папки на сервере",Modifier.padding(horizontal=24.dp,vertical=8.dp),style=MaterialTheme.typography.labelLarge) }
-                items(s.folders.filter{it.accountId==current.id},key={"folder:"+it.path}){f->
-                    NavigationDrawerItem(label={Text(f.title,maxLines=1,overflow=TextOverflow.Ellipsis)},selected=serverPath==f.path,
-                        icon={Icon(serverFolderIcon(f.role),null)},badge={f.unread?.takeIf{it>0}?.let{Text(it.toString())}},modifier=Modifier.padding(horizontal=12.dp),
-                        onClick={scope.launch{drawer.close();if(f.role==FolderRole.INBOX){onAccount(f.accountId);onFolder(MailFolder.INBOX)}else onServerFolder(f)}})
-                }
-            }
-            item { NavigationDrawerItem(label={Text("Исходящие и синхронизация")},selected=false,icon={Icon(Icons.Outlined.Outbox,null)},
-                badge={s.actions.size.takeIf{it>0}?.let{Text(it.toString())}},modifier=Modifier.padding(horizontal=12.dp),onClick={scope.launch{drawer.close();onQueue()}}) }
-            item {
-            TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
-
-            TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.16",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            }
-        }
+        MailDrawerContent(s,accountId,serverPath,drawer,onAccount,onEnable,onFolder,onServerFolder,onQueue,onAdd,onSettings)
     }) {
         BackHandler {
             when {
@@ -539,6 +591,21 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                             selectedIconColor=navigationAccent,selectedTextColor=navigationAccent,indicatorColor=navigationAccent.copy(alpha=0.08f)),selected=serverPath==null && f==folder,onClick={onFolder(f)},modifier=Modifier.semantics{contentDescription=f.label},icon={Icon(folderIcon(f),null,Modifier.size(22.dp))},label={Text(f.navigationLabel,fontSize=10.sp,maxLines=1,softWrap=false,overflow=TextOverflow.Ellipsis)},alwaysShowLabel=true)}
                     }
                 }
+                }
+            }
+        },overlay={
+            val showTop by remember(memory){derivedStateOf {
+                val state=memory.list;val info=state.layoutInfo
+                val row=info.visibleItemsInfo.firstOrNull()?.size?:1
+                state.firstVisibleItemIndex.toLong()*row+state.firstVisibleItemScrollOffset>info.viewportSize.height
+            }}
+            Box(Modifier.fillMaxSize().padding(end=16.dp,bottom=safeBottom+148.dp),contentAlignment=Alignment.BottomEnd) {
+                AnimatedVisibility(visible=showTop && !selectionMode,enter=fadeIn(animationSpec=tween(180)),exit=fadeOut(animationSpec=tween(180))) {
+                    SmallFloatingActionButton(onClick={scope.launch {
+                        chrome.show();controlsProgress.floatValue=1f
+                        if(memory.list.firstVisibleItemIndex>8)memory.list.scrollToItem(8)
+                        memory.list.animateScrollToItem(0)
+                    }},shape=CircleShape,modifier=Modifier.size(48.dp).semantics{contentDescription="Вернуться к началу списка"}) {Icon(Icons.Outlined.ArrowUpward,null)}
                 }
             }
         },list={bottomPadding->
@@ -646,6 +713,15 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
     val readerContext=LocalContext.current
     var previousOuterOffset by remember(m.id){mutableIntStateOf(0)}
+    var restoreOuterOffset by remember(m.id){mutableStateOf(false)}
+    LaunchedEffect(htmlZoomed,restoreOuterOffset) {
+        if(!htmlZoomed && restoreOuterOffset) {
+            // Wait for the normal reader layout to be applied before restoring its scroll.
+            withFrameNanos { }
+            outer.scrollTo(previousOuterOffset)
+            restoreOuterOffset=false
+        }
+    }
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
@@ -725,6 +801,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     zoomProgress=progress
                     val zoomed=progress>0.001f
                     if(zoomed && !htmlZoomed)previousOuterOffset=outer.value
+                    if(!zoomed && htmlZoomed)restoreOuterOffset=true
                     scroll.zoomed=zoomed;htmlZoomed=zoomed
                 })
                 if(!htmlZoomed && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}

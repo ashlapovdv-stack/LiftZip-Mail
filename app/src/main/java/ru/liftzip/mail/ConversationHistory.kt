@@ -13,6 +13,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
@@ -23,7 +24,7 @@ import androidx.compose.ui.unit.sp
 @Composable fun ConversationHistory(id: String,conversation: QuotedConversation,ownAddresses: List<String>) {
     var expanded by rememberSaveable(id){mutableStateOf(false)}
     var original by rememberSaveable(id){mutableStateOf(false)}
-    if(conversation.messages.isNotEmpty())Box(Modifier.sizeIn(minWidth=64.dp,minHeight=48.dp).clickable{expanded=!expanded}.semantics{
+    if(conversation.messages.isNotEmpty())Box(Modifier.sizeIn(minWidth=64.dp,minHeight=48.dp).clip(RoundedCornerShape(24.dp)).clickable{expanded=!expanded}.semantics{
         contentDescription="Предыдущие сообщения: ${conversation.messages.size}"
         stateDescription=if(expanded)"Развернуто" else "Свернуто"
     },contentAlignment=Alignment.CenterStart) {

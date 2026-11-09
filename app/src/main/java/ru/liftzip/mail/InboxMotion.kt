@@ -72,7 +72,7 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
 
 /** Stable insets are read by LazyColumn in measurement, never by the screen's composition. */
 @Composable fun InboxViewport(fraction: ()->Float,onHeaderMeasured: (Float)->Unit,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable (contentAlpha: ()->Float)->Unit,
-    list: @Composable (bottomPadding: PaddingValues)->Unit,onPanelsMeasured: (InboxPanelMetrics)->Unit={},endInset: Dp=0.dp,nearEnd: ()->Boolean={true}) {
+    list: @Composable (bottomPadding: PaddingValues)->Unit,onPanelsMeasured: (InboxPanelMetrics)->Unit={},endInset: Dp=0.dp,nearEnd: ()->Boolean={true},overlay: @Composable ()->Unit={}) {
     val density=LocalDensity.current
     val headerHeight=remember{mutableIntStateOf(0)}
     val bottomHeight=remember{mutableIntStateOf(0)}
@@ -91,6 +91,7 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
         Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){header()}
         Box(Modifier.background(MaterialTheme.colorScheme.surface).clipToBounds()){list(insets)}
         Box{bottom(fraction)}
+        Box{overlay()}
     }){children,constraints->
         val width=constraints.maxWidth;val height=constraints.maxHeight
         val panelConstraints=constraints.copy(minWidth=width,minHeight=0)
@@ -100,12 +101,14 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
         onHeaderMeasured(top.height.toFloat())
         onPanelsMeasured(InboxPanelMetrics(height,top.height,controls.height,with(density){12.dp.roundToPx()}))
         val mail=children[1].measure(Constraints.fixed(width,height))
+        val floating=children[3].measure(Constraints.fixed(width,height))
         layout(width,height) {
             val progress=fraction().coerceIn(0f,1f)
             val geometry=InboxInteractionRules.viewport(height,top.height,controls.height,progress)
             if(progress>0.001f)top.placeRelative(0,0,zIndex=0f)
             mail.placeRelative(0,geometry.listY,zIndex=1f)
             if(progress>0.001f)controls.placeRelative(0,geometry.bottomY,zIndex=2f)
+            floating.placeRelative(0,0,zIndex=3f)
         }
     }
 }
