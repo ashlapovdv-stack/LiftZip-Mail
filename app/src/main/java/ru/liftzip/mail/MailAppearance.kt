@@ -38,10 +38,7 @@ val MailStyle.navAccent: Color get()=if(this==MailStyle.COZY)Color(0xFF356331)el
             HeaderButton(onMenu){Icon(Icons.Outlined.Menu,"Выбрать ящик")}
             Column(Modifier.padding(start=12.dp)) {
                 Text(title,maxLines=1,overflow=TextOverflow.Ellipsis,color=Color(0xFF171D28),fontSize=24.sp,fontWeight=FontWeight.Bold)
-                TextButton(onClick=onMenu,contentPadding=PaddingValues(0.dp),modifier=Modifier.heightIn(min=32.dp)) {
-                    Text(account,maxLines=1,overflow=TextOverflow.Ellipsis,color=Color(0xFF49505C),fontSize=13.sp)
-                    Icon(Icons.Outlined.ExpandMore,null,Modifier.size(18.dp),tint=Color(0xFF49505C))
-                }
+                Text(account,maxLines=1,overflow=TextOverflow.Ellipsis,color=Color(0xFF49505C),fontSize=13.sp,modifier=Modifier.padding(vertical=8.dp))
             }
         }
     }
