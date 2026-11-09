@@ -50,6 +50,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var lastHeight=0
     private var documentRevision=0L
     private var documentUrl=""
+    private var visualPreparationRevision=-1L
     private var measuredInitialLayout=false
     private var layoutRevision=0L
     private var layoutPending=false
@@ -107,9 +108,12 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
                 post{if(live)zoomChanged(progress)}
             }}
-            override fun onPageFinished(view: WebView,url: String){
-                if(!live || url!=documentUrl)return
+            override fun onPageCommitVisible(view: WebView,url: String){prepareVisibleDocument(url)}
+            override fun onPageFinished(view: WebView,url: String){prepareVisibleDocument(url)}
+            private fun prepareVisibleDocument(url: String){
+                if(!live || url!=documentUrl || visualPreparationRevision==documentRevision)return
                 val revision=documentRevision
+                visualPreparationRevision=revision
                 postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
                     if(!live || requestId!=documentRevision)return
                     // Wide HTML can exceed the sender's declared viewport. Measure the

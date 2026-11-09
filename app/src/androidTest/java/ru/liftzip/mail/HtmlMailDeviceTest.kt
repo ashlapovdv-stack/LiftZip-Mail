@@ -86,6 +86,18 @@ class HtmlMailDeviceTest {
         assertEquals(1,matches(view,"Новый документ"));assertEquals(0,matches(view,"Старый документ"))
         assertEquals("Only the current document may report readiness",1,ready.get())
     }
+    @Test fun delayedInlineImageDoesNotBlockInitialDocumentReadiness() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicBoolean();val entered=AtomicBoolean()
+        val release=java.util.concurrent.CountDownLatch(1)
+        val attachment=Attachment("1","chart.png","image/png",100,"slow")
+        val doc=HtmlMail.document("<p>Текст доступен сразу</p><img src='cid:slow' width='40' height='40'>","",listOf(attachment))
+        try {
+            rule.setContent {AndroidView(factory={MailHtmlWebView(c,{entered.set(true);release.await();image()},{},{},{ready.set(true)}).also{it.show(doc)}},
+                modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+            rule.waitUntil(15000){entered.get()}
+            rule.waitUntil(15000){ready.get()}
+        }finally{release.countDown()}
+    }
     @Test fun newsletterCssIsHiddenInlineImageIsDrawnAndALinkOpensOnlyThroughTheApp() {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val loaded=AtomicBoolean();val clicks=AtomicReference<String?>(null);val images=AtomicInteger();val png=image()
