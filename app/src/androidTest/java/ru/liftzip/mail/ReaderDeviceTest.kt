@@ -79,9 +79,10 @@ class ReaderDeviceTest {
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         history.assertIsDisplayed()
         val originalTop=history.fetchSemanticsNode().boundsInRoot.top
-        repeat(2) {
+        repeat(4) {
             rule.runOnIdle{view.zoomBy(2f)}
             rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+            rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-150f),300)}
             rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
             rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
             rule.waitForIdle()
