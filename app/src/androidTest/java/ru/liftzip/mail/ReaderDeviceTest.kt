@@ -30,6 +30,17 @@ class ReaderDeviceTest {
         rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.contentHeight>0 && it.height>20}?:false};ready}
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
     }
+    @Test fun realReaderFitsAWideNestedTableAtInitialScale() {
+        val html="""<table style='width:2200px'><tr><td>Первый столбец</td><td><table style='width:900px'><tr><td>Последний столбец</td></tr></table></td></tr></table>"""
+        rule.setContent{MailTheme{reader(message.copy(body="Первый столбец Последний столбец",htmlBody=html))}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.waitForIdle()
+        rule.runOnIdle {
+            android.util.Log.i("MailReaderGeometry","width=${view.width} height=${view.height} contentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY}")
+            assertFalse("The complete table must fit initially",view.canScrollHorizontally(1))
+        }
+    }
     @Test fun zoomingHtmlHidesToolbarAndRetainsTheSameWebView() {
         val short=message.copy(htmlBody="<p>Текст письма для увеличения</p><img src='https://example.com/example.png'><table width='720'><tr><td>Содержимое</td></tr></table>",body="Текст письма для увеличения",attachments=listOf(Attachment("1","file.pdf","application/pdf",100)))
         rule.setContent{MailTheme{reader(short)}}
