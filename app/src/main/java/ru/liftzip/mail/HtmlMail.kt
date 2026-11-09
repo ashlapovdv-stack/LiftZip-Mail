@@ -184,7 +184,13 @@ object HtmlMail {
         val csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src $ORIGIN; font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'"
         val layout=if(html.isNotBlank())layoutWidth(doc)else 0
         val viewport=if(layout>0)layout.toString()else "device-width"
-        val inset=if(currentHtml==null || !Regex("(?i)(padding|margin)\\s*[:=]").containsMatchIn(currentHtml))"16px" else "0"
+        // Only the outer wrapper's own horizontal spacing replaces our inset; inner
+        // element styles such as p { margin: 0 } do not provide page margins.
+        val outer=doc.body().children().singleOrNull()
+        val outerStyle=outer?.attr("style").orEmpty()
+        val hasOuterInset=Regex("(?i)(?:^|;)\\s*(?:padding|margin)(?:-left|-right|-inline(?:-start|-end)?)?\\s*:\\s*(?!0(?:px|em|rem|%)?\\s*(?:;|$))[^;]+")
+            .containsMatchIn(outerStyle)
+        val inset=if(currentHtml==null || layout==0 && !hasOuterInset)"16px" else "0"
         val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
             html,body{margin:0;padding:0;max-width:100%;overflow-wrap:break-word;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
             body{box-sizing:border-box;padding-left:$inset;padding-right:$inset}
