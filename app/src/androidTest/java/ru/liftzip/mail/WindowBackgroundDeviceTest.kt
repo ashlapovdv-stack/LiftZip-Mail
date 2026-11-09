@@ -22,7 +22,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion=30)
 class WindowBackgroundDeviceTest {
-    @get:Rule val rule=createAndroidComposeRule<ComponentActivity>()
+    @get:Rule val rule=createAndroidComposeRule<WindowTestActivity>()
     private val style=mutableStateOf(MailStyle.COZY)
     private var canvas=0
     private var refreshed=0
@@ -31,10 +31,8 @@ class WindowBackgroundDeviceTest {
     private val account=MailAccount("a","lift-zip","test@example.com",provider=Provider.REG,imapHost="mail.hosting.reg.ru",smtpHost="mail.hosting.reg.ru")
     private val messages=(1..30).map{i->MailItem("edge-$i","a",sender="Отправитель $i",senderEmail="sender@example.com",recipients="test@example.com",subject="Письмо $i",body="Сохранённый текст письма",date=1_800_000_000_000L,unread=i==1)}
     private fun screen() {
-        val activity=rule.activity
         rule.runOnUiThread {
-        activity.edgeMailWindow()
-        activity.setContent {
+        WindowTestActivity.content = {
             MailTheme(style.value) {
                 canvas=MaterialTheme.colorScheme.surface.toArgb()
                 key(style.value) {
@@ -47,6 +45,14 @@ class WindowBackgroundDeviceTest {
         }
         }
         rule.waitForIdle()
+        rule.waitUntil(15000) {
+            var focused=false
+            rule.runOnUiThread { focused=WindowTestActivity.current?.hasWindowFocus()==true }
+            focused
+        }
+    }
+    @org.junit.After fun clearScreen() {
+        rule.runOnUiThread { WindowTestActivity.content=null }
     }
     private fun command(text: String)=ParcelFileDescriptor.AutoCloseInputStream(
         InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(text)).bufferedReader().use{it.readText()}
@@ -61,9 +67,9 @@ class WindowBackgroundDeviceTest {
                 val result=command("cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.$overlay")
                 assertFalse(result,result.contains("Error",true))
                 rule.waitUntil(15000){currentOverlay()?.endsWith(".$overlay")==true}
-                // Framework overlay changes can recreate the plain test host. Production
-                // MainActivity configures every new window in onCreate; reproduce that here.
-                rule.activityRule.scenario.recreate()
+                // The framework owns recreation after an overlay change. A simultaneous
+                // scenario.recreate() races its destroyed instance. The debug host restores
+                // its content and edge-to-edge configuration in every onCreate instead.
                 screen()
                 for(selected in MailStyle.entries) {
                     rule.runOnIdle{style.value=selected};rule.waitForIdle()
@@ -72,20 +78,28 @@ class WindowBackgroundDeviceTest {
                     // Insets and SystemUI composition settle independently of the Compose clock.
                     var top=0;var bottom=0;var contrast=true
                     rule.runOnIdle {
-                        val insets=rule.activity.window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
+                        val insets=checkNotNull(WindowTestActivity.current).window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
                         top=insets.top;bottom=insets.bottom
-                        contrast=rule.activity.window.isNavigationBarContrastEnforced
+                        contrast=checkNotNull(WindowTestActivity.current).window.isNavigationBarContrastEnforced
                     }
                     assertTrue(top>0);assertTrue(bottom>0)
+                    try {
                     rule.waitUntil(15000) {
                         val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
                         if(shot==null)false else try{close(canvas,shot.getPixel(shot.width/8,shot.height-bottom/2))}finally{shot.recycle()}
+                    }
+                    } finally {
+                        val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                        if(shot!=null)try {
+                            saveDeviceBitmap(shot,"edge-${selected.key}-$mode")
+                            android.util.Log.i("MailWindowGeometry","mode=$mode style=$selected canvas=${Integer.toHexString(canvas)} pixel=${Integer.toHexString(shot.getPixel(shot.width/8,shot.height-bottom/2))} bottom=$bottom contrast=$contrast")
+                        }finally{shot.recycle()}
                     }
                     // The nav overlay and its insets can settle after the background pixel.
                     // Wait for both the measured controls and current system insets to agree.
                     rule.waitUntil(15000) {
                         rule.runOnIdle {
-                            val bars=rule.activity.window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
+                            val bars=checkNotNull(WindowTestActivity.current).window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
                             top=bars.top;bottom=bars.bottom
                         }
                         val upper=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow

@@ -10,7 +10,7 @@ class MailLayoutTest {
     }
     @Test fun fixedDesktopTablesRetainTheirWidthAndAllowAutomaticOverview() {
         val doc=HtmlMail.document("<table width='720'><tr><td>Backend checks</td><td>All jobs have passed</td></tr></table>","",emptyList())
-        assertEquals(720,doc.layoutWidth);assertTrue(doc.html.contains("content=\"width=720\""))
+        assertEquals(720,doc.layoutWidth);assertEquals("width=720",org.jsoup.Jsoup.parse(doc.html).selectFirst("meta[name=viewport]")!!.attr("content").substringBefore(","))
         assertFalse(doc.html.contains("initial-scale=1"));assertFalse(doc.html.contains("overflow-wrap:anywhere"))
         assertFalse(doc.html.contains("table{max-width:100%"));assertTrue(doc.html.contains("width=\"720\""))
     }

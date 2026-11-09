@@ -242,7 +242,7 @@ object HtmlMail {
         val (hasLeftInset,hasRightInset)=horizontalInsets(outerStyle)
         val leftInset=if(currentHtml==null || layout==0 && !hasLeftInset)"16px" else "0"
         val rightInset=if(currentHtml==null || layout==0 && !hasRightInset)"16px" else "0"
-        val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
+        val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport, minimum-scale=0.01, maximum-scale=10"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
             html,body{margin:0;padding:0;max-width:100%;overflow-wrap:break-word;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
             body{box-sizing:border-box;padding-left:$leftInset;padding-right:$rightInset}
             img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
