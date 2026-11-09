@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
@@ -105,7 +106,13 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 if(!live || url!=documentUrl)return
                 val revision=documentRevision
                 postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
-                    if(live && requestId==documentRevision){if(initialScale==null){initialScale=renderScale;establishingScale=true;val before=renderScale;fitWidth();post{if(establishingScale && renderScale==before)establishingScale=false}};publishHeight();ready()}
+                    if(!live || requestId!=documentRevision)return
+                    if(initialScale==null){
+                        initialScale=renderScale;establishingScale=true;fitWidth()
+                        postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(fitRequest: Long){
+                            if(live && fitRequest==documentRevision){initialScale=renderScale;establishingScale=false;publishHeight();ready()}
+                        }})
+                    }else {publishHeight();ready()}
                 }})
             }
         }
@@ -233,6 +240,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     val ready=document
+    var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
+    val latestRendered by rememberUpdatedState({rendered=true})
     val viewport=((scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels)-with(density){20.dp.roundToPx()}).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     if(failed) {
         Text("Показываем текстовую версию письма",Modifier.padding(vertical=10.dp),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -241,6 +250,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     else if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
+        if(!rendered)Text("Подготавливаем письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
         if(ready.externalImages && zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
             if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
         }}
@@ -253,14 +263,14 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                         val actual=web?.height?:0
                         val restored=height<=8 || actual<=height+with(density){2.dp.roundToPx()}
                         if(!latestExpanded && web?.atInitialScale()!=false && restored)height=measured
-                    },failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)})
+                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)})
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)
                     addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                 }catch(e: Exception){failed=true;loader.close()}
             }},
-                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=(10f*(1f-zoomProgress)).dp).height(with(density){val normal=height.coerceAtMost(viewport);val expanded=scroll?.viewportHeight?.takeIf{it>0}?:viewport;(normal+(expanded-normal)*zoomProgress).toDp()})
+                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=(10f*(1f-zoomProgress)).dp).height(with(density){val normal=height.coerceAtMost(viewport);val expanded=scroll?.viewportHeight?.takeIf{it>0}?:viewport;(normal+(expanded-normal)*zoomProgress).toDp()}).graphicsLayer{alpha=if(rendered)1f else 0f}
                     .onGloballyPositioned{scroll?.position(it.positionInWindow().y.toInt())},
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
