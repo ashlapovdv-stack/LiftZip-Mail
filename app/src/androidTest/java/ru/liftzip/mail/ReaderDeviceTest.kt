@@ -69,6 +69,23 @@ class ReaderDeviceTest {
         }
         node.performClick();node.assertIsDisplayed()
     }
+    @Test fun repeatedZoomAndResetKeepsHistoryNearTheLetter() {
+        val body="Текущий текст\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
+        val short=message.copy(body=body,htmlBody="",subject="Письмо с историей")
+        rule.setContent{MailTheme{reader(short)}}
+        val view=loaded()
+        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        history.assertIsDisplayed()
+        val originalTop=history.fetchSemanticsNode().boundsInRoot.top
+        repeat(2) {
+            rule.runOnIdle{view.zoomBy(2f)}
+            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+            rule.waitForIdle()
+            assertEquals("History must return to the same position",originalTop,history.fetchSemanticsNode().boundsInRoot.top,4f)
+        }
+    }
     @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
