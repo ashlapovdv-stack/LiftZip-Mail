@@ -104,6 +104,19 @@ class ReaderDeviceTest {
         rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>before*1.05f};enlarged}
         rule.runOnIdle{assertSame(view,webView())}
     }
+    @Test fun edgeDrawerBackKeepsReaderAndWebView() {
+        val account=MailAccount("a","Рабочая","a@example.com",provider=Provider.REG,imapHost="example.com",smtpHost="example.com")
+        val short=message.copy(body="Короткое письмо",htmlBody="<p>Короткое письмо</p>")
+        rule.setContent {MailTheme {ReaderDrawer(UiState(loaded=true,accounts=listOf(account)),"a",null,
+            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onSettings={}){reader(short)}}}
+        val view=loaded()
+        val x=24f*view.resources.displayMetrics.density
+        rule.onRoot().performTouchInput{swipe(Offset(x,height*0.7f),Offset(x+150f,height*0.7f),400)}
+        rule.waitUntil(10000){rule.onAllNodesWithText("Ваши почтовые ящики").fetchSemanticsNodes().isNotEmpty()}
+        rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()}
+        rule.waitUntil(10000){rule.onAllNodesWithText("Ваши почтовые ящики").fetchSemanticsNodes().isEmpty()}
+        rule.runOnIdle{assertSame(view,webView())}
+    }
     @Test fun pinchOnHistoryDoesNotOpenIt() {
         val body="Текущий текст\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
         rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=""))}}
