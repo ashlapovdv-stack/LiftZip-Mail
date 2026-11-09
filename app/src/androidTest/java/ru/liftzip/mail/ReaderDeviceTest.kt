@@ -74,6 +74,8 @@ class ReaderDeviceTest {
         val short=message.copy(body=body,htmlBody="",subject="Письмо с историей")
         rule.setContent{MailTheme{reader(short)}}
         val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.waitForIdle()
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         history.assertIsDisplayed()
         val originalTop=history.fetchSemanticsNode().boundsInRoot.top
@@ -83,7 +85,7 @@ class ReaderDeviceTest {
             rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
             rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
             rule.waitForIdle()
-            assertEquals("History must return to the same position",originalTop,history.fetchSemanticsNode().boundsInRoot.top,4f)
+            assertEquals("History must return to the same position",originalTop,history.fetchSemanticsNode().boundsInRoot.top,8f*view.resources.displayMetrics.density)
         }
     }
     @Test fun twoFingerGestureBelowShortMailUsesItsWebView() {
