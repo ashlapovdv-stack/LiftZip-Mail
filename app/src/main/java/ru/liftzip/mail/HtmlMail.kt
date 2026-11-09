@@ -146,6 +146,28 @@ object HtmlMail {
         doc.select(".gmail_attr").remove()
         return doc.body().html()
     }
+    private fun horizontalInsets(style: String): Pair<Boolean,Boolean> {
+        val sides=mutableMapOf("padding-left" to false,"padding-right" to false,"margin-left" to false,"margin-right" to false)
+        fun nonzero(value: String): Boolean {
+            val v=value.trim().lowercase().removeSuffix("!important").trim()
+            return v.isNotEmpty() && v!="auto" && !Regex("^[+-]?0+(?:\\.0+)?(?:[a-z%]+)?$").matches(v)
+        }
+        style.split(';').forEach { declaration->
+            val parts=declaration.split(':',limit=2)
+            if(parts.size==2) {
+                val name=parts[0].trim().lowercase();val value=parts[1].trim()
+                if(name=="padding" || name=="margin") {
+                    val values=value.split(Regex("\\s+")).filter{it.isNotBlank() && it!="!important"}
+                    if(values.isNotEmpty()) {
+                        sides["$name-right"]=nonzero(values.getOrElse(1){values[0]})
+                        sides["$name-left"]=nonzero(values.getOrElse(3){values.getOrElse(1){values[0]}})
+                    }
+                } else if(sides.containsKey(name)) sides[name]=nonzero(value)
+            }
+        }
+        return (sides["padding-left"]==true || sides["margin-left"]==true) to
+            (sides["padding-right"]==true || sides["margin-right"]==true)
+    }
     fun document(html: String,plain: String,attachments: List<Attachment>,hasHistory: Boolean=false,external: Boolean=false,
         foreground: String="#20241f",background: String="#f8f9f6",identity: String=""): MailHtmlDocument {
         val currentHtml=html.takeIf{it.isNotBlank()}?.let{currentSource(it,hasHistory)}
@@ -188,12 +210,12 @@ object HtmlMail {
         // element styles such as p { margin: 0 } do not provide page margins.
         val outer=doc.body().children().singleOrNull()
         val outerStyle=outer?.attr("style").orEmpty()
-        val hasOuterInset=Regex("(?i)(?:^|;)\\s*(?:padding|margin)(?:-left|-right|-inline(?:-start|-end)?)?\\s*:\\s*(?!0(?:px|em|rem|%)?\\s*(?:;|$))[^;]+")
-            .containsMatchIn(outerStyle)
-        val inset=if(currentHtml==null || layout==0 && !hasOuterInset)"16px" else "0"
+        val (hasLeftInset,hasRightInset)=horizontalInsets(outerStyle)
+        val leftInset=if(currentHtml==null || layout==0 && !hasLeftInset)"16px" else "0"
+        val rightInset=if(currentHtml==null || layout==0 && !hasRightInset)"16px" else "0"
         val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
             html,body{margin:0;padding:0;max-width:100%;overflow-wrap:break-word;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
-            body{box-sizing:border-box;padding-left:$inset;padding-right:$inset}
+            body{box-sizing:border-box;padding-left:$leftInset;padding-right:$rightInset}
             img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
             .mail-plain{white-space:pre-wrap}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
