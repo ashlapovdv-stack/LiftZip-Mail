@@ -96,6 +96,7 @@ class ReaderDeviceTest {
             val y=height*0.75f
             down(0,Offset(center.x-35f,y));down(1,Offset(center.x+35f,y))
             moveTo(0,Offset(center.x-100f,y));moveTo(1,Offset(center.x+100f,y))
+            move()
             up(1);up(0)
         }
         rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>before*1.05f};enlarged}
