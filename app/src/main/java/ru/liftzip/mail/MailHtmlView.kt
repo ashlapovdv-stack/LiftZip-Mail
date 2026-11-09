@@ -57,6 +57,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var measuredInitialLayout=false
     private var layoutRevision=0L
     private var layoutPending=false
+    private var awaitingInitialLayout=false
     private data class ReadingAnchor(val relativeScale: Float,val cssX: Float,val cssY: Float)
     private var pendingAnchor: ReadingAnchor?=null
     @Volatile private var live=true
@@ -152,10 +153,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                                     postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(restoreRequest: Long){
                                         if(live && restoreRequest==documentRevision){scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
                                     }})
-                                }else {if(anchor!=null)scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
+                                }else {if(anchor!=null)scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());awaitingInitialLayout=true;publishHeight()}
                             }
                         }})
-                    }else {publishHeight();ready()}
+                    }else {awaitingInitialLayout=true;publishHeight()}
                 }})
             }
         }
@@ -171,7 +172,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale) else null
         document=next
         documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
-        layoutRevision++;layoutPending=false
+        layoutRevision++;layoutPending=false;awaitingInitialLayout=false
         measuredInitialLayout=false
         initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0
         fling.abortAnimation();scrollTo(0,0)
@@ -271,12 +272,20 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         // is a viewport, not the letter's size: in it the reported content is stretched by
         // the window, so storing it or multiplying it by the pinch scale feeds the gesture
         // back into the layout and the history keeps sliding after the fingers leave.
-        val value=if(base==null)HtmlMail.height(content,renderScale,viewport)else HtmlMail.height(documentHeight,base,viewport)
-        // Refresh the document height only from a settled unzoomed layout: base scale,
-        // finished scale establishment and a window already matching the published
-        // geometry. Anything else is a transient that must not become the letter's size.
-        val settled=base!=null && !establishingScale && kotlin.math.abs(renderScale-base)<=0.000001f && height==value
-        if(base==null || settled)documentHeight=content
+        // contentHeight includes the CSS viewport's minimum height, rounded to a whole
+        // CSS pixel. Never feed that viewport echo back into the document measurement.
+        // Real growth (for example a decoded inline image) still exceeds that minimum.
+        val unzoomed=base!=null && !establishingScale && abs(renderScale-base)<=0.000001f
+        val viewportCss=kotlin.math.ceil(height.toDouble()/renderScale).toInt()
+        if(base==null || (unzoomed && content>viewportCss+1))documentHeight=content
+        val value=HtmlMail.height(documentHeight,base?:renderScale,viewport)
+        // Readiness means both the rendered page and the native reading window are
+        // laid out. A visual callback alone precedes Compose's height update.
+        if(awaitingInitialLayout && unzoomed && height==value) {
+            awaitingInitialLayout=false
+            val revision=documentRevision
+            post{if(live && revision==documentRevision)ready()}
+        }
         if(value==lastHeight)return
         lastHeight=value
         val revision=documentRevision

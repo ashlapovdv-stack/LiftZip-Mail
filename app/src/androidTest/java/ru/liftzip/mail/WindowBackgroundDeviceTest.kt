@@ -22,7 +22,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion=30)
 class WindowBackgroundDeviceTest {
-    @get:Rule val rule=createAndroidComposeRule<ComponentActivity>()
+    @get:Rule val rule=createAndroidComposeRule<WindowTestActivity>()
     private val style=mutableStateOf(MailStyle.COZY)
     private var canvas=0
     private var refreshed=0
@@ -31,10 +31,8 @@ class WindowBackgroundDeviceTest {
     private val account=MailAccount("a","lift-zip","test@example.com",provider=Provider.REG,imapHost="mail.hosting.reg.ru",smtpHost="mail.hosting.reg.ru")
     private val messages=(1..30).map{i->MailItem("edge-$i","a",sender="Отправитель $i",senderEmail="sender@example.com",recipients="test@example.com",subject="Письмо $i",body="Сохранённый текст письма",date=1_800_000_000_000L,unread=i==1)}
     private fun screen() {
-        val activity=rule.activity
         rule.runOnUiThread {
-        activity.edgeMailWindow()
-        activity.setContent {
+        WindowTestActivity.content = {
             MailTheme(style.value) {
                 canvas=MaterialTheme.colorScheme.surface.toArgb()
                 key(style.value) {
@@ -47,6 +45,9 @@ class WindowBackgroundDeviceTest {
         }
         }
         rule.waitForIdle()
+    }
+    @org.junit.After fun clearScreen() {
+        rule.runOnUiThread { WindowTestActivity.content=null }
     }
     private fun command(text: String)=ParcelFileDescriptor.AutoCloseInputStream(
         InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(text)).bufferedReader().use{it.readText()}

@@ -7,6 +7,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HtmlMailTest {
+    @Test fun desktopMailAllowsFittingBelowTheDefaultWebViewMinimumScale() {
+        val source="<table width='2200'><tr><td>Left</td><td>Right</td></tr></table>"
+        val document=Jsoup.parse(HtmlMail.document(source,"",emptyList()).html)
+        val viewport=document.selectFirst("meta[name=viewport]")!!.attr("content")
+        assertTrue(viewport.contains("minimum-scale=0.01"))
+        assertEquals("2200",document.selectFirst("table")!!.attr("width"))
+        assertTrue(document.select("script").isEmpty())
+    }
+
     @Test fun neutralMessageBackgroundsBlendIntoThemeButColoredHighlightSurvives() {
         val html="""<body bgcolor="#ffffff"><p style="background:rgb(248,248,250)">Текст <span style="background-color:#fff">подпись</span><span style="background:#ffff00">важно</span></p><div style="background-color:#102030;color:white">тёмный блок</div><style>.note {background-color: whitesmoke;}</style></body>"""
         val doc=Jsoup.parse(HtmlMail.document(html,"",emptyList(),background="#fff8ef").html)

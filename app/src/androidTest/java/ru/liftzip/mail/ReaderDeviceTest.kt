@@ -235,7 +235,7 @@ class ReaderDeviceTest {
         val center=rule.onNodeWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNode().boundsInRoot.center
         var before=0f;rule.runOnIdle{before=view.scale}
         rule.onRoot().performTouchInput {
-            down(0,center-Offset(160f,0f));down(1,center+Offset(160f,0f))
+            down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
             moveTo(0,center-Offset(80f,0f));moveTo(1,center+Offset(80f,0f));move()
             up(1);up(0)
         }
