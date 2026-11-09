@@ -22,6 +22,27 @@ class MessageFlowDeviceTest {
     private val mail=MailItem("m","a",12,7,sender="Клиент",senderEmail="client@example.com",recipients="a@example.com",subject="Тема письма",body="Основной текст",date=1)
     private fun back(){rule.waitForIdle();rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()};rule.waitForIdle()}
 
+    @Test fun arrivalsRespectPositionAndReturnToTop() {
+        val memory=InboxMemory()
+        var messages by mutableStateOf((0..59).map{i->mail.copy(id="arrive-$i",subject="Письмо $i",date=2_000_000L-i)})
+        rule.setContent {MailTheme {InboxScreen(UiState(loaded=true,accounts=listOf(account),messages=messages),"a",MailFolder.INBOX,null,memory,
+            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}}
+        rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:arrive-0").fetchSemanticsNodes().isNotEmpty()}
+        rule.runOnIdle{messages=listOf(mail.copy(id="new-1",subject="Новое письмо",date=3_000_000L))+messages}
+        rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:new-1").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithTag("mail-row:new-1").assertIsDisplayed()
+        rule.onNodeWithTag("inbox-list").performScrollToIndex(20)
+        rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуться к началу списка").fetchSemanticsNodes().isNotEmpty()}
+        val oldKey=memory.list.layoutInfo.visibleItemsInfo.first().key
+        val oldOffset=memory.list.firstVisibleItemScrollOffset
+        rule.runOnIdle{messages=listOf(mail.copy(id="new-2",date=4_000_000L))+messages}
+        rule.waitUntil(15000){memory.visibleRows?.firstOrNull()?.id=="new-2"}
+        rule.runOnIdle{assertEquals(oldKey,memory.list.layoutInfo.visibleItemsInfo.first().key);assertEquals(oldOffset,memory.list.firstVisibleItemScrollOffset)}
+        rule.onNodeWithContentDescription("Вернуться к началу списка").performClick()
+        rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:new-2").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithTag("mail-row:new-2").assertIsDisplayed()
+    }
+
     @Test fun readerDisplaysCompactHeaderAndExpandableDetails() {
         val m=mail.copy(sender="\\\"Компания, Иван\\\"",cc="copy@example.com",subject="Очень длинная тема письма ".repeat(10))
         rule.setContent {MailTheme {ReaderScreen(m,account,false,emptyList(),emptySet(),onBack={},onStar={},onInline={error("unused")},onLink={},onDownload={},onOpenAttachment={},onOpenLocal={},onReply={},onForward={})}}
