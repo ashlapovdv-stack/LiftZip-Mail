@@ -199,9 +199,9 @@ class MessageFlowDeviceTest {
         rule.onNodeWithText("Содержимое второго").assertIsDisplayed()
         rule.onNodeWithText("Первый",substring=true).assertIsDisplayed()
         rule.onNodeWithText("Второй",substring=true).assertIsDisplayed()
+        saveDeviceScreenshot(rule,"expanded-history")
         rule.onNodeWithContentDescription("Предыдущие сообщения: 2").performClick()
         rule.onNodeWithText("Содержимое первого").assertDoesNotExist()
-        saveDeviceScreenshot(rule,"expanded-history")
     }
     @Test fun imageAttachmentsOpenAndDownloadFromCompactPreviews() {
         val image=Attachment("1","фото.png","application/octet-stream",4_372*1024)
