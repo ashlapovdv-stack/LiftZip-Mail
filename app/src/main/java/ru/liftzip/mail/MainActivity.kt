@@ -800,6 +800,14 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
             if(!htmlZoomed)Spacer(Modifier.height(100.dp))
         }
+        val showHorizontal by remember(scroll){derivedStateOf{scroll.horizontal.let{it.range>it.extent && it.extent>0}}}
+        if(htmlZoomed && showHorizontal)Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start=4.dp,end=80.dp,bottom=4.dp).height(4.dp).testTag("reader-horizontal-scrollbar").drawBehind {
+            val horizontal=scroll.horizontal
+            val track=size.width
+            val bar=(track*horizontal.extent.toFloat()/horizontal.range).coerceIn(16.dp.toPx(),track)
+            val start=((track-bar)*horizontal.offset.toFloat()/(horizontal.range-horizontal.extent).coerceAtLeast(1)).coerceIn(0f,track-bar)
+            drawRoundRect(Color.Gray.copy(alpha=0.65f),topLeft=Offset(start,0f),size=androidx.compose.ui.geometry.Size(bar,size.height),cornerRadius=androidx.compose.ui.geometry.CornerRadius(size.height/2))
+        })
         if(actionsExpanded)Box(Modifier.matchParentSize().background(Color.White.copy(alpha=0.78f)).clickable{actionsExpanded=false}.semantics{contentDescription="Закрыть действия"})
         }
     }

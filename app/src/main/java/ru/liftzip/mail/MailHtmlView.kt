@@ -41,7 +41,8 @@ import kotlin.math.roundToInt
 
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
-    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={}): WebView(context) {
+    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={},
+    private val horizontalChanged: (HorizontalScrollMetrics)->Unit={}): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
     private var renderScale=resources.displayMetrics.density
     private var initialScale: Float?=null
@@ -50,6 +51,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var documentRevision=0L
     private var documentUrl=""
     private var measuredInitialLayout=false
+    private var layoutRevision=0L
+    private var layoutPending=false
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     var scrollPage: ((Float)->Float)?=null
@@ -70,6 +73,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     init {
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
         scrollBarStyle=View.SCROLLBARS_OUTSIDE_OVERLAY
+        isHorizontalScrollBarEnabled=false
         settings.apply {
             javaScriptEnabled=false;javaScriptCanOpenWindowsAutomatically=false;domStorageEnabled=false
             allowFileAccess=false;allowContentAccess=false;setSupportMultipleWindows(false)
@@ -145,6 +149,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(document===next)return
         document=next
         documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
+        layoutRevision++;layoutPending=false
         measuredInitialLayout=false
         initialScale=null;establishingScale=false;lastHeight=0
         fling.abortAnimation();scrollTo(0,0)
@@ -218,13 +223,25 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         }
         return super.onTouchEvent(event)
     }
-    override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight()}
+    override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight();publishHorizontal()}
+    override fun onScrollChanged(l: Int,t: Int,oldl: Int,oldt: Int){super.onScrollChanged(l,t,oldl,oldt);publishHorizontal()}
+    private fun publishHorizontal(){
+        if(live)horizontalChanged(HorizontalScrollMetrics(computeHorizontalScrollOffset(),computeHorizontalScrollExtent(),computeHorizontalScrollRange()))
+    }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) {
         super.onSizeChanged(w,h,oldw,oldh)
-        if(h!=oldh && atInitialScale()){lastHeight=0;post{publishHeight()}}
+        if(w!=oldw || h!=oldh){
+            val layout=++layoutRevision;val documentId=documentRevision
+            layoutPending=true
+            post {
+                if(live && layout==layoutRevision && documentId==documentRevision)postVisualStateCallback(layout,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
+                    if(live && requestId==layoutRevision && documentId==documentRevision){layoutPending=false;lastHeight=0;publishHeight()}
+                }})
+            }
+        }
     }
     private fun publishHeight() {
-        if(!live)return
+        if(!live || layoutPending)return
         val content=contentHeight
         val value=HtmlMail.height(content,renderScale,viewport)
         if(value==lastHeight || content<=0)return
@@ -285,7 +302,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                         val actual=web?.height?:0
                         val restored=height<=8 || actual<=height+with(density){2.dp.roundToPx()}
                         if(!latestExpanded && web?.atInitialScale()!=false && restored)height=measured
-                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)})
+                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},horizontalChanged={scroll?.horizontal=it})
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)

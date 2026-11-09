@@ -42,6 +42,12 @@ class ReaderDeviceTest {
             android.util.Log.i("MailReaderGeometry","width=${view.width} height=${view.height} contentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY}")
             assertFalse("The complete table must fit initially",view.canScrollHorizontally(1))
         }
+        rule.runOnIdle{view.zoomBy(2f)}
+        rule.waitUntil(10000){rule.onAllNodesWithTag("reader-horizontal-scrollbar").fetchSemanticsNodes().isNotEmpty()}
+        val bottom=rule.onNodeWithTag("reader-horizontal-scrollbar").fetchSemanticsNode().boundsInRoot.bottom
+        rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-150f),300)}
+        rule.waitForIdle()
+        assertEquals(bottom,rule.onNodeWithTag("reader-horizontal-scrollbar").fetchSemanticsNode().boundsInRoot.bottom,1f)
     }
     @Test fun repeatedRealPinchesReturnHistoryToTheDocument() {
         val body="Ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
