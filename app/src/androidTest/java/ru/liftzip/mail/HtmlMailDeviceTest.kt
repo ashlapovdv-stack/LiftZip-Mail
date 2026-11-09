@@ -74,6 +74,18 @@ class HtmlMailDeviceTest {
         rule.waitUntil(5000){var fit=false;rule.runOnUiThread{fit=kotlin.math.abs(view.scale-scale)<scale*0.05f};fit}
         rule.runOnIdle{assertFalse(view.canScrollHorizontally(1))}
     }
+    @Test fun replacingDocumentIgnoresOldReadinessAndKeepsTheNewBody() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicInteger()
+        val first=HtmlMail.document("<p>Старый документ</p>","",emptyList(),identity="old")
+        val second=HtmlMail.document("<p>Новый документ</p>","",emptyList(),identity="new")
+        lateinit var view: MailHtmlWebView
+        rule.setContent {AndroidView(factory={MailHtmlWebView(c,{null},{},{},{ready.incrementAndGet()}).also{
+            view=it;it.show(first);it.show(second)
+        }},modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+        rule.waitUntil(15000){ready.get()>0}
+        assertEquals(1,matches(view,"Новый документ"));assertEquals(0,matches(view,"Старый документ"))
+        assertEquals("Only the current document may report readiness",1,ready.get())
+    }
     @Test fun newsletterCssIsHiddenInlineImageIsDrawnAndALinkOpensOnlyThroughTheApp() {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val loaded=AtomicBoolean();val clicks=AtomicReference<String?>(null);val images=AtomicInteger();val png=image()
