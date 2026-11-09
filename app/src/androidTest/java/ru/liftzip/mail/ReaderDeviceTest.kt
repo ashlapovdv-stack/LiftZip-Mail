@@ -41,6 +41,7 @@ class ReaderDeviceTest {
         rule.onNodeWithText("Повторить").performClick()
         rule.runOnIdle{assertEquals(1,retries)}
     }
+    // Exercise the production reader, including its header and bounded WebView.
     @Test fun realReaderFitsAWideNestedTableAtInitialScale() {
         val html="""<table style='width:2200px'><tr><td>Первый столбец</td><td><table style='width:900px'><tr><td>Последний столбец</td></tr></table></td></tr></table>"""
         rule.setContent{MailTheme{reader(message.copy(body="Первый столбец Последний столбец",htmlBody=html))}}
