@@ -72,6 +72,27 @@ class HtmlMailTest {
         val doc=HtmlMail.document("<p>Ответ и старое письмо без структурной границы</p>","Только ответ",emptyList(),hasHistory=true)
         assertEquals("Только ответ",Jsoup.parse(doc.html).body().text())
     }
+    @Test fun plainFallbackKeepsMarginsEvenWhenOriginalHtmlHasStyles() {
+        val doc=HtmlMail.document("<p style='margin:0'>Ответ без границы цитаты</p>","Только ответ",emptyList(),hasHistory=true)
+        assertTrue(doc.html.contains("padding-left:16px;padding-right:16px"))
+        assertEquals("Только ответ",Jsoup.parse(doc.html).body().text())
+    }
+    @Test fun zeroInnerMarginDoesNotRemovePageInset() {
+        val doc=HtmlMail.document("<p style='margin:0'>Текст</p>","Текст",emptyList())
+        assertTrue(doc.html.contains("padding-left:16px;padding-right:16px"))
+    }
+    @Test fun existingOuterPaddingIsNotDuplicated() {
+        val doc=HtmlMail.document("<div style='padding:24px'>Текст</div>","Текст",emptyList())
+        assertTrue(doc.html.contains("padding-left:0;padding-right:0"))
+    }
+    @Test fun verticalOnlyAndOneSidedInsetsDoNotRemovePageMargins() {
+        listOf("padding:12px 0", "margin-top:12px").forEach { style ->
+            val doc=HtmlMail.document("<div style='$style'>Текст</div>","Текст",emptyList())
+            assertTrue(style,doc.html.contains("padding-left:16px;padding-right:16px"))
+        }
+        val oneSide=HtmlMail.document("<div style='padding-left:12px'>Текст</div>","Текст",emptyList())
+        assertTrue(oneSide.html.contains("padding-left:0;padding-right:16px"))
+    }
     @Test fun unsafeNavigationAndCredentialsAreRejectedWhileOrdinaryLinksWork() {
         listOf("javascript:alert(1)","intent://x","file:///x","content://x","data:text/html,x","https://name:pass@example.com/x","https://example.com/\nsecret").forEach{assertNull(HtmlMail.link(it))}
         assertEquals("https://example.com/report",HtmlMail.link("https://example.com/report"))

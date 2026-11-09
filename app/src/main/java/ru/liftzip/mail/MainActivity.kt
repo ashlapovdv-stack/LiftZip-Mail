@@ -18,6 +18,11 @@ import androidx.activity.result.IntentSenderRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.animation.*
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
@@ -462,7 +467,7 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.15",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.16",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -637,6 +642,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
+    var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
     val readerContext=LocalContext.current
     var previousOuterOffset by remember(m.id){mutableIntStateOf(0)}
@@ -657,7 +663,26 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
         }
     })}}) { padding->
-        Box(Modifier.padding(padding).fillMaxSize()) {
+        Box(Modifier.padding(padding).fillMaxSize().onGloballyPositioned{readerOrigin=it.positionInWindow()}.pointerInput(scroll) {
+            awaitEachGesture {
+                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                val view=scroll.view
+                val location=IntArray(2)
+                view?.getLocationInWindow(location)
+                val x=down.position.x+readerOrigin.x;val y=down.position.y+readerOrigin.y
+                val outside=view!=null && (x<location[0] || x>=location[0]+view.width || y<location[1] || y>=location[1]+view.height)
+                var pinch=false
+                do {
+                    val event=awaitPointerEvent(PointerEventPass.Initial)
+                    if(outside && event.changes.count{it.pressed}>=2) {
+                        pinch=true
+                        val factor=event.calculateZoom()
+                        if(factor.isFinite() && factor>0f && factor!=1f)view?.zoomBy(factor.coerceIn(0.8f,1.25f))
+                    }
+                    if(pinch)event.changes.forEach{it.consume()}
+                }while(event.changes.any{it.pressed})
+            }
+        }) {
         Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
             .nestedScroll(scroll.connection).verticalScroll(outer)) {
             if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {

@@ -69,6 +69,58 @@ class ReaderDeviceTest {
         }
         node.performClick();node.assertIsDisplayed()
     }
+    @Test fun repeatedZoomAndResetKeepsHistoryNearTheLetter() {
+        val body="Текущий текст\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
+        val short=message.copy(body=body,htmlBody="",subject="Письмо с историей")
+        rule.setContent{MailTheme{reader(short)}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.waitForIdle()
+        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        history.assertIsDisplayed()
+        val originalTop=history.fetchSemanticsNode().boundsInRoot.top
+        repeat(2) {
+            rule.runOnIdle{view.zoomBy(2f)}
+            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+            rule.waitForIdle()
+            assertEquals("History must return to the same position",originalTop,history.fetchSemanticsNode().boundsInRoot.top,8f*view.resources.displayMetrics.density)
+        }
+    }
+    @Test fun twoFingerGestureBelowShortMailUsesItsWebView() {
+        val short=message.copy(body="Короткое письмо",htmlBody="<p>Короткое письмо</p>")
+        rule.setContent{MailTheme{reader(short)}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        var before=0f;rule.runOnIdle{before=view.scale}
+        rule.onRoot().performTouchInput {
+            val y=height*0.75f
+            down(0,Offset(center.x-35f,y));down(1,Offset(center.x+35f,y))
+            moveTo(0,Offset(center.x-100f,y));moveTo(1,Offset(center.x+100f,y))
+            move()
+            up(1);up(0)
+        }
+        rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>before*1.05f};enlarged}
+        rule.runOnIdle{assertSame(view,webView())}
+    }
+    @Test fun pinchOnHistoryDoesNotOpenIt() {
+        val body="Текущий текст\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
+        rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=""))}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        val center=rule.onNodeWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNode().boundsInRoot.center
+        var before=0f;rule.runOnIdle{before=view.scale}
+        rule.onRoot().performTouchInput {
+            down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
+            moveTo(0,center-Offset(80f,0f));moveTo(1,center+Offset(80f,0f));move()
+            up(1);up(0)
+        }
+        rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>before*1.05f};enlarged}
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+        rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+        rule.onAllNodesWithText("Предыдущий текст",substring=true).assertCountEquals(0)
+    }
     @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()

@@ -123,6 +123,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         val base=initialScale?:return
         if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
     }
+    fun atInitialScale(): Boolean = initialScale?.let{renderScale<=it*1.03f}?:true
     fun viewport(pixels: Int) {
         val next=pixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
         if(viewport!=next){viewport=next;publishHeight()}
@@ -179,6 +180,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         return super.onTouchEvent(event)
     }
     override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight()}
+    override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) {
+        super.onSizeChanged(w,h,oldw,oldh)
+        if(h!=oldh && atInitialScale()){lastHeight=0;post{publishHeight()}}
+    }
     private fun publishHeight() {
         if(!live)return
         val content=contentHeight
@@ -213,6 +218,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
     val latestZoom by rememberUpdatedState(onZoomChanged)
+    val latestExpanded by rememberUpdatedState(zoomed)
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     val ready=document
@@ -230,7 +236,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         key(message.id,message.contentVersion) {
             AndroidView(factory={c->FrameLayout(c).apply {
                 try {
-                    val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{height=it},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)})
+                    val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{measured->
+                        if(!latestExpanded && web?.atInitialScale()!=false)height=measured
+                    },failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)})
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)

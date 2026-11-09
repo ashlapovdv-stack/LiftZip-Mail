@@ -194,12 +194,14 @@ class MessageFlowDeviceTest {
         val history=QuotedConversation("Текущий",listOf(QuotedMessage("Первый",null,"Содержимое первого"),QuotedMessage("Второй",null,"Содержимое второго")),"Оригинал")
         rule.setContent {MailTheme {Column {ConversationHistory("m",history,emptyList())}}}
         rule.onNodeWithText("Содержимое первого").assertDoesNotExist()
-        rule.onNodeWithText("Предыдущие сообщения · 2").performClick()
+        rule.onNodeWithContentDescription("Предыдущие сообщения: 2").performClick()
         rule.onNodeWithText("Содержимое первого").assertIsDisplayed()
         rule.onNodeWithText("Содержимое второго").assertIsDisplayed()
         rule.onNodeWithText("Первый",substring=true).assertIsDisplayed()
         rule.onNodeWithText("Второй",substring=true).assertIsDisplayed()
         saveDeviceScreenshot(rule,"expanded-history")
+        rule.onNodeWithContentDescription("Предыдущие сообщения: 2").performClick()
+        rule.onNodeWithText("Содержимое первого").assertDoesNotExist()
     }
     @Test fun imageAttachmentsOpenAndDownloadFromCompactPreviews() {
         val image=Attachment("1","фото.png","application/octet-stream",4_372*1024)
