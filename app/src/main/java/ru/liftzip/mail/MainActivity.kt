@@ -711,6 +711,15 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
     val readerContext=LocalContext.current
     var previousOuterOffset by remember(m.id){mutableIntStateOf(0)}
+    var restoreOuterOffset by remember(m.id){mutableStateOf(false)}
+    LaunchedEffect(htmlZoomed,restoreOuterOffset) {
+        if(!htmlZoomed && restoreOuterOffset) {
+            // Wait for the normal reader layout to be applied before restoring its scroll.
+            withFrameNanos { }
+            outer.scrollTo(previousOuterOffset)
+            restoreOuterOffset=false
+        }
+    }
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
@@ -790,6 +799,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     zoomProgress=progress
                     val zoomed=progress>0.001f
                     if(zoomed && !htmlZoomed)previousOuterOffset=outer.value
+                    if(!zoomed && htmlZoomed)restoreOuterOffset=true
                     scroll.zoomed=zoomed;htmlZoomed=zoomed
                 })
                 if(!htmlZoomed && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
