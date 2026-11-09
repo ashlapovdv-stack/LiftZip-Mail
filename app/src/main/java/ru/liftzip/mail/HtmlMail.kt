@@ -138,7 +138,7 @@ object HtmlMail {
             }
             override fun tail(node: Node,depth: Int) {if(node is Element && node.isBlock)newline()}
         },doc.body())
-        return out.toString().replace(' ',' ').replace("\uFFFC","").replace(Regex("[ \\t]+\\n"),"\n").replace(Regex("\\n{3,}"),"\n\n").trim()
+        return out.toString().replace('\\u00a0',' ').replace("\uFFFC","").replace(Regex("[ \\t]+\\n"),"\n").replace(Regex("\\n{3,}"),"\n\n").trim()
     }
     fun plain(source: String): String {
         val out=StringBuilder();var end=0
