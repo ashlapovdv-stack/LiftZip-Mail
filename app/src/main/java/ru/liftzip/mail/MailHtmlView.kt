@@ -49,6 +49,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var lastHeight=0
     private var documentRevision=0L
     private var documentUrl=""
+    private var measuredInitialLayout=false
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     var scrollPage: ((Float)->Float)?=null
@@ -107,6 +108,26 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 val revision=documentRevision
                 postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
                     if(!live || requestId!=documentRevision)return
+                    // Wide HTML can exceed the sender's declared viewport. Measure the
+                    // rendered scroll extent while hidden and lay out once at that width.
+                    // This is done only during the initial preparation, never on pinch.
+                    if(!measuredInitialLayout && width>0 && renderScale>0f){
+                        measuredInitialLayout=true
+                        val extent=computeHorizontalScrollRange()
+                        if(extent>width+2){
+                            val cssWidth=kotlin.math.ceil(extent.toDouble()/renderScale).toInt().coerceIn(1,10000)
+                            val html=document?.html
+                            if(html!=null){
+                                val adjusted=html.replace(Regex("(<meta name=\"viewport\" content=\"width=)[^\"]+(\")"),"$1$cssWidth$2")
+                                if(adjusted!=html){
+                                    documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
+                                    initialScale=null;establishingScale=false;lastHeight=0
+                                    setInitialScale(0);loadDataWithBaseURL(documentUrl,adjusted,"text/html","UTF-8",null)
+                                    return
+                                }
+                            }
+                        }
+                    }
                     if(initialScale==null){
                         initialScale=renderScale;establishingScale=true;fitWidth()
                         postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(fitRequest: Long){
@@ -124,6 +145,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(document===next)return
         document=next
         documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
+        measuredInitialLayout=false
         initialScale=null;establishingScale=false;lastHeight=0
         fling.abortAnimation();scrollTo(0,0)
         setInitialScale(0)
