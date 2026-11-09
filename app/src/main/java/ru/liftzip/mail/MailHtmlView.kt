@@ -54,6 +54,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var measuredInitialLayout=false
     private var layoutRevision=0L
     private var layoutPending=false
+    private data class ReadingAnchor(val relativeScale: Float,val cssX: Float,val cssY: Float)
+    private var pendingAnchor: ReadingAnchor?=null
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     var scrollPage: ((Float)->Float)?=null
@@ -139,7 +141,16 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                     if(initialScale==null){
                         initialScale=renderScale;establishingScale=true;fitWidth()
                         postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(fitRequest: Long){
-                            if(live && fitRequest==documentRevision){initialScale=renderScale;establishingScale=false;publishHeight();ready()}
+                            if(live && fitRequest==documentRevision){
+                                initialScale=renderScale;establishingScale=false
+                                val anchor=pendingAnchor;pendingAnchor=null
+                                if(anchor!=null && kotlin.math.abs(anchor.relativeScale-1f)>0.03f){
+                                    zoomBy(anchor.relativeScale.coerceIn(0.01f,100f))
+                                    postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(restoreRequest: Long){
+                                        if(live && restoreRequest==documentRevision){scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
+                                    }})
+                                }else {if(anchor!=null)scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
+                            }
                         }})
                     }else {publishHeight();ready()}
                 }})
@@ -151,6 +162,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         val zoom=(fontScale*100).toInt().coerceIn(50,300)
         if(settings.textZoom!=zoom)settings.textZoom=zoom
         if(document===next)return
+        val old=document
+        val base=initialScale
+        pendingAnchor=if(old!=null && old.externalAllowed!=next.externalAllowed && base!=null && base>0f && renderScale>0f)
+            ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale) else null
         document=next
         documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
         layoutRevision++;layoutPending=false

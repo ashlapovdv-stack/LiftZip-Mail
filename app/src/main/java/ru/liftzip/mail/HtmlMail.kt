@@ -16,7 +16,7 @@ sealed interface MailImageSource {
     data class Remote(val url: String): MailImageSource
     data class Data(val mime: String,val base64: String): MailImageSource
 }
-data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSource>,val externalImages: Boolean,val layoutWidth: Int=0)
+data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSource>,val externalImages: Boolean,val layoutWidth: Int=0,val externalAllowed: Boolean=false)
 
 /** HTML remains data. Only the renderer's generated image URLs can request resources. */
 object HtmlMail {
@@ -222,7 +222,7 @@ object HtmlMail {
             img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
             .mail-plain{white-space:pre-wrap}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
-        return MailHtmlDocument(wrapped,resources,hasExternal,layout)
+        return MailHtmlDocument(wrapped,resources,hasExternal,layout,external)
     }
     /** One forward scan, including malformed input; nested url( text cannot cause regex backtracking. */
     private fun rewriteCss(value: String,resolve: (String)->String?): String {

@@ -130,6 +130,21 @@ class HtmlMailDeviceTest {
         rule.waitUntil(15_000){loaded.get()};assertEquals(1,images.get())
         rule.waitUntil(10_000){greenPixels()>50};saveDeviceScreenshot(rule,"html-remote")
     }
+    @Test fun permittingImagesRetainsZoomAndReadingPosition() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicInteger()
+        val source="<p>Начало</p><div style='height:1600px'>Текст</div><img src='https://images.example.com/chart.png' width='40' height='40'>"
+        val blocked=HtmlMail.document(source,"",emptyList(),identity="toggle")
+        val allowed=HtmlMail.document(source,"",emptyList(),external=true,identity="toggle")
+        lateinit var view: MailHtmlWebView;var base=0f
+        rule.setContent {AndroidView(factory={MailHtmlWebView(c,{image()},{},{},{ready.incrementAndGet()}).also{view=it;it.show(blocked)}},modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+        rule.waitUntil(15000){ready.get()==1}
+        rule.runOnIdle{base=view.scale;view.zoomBy(2f)}
+        rule.waitUntil(10000){var value=false;rule.runOnUiThread{value=view.scale>base*1.4f};value}
+        var beforeScale=0f;var beforeY=0
+        rule.runOnIdle{view.scrollTo(0,200);beforeScale=view.scale;beforeY=view.scrollY;view.show(allowed)}
+        rule.waitUntil(15000){ready.get()>=2}
+        rule.runOnIdle{assertEquals(beforeScale,view.scale,beforeScale*0.1f);assertTrue(kotlin.math.abs(beforeY-view.scrollY)<=20)}
+    }
     @Test fun lightHtmlCanvasMatchesTheSelectedTheme() {
         val c=ApplicationProvider.getApplicationContext<Context>();val png=image();val requests=AtomicInteger()
         val file=File(c.cacheDir,"theme-inline.png").apply{writeBytes(png.bytes)}
