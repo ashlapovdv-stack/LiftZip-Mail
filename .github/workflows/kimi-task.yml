@@ -1,0 +1,206 @@
+name: Kimi task
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'GitHub Issue number (not needed for smoke test)'
+        type: string
+      base_branch:
+        description: 'Existing base branch; alternatively set Kimi-Base in the issue'
+        type: string
+      smoke:
+        description: 'Only test the pipeline with a documentation file'
+        type: boolean
+        default: false
+  issues:
+    types: [labeled]
+  push:
+    branches: [setup/kimi-automation]
+    paths: ['.github/workflows/kimi-task.yml', 'scripts/kimi_pipeline.py']
+
+permissions: {}
+concurrency:
+  group: kimi-task-${{ github.event.issue.number || inputs.issue_number || 'smoke' }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.actor == github.repository_owner && (github.event_name != 'issues' || github.event.label.name == 'kimi-run')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      base: ${{ steps.task.outputs.base }}
+      sha: ${{ steps.task.outputs.sha }}
+      issue: ${{ steps.task.outputs.issue }}
+      smoke: ${{ steps.task.outputs.smoke }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: control
+      - id: task
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python control/scripts/kimi_pipeline.py prepare
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kimi-task-input
+          path: task/
+          retention-days: 7
+
+  agent:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.save.outputs.changed }}
+      code: ${{ steps.save.outputs.code }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: control
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          path: work
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kimi-task-input
+          path: task
+      - name: Run Kimi in isolated container without GitHub credentials
+        id: code
+        continue-on-error: true
+        env:
+          KIMI_MODEL_API_KEY: ${{ secrets.KIMI_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$KIMI_MODEL_API_KEY" || { echo 'Missing KIMI_API_KEY secret'; exit 1; }
+          timeout 1000 docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD/work:/work" -v "$PWD/task:/task:ro" -w /work \
+            -e KIMI_MODEL_API_KEY \
+            -e KIMI_MODEL_NAME=kimi-for-coding \
+            -e KIMI_MODEL_BASE_URL=https://api.kimi.com/coding/v1 \
+            -e KIMI_MODEL_PROVIDER_TYPE=kimi \
+            -e KIMI_CODE_HOME=/tmp/kimi-home \
+            -e KIMI_DISABLE_TELEMETRY=1 -e KIMI_CODE_NO_AUTO_UPDATE=1 \
+            -e KIMI_CODE_TRUST_WORKSPACE=1 -e KIMI_LOG_LEVEL=off \
+            -e KIMI_DISABLE_CRON=1 -e KIMI_LOOP_MAX_STEPS_PER_TURN=60 \
+            -e KIMI_LOOP_MAX_ATTEMPTS_PER_STEP=2 -e npm_config_cache=/tmp/npm-cache \
+            node:24-bookworm sh -c 'npm install --prefix /tmp/kimi-cli @moonshot-ai/kimi-code@2.5.2 >/dev/null 2>&1 && /tmp/kimi-cli/node_modules/.bin/kimi -p "$(cat /task/prompt.txt)"' \
+            > "$RUNNER_TEMP/kimi-output.txt" 2>&1
+      - name: Save byte-exact patch even after an interrupted agent
+        id: save
+        if: always()
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+        run: python control/scripts/kimi_pipeline.py snapshot
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && steps.save.outputs.changed == 'true'
+        with:
+          name: kimi-result-patch
+          path: result/
+          retention-days: 30
+      - name: Remove private CLI output
+        if: always()
+        run: rm -f "$RUNNER_TEMP/kimi-output.txt"
+
+  validate:
+    needs: [prepare, agent]
+    if: always() && needs.agent.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: control
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          path: work
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kimi-result-patch
+          path: result
+      - run: python control/scripts/kimi_pipeline.py apply
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        if: needs.agent.outputs.code == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build APK, test APK, unit tests and lint without API secrets
+        if: needs.agent.outputs.code == 'true'
+        working-directory: work
+        run: bash ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && needs.agent.outputs.code == 'true'
+        with:
+          name: kimi-build-results
+          path: |
+            work/app/build/outputs/apk/debug/*.apk
+            work/app/build/reports/tests/
+            work/app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    needs: [prepare, agent, validate]
+    if: always() && needs.agent.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          path: control
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          path: work
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: kimi-result-patch
+          path: result
+      - run: python control/scripts/kimi_pipeline.py apply
+      - name: Save branch and create draft PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ needs.prepare.outputs.base }}
+          ISSUE_NUMBER: ${{ needs.prepare.outputs.issue }}
+          VALIDATION: ${{ needs.validate.result }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="kimi/task-$ISSUE_NUMBER-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git -c core.hooksPath=/dev/null switch -c "$branch"
+          git config user.name 'Kimi via GitHub Actions'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null commit -m "Kimi: task $ISSUE_NUMBER (run $GITHUB_RUN_ID)"
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' -c core.hooksPath=/dev/null push origin "HEAD:refs/heads/$branch"
+          printf 'Task issue: #%s\n\nBase: %s\nValidation: %s\nAgent job: %s\n\nRun: https://github.com/%s/actions/runs/%s\n\nAutomated changes require review. No automatic merge. Device tests are not included in this pipeline; run the Android workflow on this branch before accepting code changes.\n' \
+            "$ISSUE_NUMBER" "$BASE_BRANCH" "$VALIDATION" "$AGENT_RESULT" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/pr-body.md"
+          echo "Branch: $branch" >> "$GITHUB_STEP_SUMMARY"
+          if url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$BASE_BRANCH" --head "$branch" --draft --title "Kimi: task $ISSUE_NUMBER" --body-file "$RUNNER_TEMP/pr-body.md"); then
+            echo "$url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::error::Branch and patch are saved. Enable Settings > Actions > General > Allow GitHub Actions to create and approve pull requests, then rerun the publish job.'
+            exit 1
+          fi
