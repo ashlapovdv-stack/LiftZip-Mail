@@ -46,6 +46,7 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{reader(message.copy(body="Первый столбец Последний столбец",htmlBody=html))}}
         val view=loaded()
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
         rule.waitForIdle()
         rule.runOnIdle {
             android.util.Log.i("MailReaderGeometry","width=${view.width} height=${view.height} contentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY}")
@@ -63,6 +64,8 @@ class ReaderDeviceTest {
         val html="<p>Ответ</p><div class='gmail_quote'><p>Предыдущий текст</p></div>"
         rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
         val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
         rule.waitUntil(15000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         val original=history.fetchSemanticsNode().boundsInRoot.top
@@ -70,7 +73,11 @@ class ReaderDeviceTest {
             val center=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
             rule.onRoot().performTouchInput {
                 down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
-                moveTo(0,center-Offset(90f,0f));moveTo(1,center+Offset(90f,0f));move();up(1);up(0)
+                repeat(7) { step->
+                    val distance=30f+step*10f
+                    moveTo(0,center-Offset(distance,0f));moveTo(1,center+Offset(distance,0f));move()
+                }
+                up(1);up(0)
             }
             rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
             rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-100f),300)}
