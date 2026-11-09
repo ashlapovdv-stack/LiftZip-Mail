@@ -48,6 +48,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var initialScale: Float?=null
     private var establishingScale=false
     private var lastHeight=0
+    // Document geometry in CSS pixels captured at the unzoomed base scale. The reading
+    // window height is derived from it alone, never from the current pinch scale.
+    private var documentHeight=0
     private var documentRevision=0L
     private var documentUrl=""
     private var visualPreparationRevision=-1L
@@ -131,7 +134,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                                 val adjusted=html.replace(Regex("(<meta name=\"viewport\" content=\"width=)[^\"]+(\")"),"$1$cssWidth$2")
                                 if(adjusted!=html){
                                     documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
-                                    initialScale=null;establishingScale=false;lastHeight=0
+                                    initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0
                                     setInitialScale(0);loadDataWithBaseURL(documentUrl,adjusted,"text/html","UTF-8",null)
                                     return
                                 }
@@ -170,7 +173,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
         layoutRevision++;layoutPending=false
         measuredInitialLayout=false
-        initialScale=null;establishingScale=false;lastHeight=0
+        initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0
         fling.abortAnimation();scrollTo(0,0)
         setInitialScale(0)
         loadDataWithBaseURL(documentUrl,next.html,"text/html","UTF-8",null)
@@ -262,8 +265,19 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private fun publishHeight() {
         if(!live || layoutPending)return
         val content=contentHeight
-        val value=HtmlMail.height(content,renderScale,viewport)
-        if(value==lastHeight || content<=0)return
+        if(content<=0)return
+        val base=initialScale
+        // The published height is the unzoomed document geometry. A zoomed WebView window
+        // is a viewport, not the letter's size: in it the reported content is stretched by
+        // the window, so storing it or multiplying it by the pinch scale feeds the gesture
+        // back into the layout and the history keeps sliding after the fingers leave.
+        val value=if(base==null)HtmlMail.height(content,renderScale,viewport)else HtmlMail.height(documentHeight,base,viewport)
+        // Refresh the document height only from a settled unzoomed layout: base scale,
+        // finished scale establishment and a window already matching the published
+        // geometry. Anything else is a transient that must not become the letter's size.
+        val settled=base!=null && !establishingScale && kotlin.math.abs(renderScale-base)<=0.000001f && height==value
+        if(base==null || settled)documentHeight=content
+        if(value==lastHeight)return
         lastHeight=value
         val revision=documentRevision
         post{if(live && revision==documentRevision)heightChanged(value)}
@@ -306,21 +320,20 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         // Small native blocks also avoid an unbounded single Text layout after a renderer failure.
         plain.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
     }
-    else if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+    else if(ready==null)Text("Подготавливаем письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
-        if(!rendered)Text("Подготавливаем письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
-        if(ready.externalImages && zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
+        if(rendered && ready.externalImages && zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
             if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
         }}
+        Box {
         key(message.id,message.contentVersion) {
             AndroidView(factory={c->FrameLayout(c).apply {
                 try {
                     val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{measured->
-                        // The WebView may report its expanded viewport as content height
-                        // while Compose is still shrinking it after a scale reset.
-                        val actual=web?.height?:0
-                        val restored=height<=8 || actual<=height+with(density){2.dp.roundToPx()}
-                        if(!latestExpanded && web?.atInitialScale()!=false && restored)height=measured
+                        // The WebView publishes the unzoomed document geometry only; while
+                        // zoomed the reading window is interpolated from it and must not
+                        // be overwritten by a callback.
+                        if(!latestExpanded && web!=null)height=measured
                     },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},horizontalChanged={scroll?.horizontal=it})
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
@@ -332,6 +345,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                     .onGloballyPositioned{scroll?.position(it.positionInWindow().y.toInt())},
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
+        }
+        if(!rendered)Text("Подготавливаем письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

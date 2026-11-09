@@ -90,6 +90,55 @@ class ReaderDeviceTest {
             assertEquals("History must not drift after pinch",original,top,8f*view.resources.displayMetrics.density)
         }
     }
+    // 0.5.19 regression: a small pinch that stays below the zoom-chrome threshold must
+    // not move the history element or the window after the fingers are released.
+    @Test fun smallPinchBelowZoomThresholdKeepsHistoryAndGeometryStable() {
+        val body="Ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
+        val html="<p>Ответ</p><div class='gmail_quote'><p>Предыдущий текст</p></div>"
+        rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
+        rule.waitUntil(15000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val original=history.fetchSemanticsNode().boundsInRoot.top
+        var initialHeight=0
+        rule.runOnIdle{initialHeight=view.height}
+        val tolerance=2f*view.resources.displayMetrics.density
+        repeat(10) { cycle->
+            val center=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
+            var scaleBefore=0f;rule.runOnIdle{scaleBefore=view.scale}
+            // 40 -> 41 px half-span is about +2.5%: inside the intermediate zone where
+            // the zoom chrome must not appear and the layout must not move.
+            rule.onRoot().performTouchInput {
+                down(0,center-Offset(40f,0f));down(1,center+Offset(40f,0f))
+                moveTo(0,center-Offset(41f,0f));moveTo(1,center+Offset(41f,0f));move()
+                up(1);up(0)
+            }
+            rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>scaleBefore*1.005f};enlarged}
+            // The gesture stayed below the zoom-chrome threshold.
+            rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").assertCountEquals(0)
+            // Observe the resting layout, not the gesture itself: geometry must be frozen.
+            rule.waitForIdle()
+            Thread.sleep(1200)
+            rule.waitForIdle()
+            val top=history.fetchSemanticsNode().boundsInRoot.top
+            rule.runOnIdle{android.util.Log.i("MailReaderGeometry","small cycle=$cycle viewHeight=${view.height} documentHeight=${view.contentHeight} scale=${view.scale} historyTop=$top")}
+            assertEquals("History must not creep after a small pinch",original,top,tolerance)
+            rule.runOnIdle{assertEquals("Window height must not track a small pinch",initialHeight,view.height)}
+            // Return to the base scale with the same small gesture backwards.
+            val back=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
+            rule.onRoot().performTouchInput {
+                down(0,back-Offset(41f,0f));down(1,back+Offset(41f,0f))
+                moveTo(0,back-Offset(40f,0f));moveTo(1,back+Offset(40f,0f));move()
+                up(1);up(0)
+            }
+            rule.waitUntil(10000){var restored=false;rule.runOnUiThread{restored=view.scale<scaleBefore*1.002f};restored}
+            rule.waitForIdle()
+            val returned=history.fetchSemanticsNode().boundsInRoot.top
+            assertEquals("History must return together with the scale",original,returned,tolerance)
+        }
+    }
     @Test fun zoomingHtmlHidesToolbarAndRetainsTheSameWebView() {
         val short=message.copy(htmlBody="<p>Текст письма для увеличения</p><img src='https://example.com/example.png'><table width='720'><tr><td>Содержимое</td></tr></table>",body="Текст письма для увеличения",attachments=listOf(Attachment("1","file.pdf","application/pdf",100)))
         rule.setContent{MailTheme{reader(short)}}
