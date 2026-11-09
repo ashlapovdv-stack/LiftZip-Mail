@@ -51,11 +51,37 @@ object HtmlMail {
         var result=doc.select("table,div,section,article,main,body").maxOfOrNull(::width)?:0
         doc.select("tr").forEach{row->
             val cells=row.children().filter{it.normalName() in setOf("td","th")}
+            // Only the row's own fixed cell widths demand layout space. The bare number
+            // of columns says nothing about how wide an adaptive table actually is, so
+            // it must never force a desktop viewport (and the matching text shrink).
             result=maxOf(result,cells.sumOf(::width))
-            if(cells.size>=3)result=maxOf(result,640)
         }
-        doc.select("style").forEach{style->result=maxOf(result,pixelWidth.findAll(style.data()).maxOfOrNull{it.groupValues[1].toInt()}?:0)}
+        doc.select("style").forEach{style->result=maxOf(result,pixelWidth.findAll(withoutMediaBlocks(style.data())).maxOfOrNull{it.groupValues[1].toInt()}?:0)}
         return result.takeIf{it>=480}?.coerceAtMost(1440)?:0
+    }
+    /** Width rules inside conditional (@media) blocks target other viewports. Applied
+     *  unconditionally they inflate the layout viewport and shrink an adaptive letter. */
+    internal fun withoutMediaBlocks(css: String): String {
+        val out=StringBuilder();var index=0
+        while(index<css.length) {
+            if(css[index]=='@') {
+                var probe=index+1
+                while(probe<css.length && (css[probe].isLetterOrDigit()||css[probe]=='-'))probe++
+                val rule=css.substring(index+1,probe).lowercase()
+                var cursor=probe
+                while(cursor<css.length && css[cursor]!=';' && css[cursor]!='{')cursor++
+                if(rule=="media" && cursor<css.length && css[cursor]=='{') {
+                    var depth=1;cursor++
+                    while(cursor<css.length && depth>0) {
+                        when(css[cursor]){'{'->depth++;'}'->depth--;else->Unit}
+                        cursor++
+                    }
+                    index=cursor;continue
+                }
+            }
+            out.append(css[index]);index++
+        }
+        return out.toString()
     }
     private fun safelist()=Safelist.relaxed().addTags("style","section","article","header","footer","main","hr","s","strike","center","font").addAttributes("font","color","face","size")
         .addAttributes(":all","style","class","id","dir","align","valign","width","height","bgcolor","border","cellpadding","cellspacing","role")
