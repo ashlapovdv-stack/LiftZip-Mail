@@ -699,8 +699,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         onSurface=Color(0xFF191919),onBackground=Color(0xFF191919),onSurfaceVariant=Color(0xFF4A4A4A),
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
-    val conversation by produceState<QuotedConversation?>(null,m.id,m.body) {
-        value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.conversation(m.body)}
+    val conversation by produceState<QuotedConversation?>(null,m.id,m.body,m.htmlBody) {
+        value=withContext(kotlinx.coroutines.Dispatchers.Default){
+            val parsed=ReaderDocuments.conversation(m.body)
+            if(HtmlMail.canSeparateHtmlHistory(m.htmlBody))parsed else parsed.copy(messages=emptyList())
+        }
     }
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
@@ -712,16 +715,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
     val readerContext=LocalContext.current
-    var previousOuterOffset by remember(m.id){mutableIntStateOf(0)}
-    var restoreOuterOffset by remember(m.id){mutableStateOf(false)}
-    LaunchedEffect(htmlZoomed,restoreOuterOffset) {
-        if(!htmlZoomed && restoreOuterOffset) {
-            // Wait for the normal reader layout to be applied before restoring its scroll.
-            withFrameNanos { }
-            outer.scrollTo(previousOuterOffset)
-            restoreOuterOffset=false
-        }
-    }
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
@@ -800,8 +793,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,zoomProgress=zoomProgress,onZoomChanged={progress->
                     zoomProgress=progress
                     val zoomed=progress>0.001f
-                    if(zoomed && !htmlZoomed)previousOuterOffset=outer.value
-                    if(!zoomed && htmlZoomed)restoreOuterOffset=true
                     scroll.zoomed=zoomed;htmlZoomed=zoomed
                 })
                 if(!htmlZoomed && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}

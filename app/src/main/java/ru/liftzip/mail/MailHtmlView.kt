@@ -46,6 +46,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var initialScale: Float?=null
     private var establishingScale=false
     private var lastHeight=0
+    private var documentRevision=0L
+    private var documentUrl=""
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     var scrollPage: ((Float)->Float)?=null
@@ -99,7 +101,13 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
                 post{if(live)zoomChanged(progress)}
             }}
-            override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){if(initialScale==null){initialScale=renderScale;establishingScale=true;val before=renderScale;fitWidth();post{if(establishingScale && renderScale==before)establishingScale=false}};publishHeight();ready()}}})}
+            override fun onPageFinished(view: WebView,url: String){
+                if(!live || url!=documentUrl)return
+                val revision=documentRevision
+                postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
+                    if(live && requestId==documentRevision){if(initialScale==null){initialScale=renderScale;establishingScale=true;val before=renderScale;fitWidth();post{if(establishingScale && renderScale==before)establishingScale=false}};publishHeight();ready()}
+                }})
+            }
         }
     }
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
@@ -108,9 +116,11 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(settings.textZoom!=zoom)settings.textZoom=zoom
         if(document===next)return
         document=next
+        documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
+        initialScale=null;establishingScale=false;lastHeight=0
         fling.abortAnimation();scrollTo(0,0)
         setInitialScale(0)
-        loadDataWithBaseURL(HtmlMail.ORIGIN,next.html,"text/html","UTF-8",null)
+        loadDataWithBaseURL(documentUrl,next.html,"text/html","UTF-8",null)
     }
     fun fitWidth() {
         if(!live || width<=0)return
@@ -190,7 +200,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         val value=HtmlMail.height(content,renderScale,viewport)
         if(value==lastHeight || content<=0)return
         lastHeight=value
-        post{if(live)heightChanged(value)}
+        val revision=documentRevision
+        post{if(live && revision==documentRevision)heightChanged(value)}
     }
     fun release(rendererGone: Boolean=false){
         if(!live)return

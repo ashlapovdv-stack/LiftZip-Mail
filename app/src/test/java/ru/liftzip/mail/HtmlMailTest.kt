@@ -68,14 +68,17 @@ class HtmlMailTest {
         val text=Jsoup.parse(doc.html).body().text()
         assertTrue(text.contains("Новый ответ"));assertFalse(text.contains("Старое письмо"))
     }
-    @Test fun uncertainQuoteBoundariesUseTheCurrentTextWithoutDuplicatingHistory() {
-        val doc=HtmlMail.document("<p>Ответ и старое письмо без структурной границы</p>","Только ответ",emptyList(),hasHistory=true)
-        assertEquals("Только ответ",Jsoup.parse(doc.html).body().text())
+    @Test fun uncertainQuoteBoundariesPreserveRichHtmlAndDoNotOfferDuplicatedHistory() {
+        val source="<p>Ответ</p><table><tr><td>Старое письмо</td></tr></table>"
+        val doc=HtmlMail.document(source,"Только ответ",emptyList(),hasHistory=true)
+        assertEquals("Старое письмо",Jsoup.parse(doc.html).selectFirst("table td")!!.text())
+        assertFalse(HtmlMail.canSeparateHtmlHistory(source))
+        assertTrue(HtmlMail.canSeparateHtmlHistory("<p>Ответ</p><blockquote>Старое письмо</blockquote>"))
     }
-    @Test fun plainFallbackKeepsMarginsEvenWhenOriginalHtmlHasStyles() {
+    @Test fun htmlWithoutQuoteBoundaryKeepsItsFormattingAndMargins() {
         val doc=HtmlMail.document("<p style='margin:0'>Ответ без границы цитаты</p>","Только ответ",emptyList(),hasHistory=true)
         assertTrue(doc.html.contains("padding-left:16px;padding-right:16px"))
-        assertEquals("Только ответ",Jsoup.parse(doc.html).body().text())
+        assertEquals("Ответ без границы цитаты",Jsoup.parse(doc.html).body().text())
     }
     @Test fun zeroInnerMarginDoesNotRemovePageInset() {
         val doc=HtmlMail.document("<p style='margin:0'>Текст</p>","Текст",emptyList())

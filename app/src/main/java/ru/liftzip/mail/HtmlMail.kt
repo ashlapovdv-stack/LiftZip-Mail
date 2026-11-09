@@ -141,11 +141,14 @@ object HtmlMail {
         if(!hasHistory)return html
         val doc=Jsoup.parseBodyFragment(html)
         val quotes=doc.select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]")
-        if(quotes.isEmpty())return null // Preserve uncertain reply boundaries using the parsed plain-text history.
+        if(quotes.isEmpty())return html
         quotes.remove()
         doc.select(".gmail_attr").remove()
         return doc.body().html()
     }
+    /** Plain-text quote parsing alone cannot identify a safe boundary inside HTML. */
+    fun canSeparateHtmlHistory(html: String): Boolean = html.isBlank() ||
+        Jsoup.parseBodyFragment(html).select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]").isNotEmpty()
     private fun horizontalInsets(style: String): Pair<Boolean,Boolean> {
         val sides=mutableMapOf("padding-left" to false,"padding-right" to false,"margin-left" to false,"margin-right" to false)
         fun nonzero(value: String): Boolean {
