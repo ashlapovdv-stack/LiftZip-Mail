@@ -131,7 +131,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                             val cssWidth=kotlin.math.ceil(extent.toDouble()/renderScale).toInt().coerceIn(1,10000)
                             val html=document?.html
                             if(html!=null){
-                                val adjusted=html.replace(Regex("(<meta name=\"viewport\" content=\"width=)[^\"]+(\")"),"$1$cssWidth$2")
+                                val adjusted=html.replace(Regex("(<meta name=\"viewport\" content=\"width=)[^,\"]+")){match->match.groupValues[1]+cssWidth}
                                 if(adjusted!=html){
                                     documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
                                     initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0

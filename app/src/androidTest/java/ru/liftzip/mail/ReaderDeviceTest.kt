@@ -73,9 +73,9 @@ class ReaderDeviceTest {
         repeat(10) { cycle->
             val center=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
             rule.onRoot().performTouchInput {
-                down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
+                down(0,center-Offset(160f,0f));down(1,center+Offset(160f,0f))
                 repeat(7) { step->
-                    val distance=30f+step*10f
+                    val distance=180f+step*20f
                     moveTo(0,center-Offset(distance,0f));moveTo(1,center+Offset(distance,0f));move()
                 }
                 up(1);up(0)
@@ -108,13 +108,10 @@ class ReaderDeviceTest {
         repeat(10) { cycle->
             val center=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
             var scaleBefore=0f;rule.runOnIdle{scaleBefore=view.scale}
-            // 40 -> 41 px half-span is about +2.5%: inside the intermediate zone where
-            // the zoom chrome must not appear and the layout must not move.
-            rule.onRoot().performTouchInput {
-                down(0,center-Offset(40f,0f));down(1,center+Offset(40f,0f))
-                moveTo(0,center-Offset(41f,0f));moveTo(1,center+Offset(41f,0f));move()
-                up(1);up(0)
-            }
+            // Exercise an actual sub-threshold WebView scale change. A 2px synthetic
+            // finger movement is below Android's pinch recognition slop and produces
+            // no scale callback, so it cannot test the geometry regression.
+            rule.runOnIdle{view.zoomBy(1.025f)}
             rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>scaleBefore*1.005f};enlarged}
             // The gesture stayed below the zoom-chrome threshold.
             rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").assertCountEquals(0)
@@ -126,13 +123,7 @@ class ReaderDeviceTest {
             rule.runOnIdle{android.util.Log.i("MailReaderGeometry","small cycle=$cycle viewHeight=${view.height} documentHeight=${view.contentHeight} scale=${view.scale} historyTop=$top")}
             assertEquals("History must not creep after a small pinch",original,top,tolerance)
             rule.runOnIdle{assertEquals("Window height must not track a small pinch",initialHeight,view.height)}
-            // Return to the base scale with the same small gesture backwards.
-            val back=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
-            rule.onRoot().performTouchInput {
-                down(0,back-Offset(41f,0f));down(1,back+Offset(41f,0f))
-                moveTo(0,back-Offset(40f,0f));moveTo(1,back+Offset(40f,0f));move()
-                up(1);up(0)
-            }
+            rule.runOnIdle{view.resetZoom()}
             rule.waitUntil(10000){var restored=false;rule.runOnUiThread{restored=view.scale<scaleBefore*1.002f};restored}
             rule.waitForIdle()
             val returned=history.fetchSemanticsNode().boundsInRoot.top
@@ -170,6 +161,9 @@ class ReaderDeviceTest {
     @Test fun longPressCopiesFullSubjectWithoutOpeningIt() {
         val subject="Очень длинная тема письма ".repeat(12)
         rule.setContent{MailTheme{reader(message.copy(subject=subject,htmlBody="<p>Письмо</p>"))}}
+        loaded()
+        rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
+        rule.waitUntil(10000){var focused=false;rule.runOnUiThread{focused=rule.activity.hasWindowFocus()};focused}
         val node=rule.onNodeWithText(subject)
         node.performTouchInput{longClick()}
         rule.runOnIdle {
@@ -241,7 +235,7 @@ class ReaderDeviceTest {
         val center=rule.onNodeWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNode().boundsInRoot.center
         var before=0f;rule.runOnIdle{before=view.scale}
         rule.onRoot().performTouchInput {
-            down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
+            down(0,center-Offset(160f,0f));down(1,center+Offset(160f,0f))
             moveTo(0,center-Offset(80f,0f));moveTo(1,center+Offset(80f,0f));move()
             up(1);up(0)
         }

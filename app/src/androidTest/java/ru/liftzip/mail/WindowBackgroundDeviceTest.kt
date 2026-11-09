@@ -77,9 +77,17 @@ class WindowBackgroundDeviceTest {
                         contrast=rule.activity.window.isNavigationBarContrastEnforced
                     }
                     assertTrue(top>0);assertTrue(bottom>0)
+                    try {
                     rule.waitUntil(15000) {
                         val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
                         if(shot==null)false else try{close(canvas,shot.getPixel(shot.width/8,shot.height-bottom/2))}finally{shot.recycle()}
+                    }
+                    } finally {
+                        val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                        if(shot!=null)try {
+                            saveDeviceBitmap(shot,"edge-${selected.key}-$mode")
+                            android.util.Log.i("MailWindowGeometry","mode=$mode style=$selected canvas=${Integer.toHexString(canvas)} pixel=${Integer.toHexString(shot.getPixel(shot.width/8,shot.height-bottom/2))} bottom=$bottom contrast=$contrast")
+                        }finally{shot.recycle()}
                     }
                     // The nav overlay and its insets can settle after the background pixel.
                     // Wait for both the measured controls and current system insets to agree.
