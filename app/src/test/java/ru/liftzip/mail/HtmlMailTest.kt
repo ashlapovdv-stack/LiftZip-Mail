@@ -68,6 +68,13 @@ class HtmlMailTest {
         val text=Jsoup.parse(doc.html).body().text()
         assertTrue(text.contains("Новый ответ"));assertFalse(text.contains("Старое письмо"))
     }
+    @Test fun foldingQuotedHtmlKeepsHeadCssAndBodyStyling() {
+        val source="<html><head><style>.reply {font-weight:bold}</style></head><body style='color:navy'><p class='reply'>Ответ</p><blockquote>Старая цитата</blockquote></body></html>"
+        val doc=Jsoup.parse(HtmlMail.document(source,"Ответ",emptyList(),hasHistory=true).html)
+        assertTrue(doc.select("style").any{it.data().contains("font-weight:bold")})
+        assertTrue(doc.select("div").any{it.attr("style").contains("color:navy")})
+        assertTrue(doc.text().contains("Ответ"));assertFalse(doc.text().contains("Старая цитата"))
+    }
     @Test fun uncertainQuoteBoundariesPreserveRichHtmlAndDoNotOfferDuplicatedHistory() {
         val source="<p>Ответ</p><table><tr><td>Старое письмо</td></tr></table>"
         val doc=HtmlMail.document(source,"Только ответ",emptyList(),hasHistory=true)

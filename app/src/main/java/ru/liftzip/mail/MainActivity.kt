@@ -332,12 +332,13 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
 
 @Composable internal fun ReaderDrawer(s: UiState,accountId: String?,serverPath: String?,onAccount: (String?)->Unit,
     onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,onServerFolder: (ServerFolder)->Unit,
-    onQueue: ()->Unit,onAdd: ()->Unit,onSettings: ()->Unit,content: @Composable ()->Unit) {
-    val drawer=rememberDrawerState(DrawerValue.Closed)
+    onQueue: ()->Unit,onAdd: ()->Unit,onSettings: ()->Unit,drawerState: DrawerState?=null,content: @Composable ()->Unit) {
+    val localDrawer=rememberDrawerState(DrawerValue.Closed)
+    val drawer=drawerState?:localDrawer
     val scope=rememberCoroutineScope()
     val density=LocalDensity.current
     val edgeStart=with(density){16.dp.toPx()};val edgeEnd=with(density){32.dp.toPx()}
-    ModalNavigationDrawer(drawerState=drawer,gesturesEnabled=false,drawerContent={
+    ModalNavigationDrawer(drawerState=drawer,gesturesEnabled=drawer.currentValue==DrawerValue.Open || drawer.targetValue==DrawerValue.Open,drawerContent={
         MailDrawerContent(s,accountId,serverPath,drawer,onAccount,onEnable,onFolder,onServerFolder,onQueue,onAdd,onSettings)
     }) {
         Box(Modifier.fillMaxSize().pointerInput(drawer,edgeStart,edgeEnd) {

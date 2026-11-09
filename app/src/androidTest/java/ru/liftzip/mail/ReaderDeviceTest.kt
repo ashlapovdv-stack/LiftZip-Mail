@@ -4,6 +4,8 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.DrawerValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -39,6 +41,30 @@ class ReaderDeviceTest {
         rule.runOnIdle {
             android.util.Log.i("MailReaderGeometry","width=${view.width} height=${view.height} contentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY}")
             assertFalse("The complete table must fit initially",view.canScrollHorizontally(1))
+        }
+    }
+    @Test fun repeatedRealPinchesReturnHistoryToTheDocument() {
+        val body="Ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
+        val html="<p>Ответ</p><div class='gmail_quote'><p>Предыдущий текст</p></div>"
+        rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
+        val view=loaded()
+        rule.waitUntil(15000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val original=history.fetchSemanticsNode().boundsInRoot.top
+        repeat(10) { cycle->
+            val center=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
+            rule.onRoot().performTouchInput {
+                down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
+                moveTo(0,center-Offset(90f,0f));moveTo(1,center+Offset(90f,0f));move();up(1);up(0)
+            }
+            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+            rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-100f),300)}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+            rule.waitForIdle()
+            val top=history.fetchSemanticsNode().boundsInRoot.top
+            rule.runOnIdle{android.util.Log.i("MailReaderGeometry","cycle=$cycle viewHeight=${view.height} documentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY} historyTop=$top")}
+            assertEquals("History must not drift after pinch",original,top,8f*view.resources.displayMetrics.density)
         }
     }
     @Test fun zoomingHtmlHidesToolbarAndRetainsTheSameWebView() {
@@ -119,14 +145,15 @@ class ReaderDeviceTest {
     @Test fun edgeDrawerBackKeepsReaderAndWebView() {
         val account=MailAccount("a","Рабочая","a@example.com",provider=Provider.REG,imapHost="example.com",smtpHost="example.com")
         val short=message.copy(body="Короткое письмо",htmlBody="<p>Короткое письмо</p>")
+        val drawer=DrawerState(DrawerValue.Closed)
         rule.setContent {MailTheme {ReaderDrawer(UiState(loaded=true,accounts=listOf(account)),"a",null,
-            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onSettings={}){reader(short)}}}
+            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onSettings={},drawerState=drawer){reader(short)}}}
         val view=loaded()
         val x=24f*view.resources.displayMetrics.density
         rule.onRoot().performTouchInput{swipe(Offset(x,height*0.7f),Offset(x+150f,height*0.7f),400)}
-        rule.waitUntil(10000){rule.onAllNodesWithText("Ваши почтовые ящики").fetchSemanticsNodes().isNotEmpty()}
+        rule.waitUntil(10000){drawer.currentValue==DrawerValue.Open}
         rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()}
-        rule.waitUntil(10000){rule.onAllNodesWithText("Ваши почтовые ящики").fetchSemanticsNodes().isEmpty()}
+        rule.waitUntil(10000){drawer.currentValue==DrawerValue.Closed}
         rule.runOnIdle{assertSame(view,webView())}
     }
     @Test fun pinchOnHistoryDoesNotOpenIt() {

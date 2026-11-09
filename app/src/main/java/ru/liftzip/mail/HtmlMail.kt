@@ -139,16 +139,16 @@ object HtmlMail {
     private fun escape(value: String)=value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
     private fun currentSource(html: String,hasHistory: Boolean): String? {
         if(!hasHistory)return html
-        val doc=Jsoup.parseBodyFragment(html)
+        val doc=Jsoup.parse(html)
         val quotes=doc.select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]")
         if(quotes.isEmpty())return html
         quotes.remove()
         doc.select(".gmail_attr").remove()
-        return doc.body().html()
+        return doc.outerHtml()
     }
     /** Plain-text quote parsing alone cannot identify a safe boundary inside HTML. */
     fun canSeparateHtmlHistory(html: String): Boolean = html.isBlank() ||
-        Jsoup.parseBodyFragment(html).select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]").isNotEmpty()
+        Jsoup.parse(html).select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]").isNotEmpty()
     private fun horizontalInsets(style: String): Pair<Boolean,Boolean> {
         val sides=mutableMapOf("padding-left" to false,"padding-right" to false,"margin-left" to false,"margin-right" to false)
         fun nonzero(value: String): Boolean {
