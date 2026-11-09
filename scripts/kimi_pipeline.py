@@ -73,13 +73,21 @@ def prepare():
 
 
 def snapshot():
+    status = Path('agent-status/status.json')
+    if not status.exists() or json.loads(status.read_text()).get('cleanup_failed'):
+        raise ValueError('Container shutdown was not confirmed; refusing concurrent snapshot')
     meta = json.loads(Path('task/meta.json').read_text())
     # Reset any agent-created staging or commits; collect the working tree against the pinned base.
     git('reset', '--mixed', meta['sha'])
     git('add', '-A')
     paths = [p.decode() for p in git('diff', '--cached', '--name-only', '-z').split(b'\0') if p]
-    if not paths or any(not allowed(p) for p in paths):
-        raise ValueError('No changes, or changes outside the allowed scope')
+    if not paths:
+        output('changed', 'false')
+        output('code', 'false')
+        print('No working-tree changes were produced; see kimi-agent-status artifact.')
+        return
+    if any(not allowed(p) for p in paths):
+        raise ValueError('Changes outside the allowed scope; refusing patch publication')
     for entry in git('ls-files', '--stage', '-z').split(b'\0'):
         if entry and entry.split(b' ', 1)[0] not in (b'100644', b'100755'):
             raise ValueError('Symlinks and submodules are not supported')
@@ -119,3 +127,4 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['prepare', 'snapshot', 'apply'])
     globals()[parser.parse_args().mode]()
+

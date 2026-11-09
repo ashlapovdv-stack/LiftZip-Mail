@@ -55,7 +55,7 @@ jobs:
   agent:
     needs: prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 22
+    timeout-minutes: 50
     permissions:
       contents: read
     outputs:
@@ -81,22 +81,13 @@ jobs:
         env:
           KIMI_MODEL_API_KEY: ${{ secrets.KIMI_API_KEY }}
         shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$KIMI_MODEL_API_KEY" || { echo 'Missing KIMI_API_KEY secret'; exit 1; }
-          timeout 1000 docker run --rm --user "$(id -u):$(id -g)" \
-            -v "$PWD/work:/work" -v "$PWD/task:/task:ro" -w /work \
-            -e KIMI_MODEL_API_KEY \
-            -e KIMI_MODEL_NAME=kimi-for-coding \
-            -e KIMI_MODEL_BASE_URL=https://api.kimi.com/coding/v1 \
-            -e KIMI_MODEL_PROVIDER_TYPE=kimi \
-            -e KIMI_CODE_HOME=/tmp/kimi-home \
-            -e KIMI_DISABLE_TELEMETRY=1 -e KIMI_CODE_NO_AUTO_UPDATE=1 \
-            -e KIMI_CODE_TRUST_WORKSPACE=1 -e KIMI_LOG_LEVEL=off \
-            -e KIMI_DISABLE_CRON=1 -e KIMI_LOOP_MAX_STEPS_PER_TURN=60 \
-            -e KIMI_LOOP_MAX_ATTEMPTS_PER_STEP=2 -e npm_config_cache=/tmp/npm-cache \
-            node:24-bookworm sh -c 'npm install --prefix /tmp/kimi-cli @moonshot-ai/kimi-code@2.5.2 >/dev/null 2>&1 && /tmp/kimi-cli/node_modules/.bin/kimi -p "$(cat /task/prompt.txt)"' \
-            > "$RUNNER_TEMP/kimi-output.txt" 2>&1
+        run: python control/scripts/kimi_runner.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: kimi-agent-status
+          path: agent-status/
+          retention-days: 30
       - name: Save byte-exact patch even after an interrupted agent
         id: save
         if: always()
@@ -109,9 +100,11 @@ jobs:
           name: kimi-result-patch
           path: result/
           retention-days: 30
-      - name: Remove private CLI output
+      - name: Require agent completion
         if: always()
-        run: rm -f "$RUNNER_TEMP/kimi-output.txt"
+        env:
+          AGENT_OUTCOME: ${{ steps.code.outcome }}
+        run: test "$AGENT_OUTCOME" = success
 
   validate:
     needs: [prepare, agent]
@@ -204,3 +197,4 @@ jobs:
             echo '::error::Branch and patch are saved. Enable Settings > Actions > General > Allow GitHub Actions to create and approve pull requests, then rerun the publish job.'
             exit 1
           fi
+
