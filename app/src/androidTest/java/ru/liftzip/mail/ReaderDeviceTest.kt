@@ -86,6 +86,21 @@ class ReaderDeviceTest {
             assertEquals("History must return to the same position",originalTop,history.fetchSemanticsNode().boundsInRoot.top,4f)
         }
     }
+    @Test fun twoFingerGestureBelowShortMailUsesItsWebView() {
+        val short=message.copy(body="Короткое письмо",htmlBody="<p>Короткое письмо</p>")
+        rule.setContent{MailTheme{reader(short)}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        var before=0f;rule.runOnIdle{before=view.scale}
+        rule.onRoot().performTouchInput {
+            val y=height*0.75f
+            down(0,Offset(center.x-35f,y));down(1,Offset(center.x+35f,y))
+            moveTo(0,Offset(center.x-100f,y));moveTo(1,Offset(center.x+100f,y))
+            up(1);up(0)
+        }
+        rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>before*1.05f};enlarged}
+        rule.runOnIdle{assertSame(view,webView())}
+    }
     @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
