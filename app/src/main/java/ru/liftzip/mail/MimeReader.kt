@@ -11,6 +11,9 @@ data class DecodedMail(val text: String, val attachments: List<Attachment>,val h
 
 class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText: (String)->String=HtmlMail::text) {
     private val maxBytes=512*1024
+    private val truncatedText="[Показана часть длинного письма]"
+    private fun limitText(value: String)=if(value.length>maxBytes)value.take(maxBytes)+"\n\n$truncatedText" else value
+    private fun limitHtml(value: String)=if(value.length>maxBytes)value.take(maxBytes)+"<p>$truncatedText</p>" else value
     fun read(part: Part, path: String="root", depth: Int=0): DecodedMail {
         checkCancelled()
         if(depth>12) return DecodedMail("[Часть письма не показана: слишком сложная структура]",emptyList())
@@ -29,8 +32,8 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
                 val preferred=(0 until multi.count.coerceAtMost(100)).indexOfFirst { multi.getBodyPart(it).isMimeType("text/plain") }
                 return DecodedMail((pieces.getOrNull(preferred)?.takeIf{it.text.isNotBlank()}?:pieces.firstOrNull { it.text.isNotBlank() })?.text.orEmpty(),pieces.flatMap { it.attachments },pieces.firstOrNull{it.html.isNotBlank()}?.html.orEmpty())
             }
-            val html=if(pieces.any{it.html.isNotBlank()})pieces.filter{it.html.isNotBlank() || it.text.isNotBlank()}.joinToString("<hr>"){it.html.ifBlank{HtmlMail.plain(it.text)}}.take(maxBytes)else ""
-            return DecodedMail(pieces.map { it.text }.filter(String::isNotBlank).joinToString("\n\n").take(maxBytes),pieces.flatMap { it.attachments },html)
+            val html=if(pieces.any{it.html.isNotBlank()})limitHtml(pieces.filter{it.html.isNotBlank() || it.text.isNotBlank()}.joinToString("<hr>"){it.html.ifBlank{HtmlMail.plain(it.text)}})else ""
+            return DecodedMail(limitText(pieces.map { it.text }.filter(String::isNotBlank).joinToString("\n\n")),pieces.flatMap { it.attachments },html)
         }
         if(part.isMimeType("text/plain")||part.isMimeType("text/html")) {
             checkCancelled()
@@ -50,9 +53,9 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
             }
             val text=String(buffer.toByteArray(),charset)
             checkCancelled()
-            val html=if(part.isMimeType("text/html"))HtmlMail.cleanSource(text) else ""
+            val html=if(part.isMimeType("text/html"))HtmlMail.cleanSource(text)+(if(truncated)"<p>$truncatedText</p>" else "") else ""
             val clean=if(part.isMimeType("text/html"))htmlToText(html) else text
-            return DecodedMail(clean.trim()+(if(truncated)"\n\n[Показана часть длинного письма]" else ""),emptyList(),html)
+            return DecodedMail(clean+(if(truncated && html.isBlank())"\n\n$truncatedText" else ""),emptyList(),html)
         }
         return DecodedMail("",emptyList())
     }

@@ -16,7 +16,7 @@ sealed interface MailImageSource {
     data class Remote(val url: String): MailImageSource
     data class Data(val mime: String,val base64: String): MailImageSource
 }
-data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSource>,val externalImages: Boolean,val layoutWidth: Int=0)
+data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSource>,val externalImages: Boolean,val layoutWidth: Int=0,val externalAllowed: Boolean=false)
 
 /** HTML remains data. Only the renderer's generated image URLs can request resources. */
 object HtmlMail {
@@ -139,13 +139,16 @@ object HtmlMail {
     private fun escape(value: String)=value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
     private fun currentSource(html: String,hasHistory: Boolean): String? {
         if(!hasHistory)return html
-        val doc=Jsoup.parseBodyFragment(html)
+        val doc=Jsoup.parse(html)
         val quotes=doc.select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]")
-        if(quotes.isEmpty())return null // Preserve uncertain reply boundaries using the parsed plain-text history.
+        if(quotes.isEmpty())return html
         quotes.remove()
         doc.select(".gmail_attr").remove()
-        return doc.body().html()
+        return doc.outerHtml()
     }
+    /** Plain-text quote parsing alone cannot identify a safe boundary inside HTML. */
+    fun canSeparateHtmlHistory(html: String): Boolean = html.isBlank() ||
+        Jsoup.parse(html).select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]").isNotEmpty()
     private fun horizontalInsets(style: String): Pair<Boolean,Boolean> {
         val sides=mutableMapOf("padding-left" to false,"padding-right" to false,"margin-left" to false,"margin-right" to false)
         fun nonzero(value: String): Boolean {
@@ -219,7 +222,7 @@ object HtmlMail {
             img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
             .mail-plain{white-space:pre-wrap}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
-        return MailHtmlDocument(wrapped,resources,hasExternal,layout)
+        return MailHtmlDocument(wrapped,resources,hasExternal,layout,external)
     }
     /** One forward scan, including malformed input; nested url( text cannot cause regex backtracking. */
     private fun rewriteCss(value: String,resolve: (String)->String?): String {

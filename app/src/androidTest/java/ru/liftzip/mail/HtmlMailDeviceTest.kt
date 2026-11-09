@@ -74,6 +74,30 @@ class HtmlMailDeviceTest {
         rule.waitUntil(5000){var fit=false;rule.runOnUiThread{fit=kotlin.math.abs(view.scale-scale)<scale*0.05f};fit}
         rule.runOnIdle{assertFalse(view.canScrollHorizontally(1))}
     }
+    @Test fun replacingDocumentIgnoresOldReadinessAndKeepsTheNewBody() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicInteger()
+        val first=HtmlMail.document("<p>Старый документ</p>","",emptyList(),identity="old")
+        val second=HtmlMail.document("<p>Новый документ</p>","",emptyList(),identity="new")
+        lateinit var view: MailHtmlWebView
+        rule.setContent {AndroidView(factory={MailHtmlWebView(c,{null},{},{},{ready.incrementAndGet()}).also{
+            view=it;it.show(first);it.show(second)
+        }},modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+        rule.waitUntil(15000){ready.get()>0}
+        assertEquals(1,matches(view,"Новый документ"));assertEquals(0,matches(view,"Старый документ"))
+        assertEquals("Only the current document may report readiness",1,ready.get())
+    }
+    @Test fun delayedInlineImageDoesNotBlockInitialDocumentReadiness() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicBoolean();val entered=AtomicBoolean()
+        val release=java.util.concurrent.CountDownLatch(1)
+        val attachment=Attachment("1","chart.png","image/png",100,"slow")
+        val doc=HtmlMail.document("<p>Текст доступен сразу</p><img src='cid:slow' width='40' height='40'>","",listOf(attachment))
+        try {
+            rule.setContent {AndroidView(factory={MailHtmlWebView(c,{entered.set(true);release.await();image()},{},{},{ready.set(true)}).also{it.show(doc)}},
+                modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+            rule.waitUntil(15000){entered.get()}
+            rule.waitUntil(15000){ready.get()}
+        }finally{release.countDown()}
+    }
     @Test fun newsletterCssIsHiddenInlineImageIsDrawnAndALinkOpensOnlyThroughTheApp() {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val loaded=AtomicBoolean();val clicks=AtomicReference<String?>(null);val images=AtomicInteger();val png=image()
@@ -105,6 +129,21 @@ class HtmlMailDeviceTest {
         rule.runOnIdle{loaded.set(false);view.show(allowed)}
         rule.waitUntil(15_000){loaded.get()};assertEquals(1,images.get())
         rule.waitUntil(10_000){greenPixels()>50};saveDeviceScreenshot(rule,"html-remote")
+    }
+    @Test fun permittingImagesRetainsZoomAndReadingPosition() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicInteger()
+        val source="<p>Начало</p><div style='height:1600px'>Текст</div><img src='https://images.example.com/chart.png' width='40' height='40'>"
+        val blocked=HtmlMail.document(source,"",emptyList(),identity="toggle")
+        val allowed=HtmlMail.document(source,"",emptyList(),external=true,identity="toggle")
+        lateinit var view: MailHtmlWebView;var base=0f
+        rule.setContent {AndroidView(factory={MailHtmlWebView(c,{image()},{},{},{ready.incrementAndGet()}).also{view=it;it.show(blocked)}},modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+        rule.waitUntil(15000){ready.get()==1}
+        rule.runOnIdle{base=view.scale;view.zoomBy(2f)}
+        rule.waitUntil(10000){var value=false;rule.runOnUiThread{value=view.scale>base*1.4f};value}
+        var beforeScale=0f;var beforeY=0
+        rule.runOnIdle{view.scrollTo(0,200);beforeScale=view.scale;beforeY=view.scrollY;view.show(allowed)}
+        rule.waitUntil(15000){ready.get()>=2}
+        rule.runOnIdle{assertEquals(beforeScale,view.scale,beforeScale*0.1f);assertTrue(kotlin.math.abs(beforeY-view.scrollY)<=20)}
     }
     @Test fun lightHtmlCanvasMatchesTheSelectedTheme() {
         val c=ApplicationProvider.getApplicationContext<Context>();val png=image();val requests=AtomicInteger()

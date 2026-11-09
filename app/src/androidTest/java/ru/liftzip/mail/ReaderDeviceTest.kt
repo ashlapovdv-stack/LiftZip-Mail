@@ -4,6 +4,8 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.DrawerValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -29,6 +31,64 @@ class ReaderDeviceTest {
     private fun loaded(): MailHtmlWebView {
         rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.contentHeight>0 && it.height>20}?:false};ready}
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
+    }
+    @Test fun unavailableBodyShowsErrorWithoutPresentingThePreviewAsMail() {
+        val m=message.copy(body="Текст из списка",htmlBody="",contentCached=false,previewOnly=false)
+        var retries=0
+        rule.setContent{MailTheme{ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("unused")},{},{},{},{},{},{},loadingError="Нет соединения",onRetryLoad={retries++})}}
+        rule.onNodeWithText("Не удалось загрузить письмо: Нет соединения").assertIsDisplayed()
+        rule.onAllNodesWithTag("mail-body").assertCountEquals(0)
+        rule.onNodeWithText("Повторить").performClick()
+        rule.runOnIdle{assertEquals(1,retries)}
+    }
+    // Exercise the production reader, including its header and bounded WebView.
+    @Test fun realReaderFitsAWideNestedTableAtInitialScale() {
+        val html="""<table style='width:2200px'><tr><td>Первый столбец</td><td><table style='width:900px'><tr><td>Последний столбец</td></tr></table></td></tr></table>"""
+        rule.setContent{MailTheme{reader(message.copy(body="Первый столбец Последний столбец",htmlBody=html))}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
+        rule.waitForIdle()
+        rule.runOnIdle {
+            android.util.Log.i("MailReaderGeometry","width=${view.width} height=${view.height} contentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY}")
+            assertFalse("The complete table must fit initially",view.canScrollHorizontally(1))
+        }
+        rule.runOnIdle{view.zoomBy(2f)}
+        rule.waitUntil(10000){rule.onAllNodesWithTag("reader-horizontal-scrollbar").fetchSemanticsNodes().isNotEmpty()}
+        val bottom=rule.onNodeWithTag("reader-horizontal-scrollbar").fetchSemanticsNode().boundsInRoot.bottom
+        rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-150f),300)}
+        rule.waitForIdle()
+        assertEquals(bottom,rule.onNodeWithTag("reader-horizontal-scrollbar").fetchSemanticsNode().boundsInRoot.bottom,1f)
+    }
+    @Test fun repeatedRealPinchesReturnHistoryToTheDocument() {
+        val body="Ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст"
+        val html="<p>Ответ</p><div class='gmail_quote'><p>Предыдущий текст</p></div>"
+        rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
+        rule.waitUntil(15000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val original=history.fetchSemanticsNode().boundsInRoot.top
+        repeat(10) { cycle->
+            val center=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
+            rule.onRoot().performTouchInput {
+                down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
+                repeat(7) { step->
+                    val distance=30f+step*10f
+                    moveTo(0,center-Offset(distance,0f));moveTo(1,center+Offset(distance,0f));move()
+                }
+                up(1);up(0)
+            }
+            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+            rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-100f),300)}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+            rule.waitForIdle()
+            val top=history.fetchSemanticsNode().boundsInRoot.top
+            rule.runOnIdle{android.util.Log.i("MailReaderGeometry","cycle=$cycle viewHeight=${view.height} documentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY} historyTop=$top")}
+            assertEquals("History must not drift after pinch",original,top,8f*view.resources.displayMetrics.density)
+        }
     }
     @Test fun zoomingHtmlHidesToolbarAndRetainsTheSameWebView() {
         val short=message.copy(htmlBody="<p>Текст письма для увеличения</p><img src='https://example.com/example.png'><table width='720'><tr><td>Содержимое</td></tr></table>",body="Текст письма для увеличения",attachments=listOf(Attachment("1","file.pdf","application/pdf",100)))
@@ -108,14 +168,20 @@ class ReaderDeviceTest {
     @Test fun edgeDrawerBackKeepsReaderAndWebView() {
         val account=MailAccount("a","Рабочая","a@example.com",provider=Provider.REG,imapHost="example.com",smtpHost="example.com")
         val short=message.copy(body="Короткое письмо",htmlBody="<p>Короткое письмо</p>")
+        val drawer=DrawerState(DrawerValue.Closed)
         rule.setContent {MailTheme {ReaderDrawer(UiState(loaded=true,accounts=listOf(account)),"a",null,
-            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onSettings={}){reader(short)}}}
+            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onSettings={},drawerState=drawer){reader(short)}}}
         val view=loaded()
         val x=24f*view.resources.displayMetrics.density
         rule.onRoot().performTouchInput{swipe(Offset(x,height*0.7f),Offset(x+150f,height*0.7f),400)}
-        rule.waitUntil(10000){rule.onAllNodesWithText("Ваши почтовые ящики").fetchSemanticsNodes().isNotEmpty()}
+        rule.waitUntil(10000){drawer.currentValue==DrawerValue.Open}
         rule.runOnUiThread{rule.activity.onBackPressedDispatcher.onBackPressed()}
-        rule.waitUntil(10000){rule.onAllNodesWithText("Ваши почтовые ящики").fetchSemanticsNodes().isEmpty()}
+        rule.waitUntil(10000){drawer.currentValue==DrawerValue.Closed}
+        rule.runOnIdle{assertSame(view,webView())}
+        rule.onRoot().performTouchInput{swipe(Offset(x,height*0.7f),Offset(x+150f,height*0.7f),400)}
+        rule.waitUntil(10000){drawer.currentValue==DrawerValue.Open}
+        rule.onRoot().performTouchInput{swipe(Offset(width*0.65f,height*0.5f),Offset(width*0.1f,height*0.5f),400)}
+        rule.waitUntil(10000){drawer.currentValue==DrawerValue.Closed}
         rule.runOnIdle{assertSame(view,webView())}
     }
     @Test fun pinchOnHistoryDoesNotOpenIt() {

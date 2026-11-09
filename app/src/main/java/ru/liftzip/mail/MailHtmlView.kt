@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
@@ -40,12 +41,21 @@ import kotlin.math.roundToInt
 
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
-    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={}): WebView(context) {
+    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={},
+    private val horizontalChanged: (HorizontalScrollMetrics)->Unit={}): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
     private var renderScale=resources.displayMetrics.density
     private var initialScale: Float?=null
     private var establishingScale=false
     private var lastHeight=0
+    private var documentRevision=0L
+    private var documentUrl=""
+    private var visualPreparationRevision=-1L
+    private var measuredInitialLayout=false
+    private var layoutRevision=0L
+    private var layoutPending=false
+    private data class ReadingAnchor(val relativeScale: Float,val cssX: Float,val cssY: Float)
+    private var pendingAnchor: ReadingAnchor?=null
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     var scrollPage: ((Float)->Float)?=null
@@ -66,6 +76,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     init {
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
         scrollBarStyle=View.SCROLLBARS_OUTSIDE_OVERLAY
+        isHorizontalScrollBarEnabled=false
         settings.apply {
             javaScriptEnabled=false;javaScriptCanOpenWindowsAutomatically=false;domStorageEnabled=false
             allowFileAccess=false;allowContentAccess=false;setSupportMultipleWindows(false)
@@ -95,11 +106,55 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 (parent as? ViewGroup)?.removeView(this@MailHtmlWebView)
                 release(rendererGone=true);failed();return true
             }
-            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale;establishingScale=false}else initialScale?.let{base->
+            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
                 post{if(live)zoomChanged(progress)}
             }}
-            override fun onPageFinished(view: WebView,url: String){if(live)postVisualStateCallback(1,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){if(live){if(initialScale==null){initialScale=renderScale;establishingScale=true;val before=renderScale;fitWidth();post{if(establishingScale && renderScale==before)establishingScale=false}};publishHeight();ready()}}})}
+            override fun onPageCommitVisible(view: WebView,url: String){prepareVisibleDocument(url)}
+            override fun onPageFinished(view: WebView,url: String){prepareVisibleDocument(url)}
+            private fun prepareVisibleDocument(url: String){
+                if(!live || url!=documentUrl || visualPreparationRevision==documentRevision)return
+                val revision=documentRevision
+                visualPreparationRevision=revision
+                postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
+                    if(!live || requestId!=documentRevision)return
+                    // Wide HTML can exceed the sender's declared viewport. Measure the
+                    // rendered scroll extent while hidden and lay out once at that width.
+                    // This is done only during the initial preparation, never on pinch.
+                    if(!measuredInitialLayout && width>0 && renderScale>0f){
+                        measuredInitialLayout=true
+                        val extent=computeHorizontalScrollRange()
+                        if(extent>width+2){
+                            val cssWidth=kotlin.math.ceil(extent.toDouble()/renderScale).toInt().coerceIn(1,10000)
+                            val html=document?.html
+                            if(html!=null){
+                                val adjusted=html.replace(Regex("(<meta name=\"viewport\" content=\"width=)[^\"]+(\")"),"$1$cssWidth$2")
+                                if(adjusted!=html){
+                                    documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
+                                    initialScale=null;establishingScale=false;lastHeight=0
+                                    setInitialScale(0);loadDataWithBaseURL(documentUrl,adjusted,"text/html","UTF-8",null)
+                                    return
+                                }
+                            }
+                        }
+                    }
+                    if(initialScale==null){
+                        initialScale=renderScale;establishingScale=true;fitWidth()
+                        postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(fitRequest: Long){
+                            if(live && fitRequest==documentRevision){
+                                initialScale=renderScale;establishingScale=false
+                                val anchor=pendingAnchor;pendingAnchor=null
+                                if(anchor!=null && kotlin.math.abs(anchor.relativeScale-1f)>0.03f){
+                                    zoomBy(anchor.relativeScale.coerceIn(0.01f,100f))
+                                    postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(restoreRequest: Long){
+                                        if(live && restoreRequest==documentRevision){scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
+                                    }})
+                                }else {if(anchor!=null)scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
+                            }
+                        }})
+                    }else {publishHeight();ready()}
+                }})
+            }
         }
     }
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
@@ -107,10 +162,18 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         val zoom=(fontScale*100).toInt().coerceIn(50,300)
         if(settings.textZoom!=zoom)settings.textZoom=zoom
         if(document===next)return
+        val old=document
+        val base=initialScale
+        pendingAnchor=if(old!=null && old.externalAllowed!=next.externalAllowed && base!=null && base>0f && renderScale>0f)
+            ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale) else null
         document=next
+        documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
+        layoutRevision++;layoutPending=false
+        measuredInitialLayout=false
+        initialScale=null;establishingScale=false;lastHeight=0
         fling.abortAnimation();scrollTo(0,0)
         setInitialScale(0)
-        loadDataWithBaseURL(HtmlMail.ORIGIN,next.html,"text/html","UTF-8",null)
+        loadDataWithBaseURL(documentUrl,next.html,"text/html","UTF-8",null)
     }
     fun fitWidth() {
         if(!live || width<=0)return
@@ -179,18 +242,31 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         }
         return super.onTouchEvent(event)
     }
-    override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight()}
+    override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight();publishHorizontal()}
+    override fun onScrollChanged(l: Int,t: Int,oldl: Int,oldt: Int){super.onScrollChanged(l,t,oldl,oldt);publishHorizontal()}
+    private fun publishHorizontal(){
+        if(live)horizontalChanged(HorizontalScrollMetrics(computeHorizontalScrollOffset(),computeHorizontalScrollExtent(),computeHorizontalScrollRange()))
+    }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) {
         super.onSizeChanged(w,h,oldw,oldh)
-        if(h!=oldh && atInitialScale()){lastHeight=0;post{publishHeight()}}
+        if(w!=oldw || h!=oldh){
+            val layout=++layoutRevision;val documentId=documentRevision
+            layoutPending=true
+            post {
+                if(live && layout==layoutRevision && documentId==documentRevision)postVisualStateCallback(layout,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
+                    if(live && requestId==layoutRevision && documentId==documentRevision){layoutPending=false;lastHeight=0;publishHeight()}
+                }})
+            }
+        }
     }
     private fun publishHeight() {
-        if(!live)return
+        if(!live || layoutPending)return
         val content=contentHeight
         val value=HtmlMail.height(content,renderScale,viewport)
         if(value==lastHeight || content<=0)return
         lastHeight=value
-        post{if(live)heightChanged(value)}
+        val revision=documentRevision
+        post{if(live && revision==documentRevision)heightChanged(value)}
     }
     fun release(rendererGone: Boolean=false){
         if(!live)return
@@ -222,6 +298,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     val ready=document
+    var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
+    val latestRendered by rememberUpdatedState({rendered=true})
     val viewport=((scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels)-with(density){20.dp.roundToPx()}).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     if(failed) {
         Text("Показываем текстовую версию письма",Modifier.padding(vertical=10.dp),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -230,6 +308,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     else if(ready==null)Text("Готовим письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
+        if(!rendered)Text("Подготавливаем письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
         if(ready.externalImages && zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
             if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
         }}
@@ -242,14 +321,14 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                         val actual=web?.height?:0
                         val restored=height<=8 || actual<=height+with(density){2.dp.roundToPx()}
                         if(!latestExpanded && web?.atInitialScale()!=false && restored)height=measured
-                    },failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)})
+                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},horizontalChanged={scroll?.horizontal=it})
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)
                     addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                 }catch(e: Exception){failed=true;loader.close()}
             }},
-                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=(10f*(1f-zoomProgress)).dp).height(with(density){val normal=height.coerceAtMost(viewport);val expanded=scroll?.viewportHeight?.takeIf{it>0}?:viewport;(normal+(expanded-normal)*zoomProgress).toDp()})
+                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=(10f*(1f-zoomProgress)).dp).height(with(density){val normal=height.coerceAtMost(viewport);val expanded=scroll?.viewportHeight?.takeIf{it>0}?:viewport;(normal+(expanded-normal)*zoomProgress).toDp()}).graphicsLayer{alpha=if(rendered)1f else 0f}
                     .onGloballyPositioned{scroll?.position(it.positionInWindow().y.toInt())},
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})

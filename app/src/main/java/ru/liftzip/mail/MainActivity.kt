@@ -279,7 +279,7 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                     if(message==null)MissingMessageScreen(onBack={goInbox()})
                     else ReaderDrawer(s,currentAccount,serverPath,onAccount={currentAccount=it;serverPath=null;goInbox()},onEnable=vm::setAccountEnabled,
                         onFolder={folder=it;serverPath=null;goInbox()},onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path;goInbox()},
-                        onQueue={route="actions"},onAdd={route="add"},onSettings={route="settings"}) { ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly,ownAddresses=s.accounts.map{it.email},attachmentBusy=s.attachmentBusy,onBack={goInbox()},onStar={vm.star(message)},
+                        onQueue={route="actions"},onAdd={route="add"},onSettings={route="settings"}) { ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly || !message.contentCached,ownAddresses=s.accounts.map{it.email},attachmentBusy=s.attachmentBusy,onBack={goInbox()},onStar={vm.star(message)},
                         onInline={file->vm.inlineImage(message,file)},onThumbnail={file->vm.thumbnailImage(message,file)},onLink={url->HtmlMail.link(url)?.let{safe->runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(safe)).addCategory(Intent.CATEGORY_BROWSABLE))}.onFailure{vm.notice("Не удалось открыть ссылку",error=true)}}},
                         onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
@@ -287,7 +287,7 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                         onSpam={vm.spamMessages(setOf(message.id),SpamRules.junk(message)){moved->if(message.id in moved && route=="reader" && selected==message.id)goInbox()}},
                         onReply={compose(ComposeDraft(accountId=message.accountId,to=message.senderEmail,responseTo=message.id,responseKind="reply",
                             subject=if(message.subject.startsWith("Re:",true))message.subject else "Re: ${message.subject}",body="\n\n──────────\n${message.sender} пишет:\n${message.body}"))},
-                        onForward={
+                        loadingError=s.openingError?.takeIf{it.first==message.id}?.second,onRetryLoad={vm.openMessage(message.id)},onForward={
                             val senderId=SenderRules.forNewMessage(s.accounts,s.defaultAccountId,message.accountId)?:message.accountId
                             vm.forward(message,senderId){ready->if(route=="reader" && selected==message.id)compose(ready)else vm.notice("Пересылка подготовлена в черновиках")}
                         }) }
@@ -332,12 +332,13 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
 
 @Composable internal fun ReaderDrawer(s: UiState,accountId: String?,serverPath: String?,onAccount: (String?)->Unit,
     onEnable: (String,Boolean)->Unit,onFolder: (MailFolder)->Unit,onServerFolder: (ServerFolder)->Unit,
-    onQueue: ()->Unit,onAdd: ()->Unit,onSettings: ()->Unit,content: @Composable ()->Unit) {
-    val drawer=rememberDrawerState(DrawerValue.Closed)
+    onQueue: ()->Unit,onAdd: ()->Unit,onSettings: ()->Unit,drawerState: DrawerState?=null,content: @Composable ()->Unit) {
+    val localDrawer=rememberDrawerState(DrawerValue.Closed)
+    val drawer=drawerState?:localDrawer
     val scope=rememberCoroutineScope()
     val density=LocalDensity.current
     val edgeStart=with(density){16.dp.toPx()};val edgeEnd=with(density){32.dp.toPx()}
-    ModalNavigationDrawer(drawerState=drawer,gesturesEnabled=false,drawerContent={
+    ModalNavigationDrawer(drawerState=drawer,gesturesEnabled=drawer.currentValue==DrawerValue.Open || drawer.targetValue==DrawerValue.Open,drawerContent={
         MailDrawerContent(s,accountId,serverPath,drawer,onAccount,onEnable,onFolder,onServerFolder,onQueue,onAdd,onSettings)
     }) {
         Box(Modifier.fillMaxSize().pointerInput(drawer,edgeStart,edgeEnd) {
@@ -401,7 +402,7 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.17",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · 0.5.18",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -691,7 +692,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     if(!card)HorizontalDivider(Modifier.padding(start=75.dp),color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.45f))
 }
 
-@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null,onThumbnail: (suspend (Attachment)->OpenedAttachment)?=null) {
+@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null,onThumbnail: (suspend (Attachment)->OpenedAttachment)?=null,loadingError: String?=null,onRetryLoad: ()->Unit={}) {
     val theme=MaterialTheme.colorScheme
     val style=LocalMailStyle.current
     val accent=if(isSystemInDarkTheme())if(style==MailStyle.STANDARD)Olive else style.accent else theme.primary
@@ -699,8 +700,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         onSurface=Color(0xFF191919),onBackground=Color(0xFF191919),onSurfaceVariant=Color(0xFF4A4A4A),
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
-    val conversation by produceState<QuotedConversation?>(null,m.id,m.body) {
-        value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.conversation(m.body)}
+    val conversation by produceState<QuotedConversation?>(null,m.id,m.body,m.htmlBody) {
+        value=withContext(kotlinx.coroutines.Dispatchers.Default){
+            val parsed=ReaderDocuments.conversation(m.body)
+            if(HtmlMail.canSeparateHtmlHistory(m.htmlBody))parsed else parsed.copy(messages=emptyList())
+        }
     }
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
@@ -712,16 +716,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
     val readerContext=LocalContext.current
-    var previousOuterOffset by remember(m.id){mutableIntStateOf(0)}
-    var restoreOuterOffset by remember(m.id){mutableStateOf(false)}
-    LaunchedEffect(htmlZoomed,restoreOuterOffset) {
-        if(!htmlZoomed && restoreOuterOffset) {
-            // Wait for the normal reader layout to be applied before restoring its scroll.
-            withFrameNanos { }
-            outer.scrollTo(previousOuterOffset)
-            restoreOuterOffset=false
-        }
-    }
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
@@ -795,19 +789,30 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             HorizontalDivider(Modifier.padding(vertical=10.dp))
             }}
             val parsed=conversation
-            if(m.previewOnly || parsed==null)Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+            if(m.previewOnly || !m.contentCached || parsed==null) {
+                if(loadingError!=null)Column(Modifier.padding(16.dp)) {
+                    Text("Не удалось загрузить письмо: $loadingError",color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick=onRetryLoad){Text("Повторить")}
+                } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=24.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             else {
                 MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,zoomProgress=zoomProgress,onZoomChanged={progress->
                     zoomProgress=progress
                     val zoomed=progress>0.001f
-                    if(zoomed && !htmlZoomed)previousOuterOffset=outer.value
-                    if(!zoomed && htmlZoomed)restoreOuterOffset=true
                     scroll.zoomed=zoomed;htmlZoomed=zoomed
                 })
                 if(!htmlZoomed && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
             }
             if(!htmlZoomed)Spacer(Modifier.height(100.dp))
         }
+        val showHorizontal by remember(scroll){derivedStateOf{scroll.horizontal.let{it.range>it.extent && it.extent>0}}}
+        if(htmlZoomed && showHorizontal)Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start=4.dp,end=80.dp,bottom=4.dp).height(4.dp).testTag("reader-horizontal-scrollbar").drawBehind {
+            val horizontal=scroll.horizontal
+            val track=size.width
+            val bar=(track*horizontal.extent.toFloat()/horizontal.range).coerceIn(16.dp.toPx(),track)
+            val start=((track-bar)*horizontal.offset.toFloat()/(horizontal.range-horizontal.extent).coerceAtLeast(1)).coerceIn(0f,track-bar)
+            drawRoundRect(Color.Gray.copy(alpha=0.65f),topLeft=Offset(start,0f),size=androidx.compose.ui.geometry.Size(bar,size.height),cornerRadius=androidx.compose.ui.geometry.CornerRadius(size.height/2))
+        })
         if(actionsExpanded)Box(Modifier.matchParentSize().background(Color.White.copy(alpha=0.78f)).clickable{actionsExpanded=false}.semantics{contentDescription="Закрыть действия"})
         }
     }

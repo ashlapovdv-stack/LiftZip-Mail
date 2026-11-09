@@ -14,6 +14,7 @@ class ReaderScroll(val outer: ScrollState) {
         set(value){bodyAnchor+=field-value;field=value}
     var viewportHeight by mutableIntStateOf(0)
     var view: MailHtmlWebView?=null
+    var horizontal by mutableStateOf(HorizontalScrollMetrics())
     private var bodyAnchor=0
     fun position(top: Int){bodyAnchor=outer.value+top-viewportTop}
     val connection=object: NestedScrollConnection {
@@ -39,3 +40,5 @@ class ReaderScroll(val outer: ScrollState) {
     fun attach(body: MailHtmlWebView){view=body;body.scrollPage={scroll(it)}}
     fun detach(body: MailHtmlWebView){if(view===body)view=null;body.scrollPage=null}
 }
+
+data class HorizontalScrollMetrics(val offset: Int=0,val extent: Int=0,val range: Int=0)

@@ -39,6 +39,16 @@ class MimeReaderTest {
         assertTrue(decoded.text.length<525000)
         assertTrue(decoded.text.contains("Показана часть"))
     }
+    @Test fun truncatedHtmlMakesTheLimitVisibleInTheRenderedBody() {
+        val message=MimeMessage(session).apply{setContent("<p>"+"x".repeat(600000)+"</p>","text/html; charset=UTF-8");saveChanges()}
+        val decoded=MimeReader().read(message)
+        assertTrue(decoded.html.contains("[Показана часть длинного письма]"))
+        assertTrue(decoded.text.contains("[Показана часть длинного письма]"))
+    }
+    @Test fun plainPreservesLeadingAndTrailingLineBreaks() {
+        val message=MimeMessage(session).apply{setText("\n  Строка\n\n","UTF-8");saveChanges()}
+        assertEquals("\n  Строка\n\n",MimeReader().read(message).text)
+    }
     @Test fun htmlIsTextAndNeverExecuted() {
         val message=MimeMessage(session).apply{setContent("<p>Здравствуйте</p>","text/html; charset=UTF-8");saveChanges()}
         assertEquals("Здравствуйте",reader.read(message).text)
@@ -65,6 +75,23 @@ class MimeReaderTest {
         val complete=MimeReader().read(root)
         assertEquals("photo@example.com",complete.attachments.single().contentId);assertEquals("image/png",complete.attachments.single().mime)
         assertEquals("1",complete.attachments.single().path)
+    }
+    @Test fun mixedRelatedAlternativeRetainsOneHtmlBodyAndCidAttachment() {
+        val alt=MimeMultipart("alternative").apply {
+            addBodyPart(MimeBodyPart().apply{setText("Plain version","UTF-8")})
+            addBodyPart(MimeBodyPart().apply{setContent("<p>Rich version</p><img src='cid:logo@example.com'>","text/html; charset=UTF-8")})
+        }
+        val image=MimeBodyPart().apply{setContent(byteArrayOf(1,2,3),"image/png");setHeader("Content-ID","<logo@example.com>");disposition=Part.INLINE}
+        val related=MimeMultipart("related").apply{addBodyPart(MimeBodyPart().apply{setContent(alt)});addBodyPart(image)}
+        val mixed=MimeMultipart("mixed").apply{
+            addBodyPart(MimeBodyPart().apply{setContent(related)})
+            addBodyPart(MimeBodyPart().apply{setText("attachment","UTF-8");fileName="note.txt";disposition=Part.ATTACHMENT})
+        }
+        val decoded=MimeReader().read(MimeMessage(session).apply{setContent(mixed);saveChanges()})
+        assertEquals("Plain version",decoded.text)
+        assertTrue(decoded.html.contains("Rich version"));assertTrue(decoded.html.contains("cid:logo@example.com"))
+        assertEquals(1,Regex("Rich version").findAll(decoded.html).count())
+        assertEquals(setOf("logo@example.com",""),decoded.attachments.map{it.contentId}.toSet())
     }
     @Test fun newsletterCssDoesNotLeakIntoPreviewsOrReplyText() {
         val m=MimeMessage(session).apply{setContent("<style>p {margin:0} @media screen {.x {width:100%!important}}</style><p>Прогноз Q4</p><a href='https://example.com'>Читать</a>","text/html; charset=UTF-8");saveChanges()}
