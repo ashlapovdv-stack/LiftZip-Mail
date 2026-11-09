@@ -32,6 +32,15 @@ class ReaderDeviceTest {
         rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.contentHeight>0 && it.height>20}?:false};ready}
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
     }
+    @Test fun unavailableBodyShowsErrorWithoutPresentingThePreviewAsMail() {
+        val m=message.copy(body="Текст из списка",htmlBody="",contentCached=false,previewOnly=false)
+        var retries=0
+        rule.setContent{MailTheme{ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("unused")},{},{},{},{},{},{},loadingError="Нет соединения",onRetryLoad={retries++})}}
+        rule.onNodeWithText("Не удалось загрузить письмо: Нет соединения").assertIsDisplayed()
+        rule.onAllNodesWithTag("mail-body").assertCountEquals(0)
+        rule.onNodeWithText("Повторить").performClick()
+        rule.runOnIdle{assertEquals(1,retries)}
+    }
     @Test fun realReaderFitsAWideNestedTableAtInitialScale() {
         val html="""<table style='width:2200px'><tr><td>Первый столбец</td><td><table style='width:900px'><tr><td>Последний столбец</td></tr></table></td></tr></table>"""
         rule.setContent{MailTheme{reader(message.copy(body="Первый столбец Последний столбец",htmlBody=html))}}
