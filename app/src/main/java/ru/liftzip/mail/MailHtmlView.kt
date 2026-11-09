@@ -42,7 +42,8 @@ import kotlin.math.roundToInt
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
     private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={},
-    private val horizontalChanged: (HorizontalScrollMetrics)->Unit={}): WebView(context) {
+    private val horizontalChanged: (HorizontalScrollMetrics)->Unit={},
+    private val waitForDocumentLayout: Boolean=false): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
     private var renderScale=resources.displayMetrics.density
     private var initialScale: Float?=null
@@ -279,9 +280,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         val viewportCss=kotlin.math.ceil(height.toDouble()/renderScale).toInt()
         if(base==null || (unzoomed && content>viewportCss+1))documentHeight=content
         val value=HtmlMail.height(documentHeight,base?:renderScale,viewport)
-        // Readiness means both the rendered page and the native reading window are
-        // laid out. A visual callback alone precedes Compose's height update.
-        if(awaitingInitialLayout && unzoomed && height==value) {
+        // A wrapping reader waits for its native height to be applied. Fixed-size
+        // viewports are ready after the visual commit; they never adopt this height.
+        if(awaitingInitialLayout && unzoomed && (!waitForDocumentLayout || height==value)) {
             awaitingInitialLayout=false
             val revision=documentRevision
             post{if(live && revision==documentRevision)ready()}
@@ -343,7 +344,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                         // zoomed the reading window is interpolated from it and must not
                         // be overwritten by a callback.
                         if(!latestExpanded && web!=null)height=measured
-                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},horizontalChanged={scroll?.horizontal=it})
+                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},horizontalChanged={scroll?.horizontal=it},waitForDocumentLayout=true)
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)
