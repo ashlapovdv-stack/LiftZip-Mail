@@ -77,6 +77,14 @@ class HtmlMailTest {
         assertTrue(doc.html.contains("padding-left:16px;padding-right:16px"))
         assertEquals("Только ответ",Jsoup.parse(doc.html).body().text())
     }
+    @Test fun zeroInnerMarginDoesNotRemovePageInset() {
+        val doc=HtmlMail.document("<p style='margin:0'>Текст</p>","Текст",emptyList())
+        assertTrue(doc.html.contains("padding-left:16px;padding-right:16px"))
+    }
+    @Test fun existingOuterPaddingIsNotDuplicated() {
+        val doc=HtmlMail.document("<div style='padding:24px'>Текст</div>","Текст",emptyList())
+        assertTrue(doc.html.contains("padding-left:0;padding-right:0"))
+    }
     @Test fun unsafeNavigationAndCredentialsAreRejectedWhileOrdinaryLinksWork() {
         listOf("javascript:alert(1)","intent://x","file:///x","content://x","data:text/html,x","https://name:pass@example.com/x","https://example.com/\nsecret").forEach{assertNull(HtmlMail.link(it))}
         assertEquals("https://example.com/report",HtmlMail.link("https://example.com/report"))
