@@ -72,6 +72,11 @@ class HtmlMailTest {
         val doc=HtmlMail.document("<p>Ответ и старое письмо без структурной границы</p>","Только ответ",emptyList(),hasHistory=true)
         assertEquals("Только ответ",Jsoup.parse(doc.html).body().text())
     }
+    @Test fun plainFallbackKeepsMarginsEvenWhenOriginalHtmlHasStyles() {
+        val doc=HtmlMail.document("<p style='margin:0'>Ответ без границы цитаты</p>","Только ответ",emptyList(),hasHistory=true)
+        assertTrue(doc.html.contains("padding-left:16px;padding-right:16px"))
+        assertEquals("Только ответ",Jsoup.parse(doc.html).body().text())
+    }
     @Test fun unsafeNavigationAndCredentialsAreRejectedWhileOrdinaryLinksWork() {
         listOf("javascript:alert(1)","intent://x","file:///x","content://x","data:text/html,x","https://name:pass@example.com/x","https://example.com/\nsecret").forEach{assertNull(HtmlMail.link(it))}
         assertEquals("https://example.com/report",HtmlMail.link("https://example.com/report"))
