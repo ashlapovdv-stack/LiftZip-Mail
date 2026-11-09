@@ -443,6 +443,7 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
 
     LaunchedEffect(query){onSearch(query)}
     val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf<List<MailItem>?>(if(query.isBlank())memory.visibleRows else null)}
+    var pinFirstId by remember(accountId,folder,serverPath,query){mutableStateOf<String?>(null)}
     LaunchedEffect(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
         val updated=withContext(kotlinx.coroutines.Dispatchers.Default) {
             val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
@@ -450,10 +451,9 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
             if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
         }
         val atTop=!memory.list.isScrollInProgress && memory.list.firstVisibleItemIndex==0 && memory.list.firstVisibleItemScrollOffset==0
-        if(atTop && memory.restore==null && visibleState.value?.firstOrNull()?.id!=updated.firstOrNull()?.id && updated.isNotEmpty()) {
-            memory.list.requestScrollToItem(0)
-        }
+        val pinNewFirst=atTop && memory.restore==null && visibleState.value?.firstOrNull()?.id!=updated.firstOrNull()?.id && updated.isNotEmpty()
         visibleState.value=updated
+        pinFirstId=if(pinNewFirst)updated.firstOrNull()?.id else null
         if(query.isBlank())memory.visibleRows=visibleState.value
     }
     val visible=visibleState.value.orEmpty()
@@ -505,6 +505,8 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
         if(visibleIds.isNotEmpty()) {
             val restore=memory.restore
             if(restore!=null){memory.list.scrollToItem(restore.indexIn(visibleIds),if(restore.atTop)0 else restore.offset);memory.pinned=restore.atTop;memory.restore=null}
+            else if(pinFirstId==visibleIds.firstOrNull() && !memory.list.isScrollInProgress)memory.list.requestScrollToItem(0)
+            pinFirstId=null
             memory.firstId=visibleIds.firstOrNull()
         }
     }
