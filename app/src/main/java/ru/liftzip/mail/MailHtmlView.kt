@@ -98,7 +98,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 (parent as? ViewGroup)?.removeView(this@MailHtmlWebView)
                 release(rendererGone=true);failed();return true
             }
-            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale;establishingScale=false}else initialScale?.let{base->
+            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
                 post{if(live)zoomChanged(progress)}
             }}
