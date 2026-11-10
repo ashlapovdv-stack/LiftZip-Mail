@@ -258,22 +258,44 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                 route=="advanced" -> AdvancedSettingsScreen(onBack={route="settings"},onSection={route=it})
                 route=="about" -> AboutSettingsScreen(onBack={route="settings"})
                 route=="diagnostics" -> Column(Modifier.fillMaxSize()) {
+                    if(BuildConfig.DEBUG) {
+                        var htmlDiagnosticStatus by remember { mutableStateOf("Сначала воспроизведите рывки в письме, затем вернитесь сюда.") }
+                        Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal=16.dp,vertical=12.dp)) {
+                            Text("Диагностика HTML",style=MaterialTheme.typography.titleMedium)
+                            Text(htmlDiagnosticStatus,style=MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(8.dp))
+                            Button(onClick={
+                                val report=MailZoomDiagnostics.snapshot()
+                                val clipboard=context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Диагностика HTML",report))
+                                htmlDiagnosticStatus="Скопировано: ${report.length} символов. Можно вставить в сообщение."
+                                android.widget.Toast.makeText(context,"HTML-диагностика скопирована (${report.length} символов)",android.widget.Toast.LENGTH_LONG).show()
+                            },modifier=Modifier.fillMaxWidth()) { Text("Скопировать диагностику HTML") }
+                            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically) {
+                                OutlinedButton(onClick={
+                                    val report=MailZoomDiagnostics.snapshot()
+                                    val intent=Intent(Intent.ACTION_SEND).apply {
+                                        type="text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT,"Диагностика HTML Почта")
+                                        putExtra(Intent.EXTRA_TEXT,report)
+                                    }
+                                    context.startActivity(Intent.createChooser(intent,"Отправить диагностику HTML"))
+                                    htmlDiagnosticStatus="Отчёт подготовлен: ${report.length} символов."
+                                },modifier=Modifier.weight(1f)) { Text("Отправить") }
+                                TextButton(onClick={
+                                    MailZoomDiagnostics.clear()
+                                    htmlDiagnosticStatus="Журнал очищен. Повторите жест в письме."
+                                    android.widget.Toast.makeText(context,"Журнал HTML очищен",android.widget.Toast.LENGTH_SHORT).show()
+                                }) { Text("Очистить") }
+                            }
+                        }
+                        HorizontalDivider()
+                    }
                     Box(Modifier.weight(1f)) {
                         DiagnosticsScreen(s,onBack={route="settings"},onPermission={
                             if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                             else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
                         },onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestore=vm::restoreBackground,onRetryBodies=vm::retryBodies)
-                    }
-                    if(BuildConfig.DEBUG) {
-                        HorizontalDivider()
-                        Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
-                            Button(onClick={
-                                val clipboard=context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Диагностика HTML",MailZoomDiagnostics.snapshot()))
-                                android.widget.Toast.makeText(context,"Диагностика HTML скопирована",android.widget.Toast.LENGTH_SHORT).show()
-                            },modifier=Modifier.weight(1f)) { Text("Скопировать диагностику HTML") }
-                            TextButton(onClick={MailZoomDiagnostics.clear()}) { Text("Очистить") }
-                        }
                     }
                 }
                 route=="message-missing" -> MissingMessageScreen(onBack={goInbox()})
