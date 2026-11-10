@@ -23,7 +23,7 @@ android {
         keyAlias = "androiddebugkey"
         keyPassword = "android"
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
