@@ -257,10 +257,25 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                 route=="sender" -> SenderSettingsScreen(s,onBack={route="settings"},onDefault=vm::setDefaultAccount)
                 route=="advanced" -> AdvancedSettingsScreen(onBack={route="settings"},onSection={route=it})
                 route=="about" -> AboutSettingsScreen(onBack={route="settings"})
-                route=="diagnostics" -> DiagnosticsScreen(s,onBack={route="settings"},onPermission={
-                    if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
-                },onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestore=vm::restoreBackground,onRetryBodies=vm::retryBodies)
+                route=="diagnostics" -> Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f)) {
+                        DiagnosticsScreen(s,onBack={route="settings"},onPermission={
+                            if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
+                        },onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestore=vm::restoreBackground,onRetryBodies=vm::retryBodies)
+                    }
+                    if(BuildConfig.DEBUG) {
+                        HorizontalDivider()
+                        Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
+                            Button(onClick={
+                                val clipboard=context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Диагностика HTML",MailZoomDiagnostics.snapshot()))
+                                android.widget.Toast.makeText(context,"Диагностика HTML скопирована",android.widget.Toast.LENGTH_SHORT).show()
+                            },modifier=Modifier.weight(1f)) { Text("Скопировать диагностику HTML") }
+                            TextButton(onClick={MailZoomDiagnostics.clear()}) { Text("Очистить") }
+                        }
+                    }
+                }
                 route=="message-missing" -> MissingMessageScreen(onBack={goInbox()})
                 route=="preview" && preview!=null -> AttachmentPreviewScreen(preview!!,onBack={preview=null;route="reader"},onExternal={openExternal(preview!!)})
                 route=="compose" && draft!=null -> {
