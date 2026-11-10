@@ -176,7 +176,8 @@ class HtmlMailDeviceTest {
             rule.waitUntil(10_000){greenPixels()>50}
             rule.onNodeWithText("Показать изображения").assertDoesNotExist()
             val pixels=rule.onRoot().captureToImage().toPixelMap()
-            val canvas=pixels[pixels.width-2,(40*c.resources.displayMetrics.density).toInt()]
+            // Sample the document canvas inside the native scrollbar gutter.
+            val canvas=pixels[pixels.width-(8*c.resources.displayMetrics.density).toInt(),(40*c.resources.displayMetrics.density).toInt()]
             assertTrue("Rich mail must keep a readable light canvas in a dark app",canvas.red>0.9f && canvas.green>0.9f && canvas.blue>0.9f)
             saveDeviceScreenshot(rule,"html-inline")
         }finally{file.delete()}
