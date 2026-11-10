@@ -41,7 +41,7 @@ import kotlin.math.roundToInt
 
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
-    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float,Boolean)->Unit={_,_->},
+    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={},
     private val pinchChanged: (Boolean)->Unit={},private val horizontalChanged: (HorizontalScrollMetrics)->Unit={},
     private val waitForDocumentLayout: Boolean=false): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
@@ -70,11 +70,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var velocity: VelocityTracker?=null
     private var startX=0f;private var startY=0f;private var lastY=0f
     private var dragging=false;private var zooming=false;private var flingY=0
-    // Native scale and Compose chrome have different owners during a real pinch. The
-    // provenance flag also covers renderer callbacks delivered after ACTION_UP.
+    // Pinch owns the native touch stream; chrome is driven independently by scroll.
     private var pinchGestureActive=false
     private var externalPinchActive=false
-    private var pinchScaleDirty=false
     private val diagnosticsLocation=IntArray(2)
     private val animateFling=object: Runnable {
         override fun run() {
@@ -125,8 +123,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 MailZoomDiagnostics.record("scale old=$oldScale new=$newScale webH=${view.height} scrollY=${view.scrollY} contentH=${view.contentHeight}")
                 renderScale=newScale;recordGeometry("scale");publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
-                val fromPinch=pinchGestureActive||externalPinchActive||pinchScaleDirty
-                post{if(live)zoomChanged(progress,fromPinch)}
+                post{if(live)zoomChanged(progress)}
             }}
             override fun onPageCommitVisible(view: WebView,url: String){prepareVisibleDocument(url)}
             override fun onPageFinished(view: WebView,url: String){prepareVisibleDocument(url)}
@@ -149,7 +146,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                                 val adjusted=html.replace(Regex("(<meta name=\"viewport\" content=\"width=)[^,\"]+")){match->match.groupValues[1]+cssWidth}
                                 if(adjusted!=html){
                                     documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
-                                    initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0;pinchScaleDirty=false
+                                    initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0
                                     setInitialScale(0);loadDataWithBaseURL(documentUrl,adjusted,"text/html","UTF-8",null)
                                     return
                                 }
@@ -188,14 +185,13 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
         layoutRevision++;layoutPending=false;awaitingInitialLayout=false
         measuredInitialLayout=false
-        initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0;pinchScaleDirty=false
+        initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0
         fling.abortAnimation();scrollTo(0,0)
         setInitialScale(0)
         loadDataWithBaseURL(documentUrl,next.html,"text/html","UTF-8",null)
     }
     fun fitWidth() {
         if(!live || width<=0)return
-        pinchScaleDirty=false
         // Use the rendered extent, including borders, padding and nested tables, rather than
         // assuming that the sender's nominal table width is the final page width.
         val factor=width.toFloat()/computeHorizontalScrollRange().coerceAtLeast(width)
@@ -203,7 +199,6 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     fun resetZoom() {
         val base=initialScale?:return
-        pinchScaleDirty=false
         if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
     }
     fun atInitialScale(): Boolean = initialScale?.let{renderScale<=it*1.03f}?:true
@@ -226,14 +221,14 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private fun setPinchGesture(active: Boolean) {
         if(pinchGestureActive==active)return
         pinchGestureActive=active
-        if(active){pinchScaleDirty=true;fling.abortAnimation();removeCallbacks(animateFling)}
+        if(active){fling.abortAnimation();removeCallbacks(animateFling)}
         MailZoomDiagnostics.record("pinchState active=$active")
         pinchChanged(active)
     }
     fun setExternalPinchActive(active: Boolean) {
         if(externalPinchActive==active)return
         externalPinchActive=active
-        if(active){pinchScaleDirty=true;fling.abortAnimation();removeCallbacks(animateFling)}
+        if(active){fling.abortAnimation();removeCallbacks(animateFling)}
         MailZoomDiagnostics.record("externalPinchState active=$active")
     }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -352,7 +347,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
 // resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
 internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,zoomProgress: Float=0f,onZoomChanged: (Float,Boolean)->Unit={_,_->},onPinchChanged: (Boolean)->Unit={}) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
@@ -384,7 +379,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     }
     else if(ready==null)Text("Подготавливаем письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     else {
-        if(rendered && ready.externalImages && zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
+        if(rendered && ready.externalImages)Box {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
             if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
         }}
         Box {
@@ -396,7 +391,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                         // zoomed its reading window is fixed and must not be overwritten
                         // by a callback.
                         if(!latestExpanded && scroll?.pinchActive!=true && web!=null)height=measured
-                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f,false)},zoomChanged={progress,fromPinch->latestZoom(progress,fromPinch)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},waitForDocumentLayout=true)
+                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},waitForDocumentLayout=true)
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)
@@ -408,7 +403,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 }).graphicsLayer{alpha=if(rendered)1f else 0f}
                     .onGloballyPositioned{
                         scroll?.position(it.positionInWindow().y.toInt())
-                        MailZoomDiagnostics.record("bodyLayout progress=$zoomProgress zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${it.positionInWindow().y} layoutH=${it.size.height} webH=${scroll?.view?.height} fixedViewport=0")
+                        MailZoomDiagnostics.record("bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${it.positionInWindow().y} layoutH=${it.size.height} webH=${scroll?.view?.height} fixedViewport=0")
                     },
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})

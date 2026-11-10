@@ -130,7 +130,7 @@ class ReaderDeviceTest {
             assertEquals("History must return together with the scale",original,returned,tolerance)
         }
     }
-    @Test fun zoomingHtmlHidesToolbarAndRetainsTheSameWebView() {
+    @Test fun zoomingHtmlDoesNotChangeChromeOrReplaceTheWebView() {
         val short=message.copy(htmlBody="<p>Текст письма для увеличения</p><img src='https://example.com/example.png'><table width='720'><tr><td>Содержимое</td></tr></table>",body="Текст письма для увеличения",attachments=listOf(Attachment("1","file.pdf","application/pdf",100)))
         rule.setContent{MailTheme{reader(short)}}
         val view=loaded()
@@ -142,10 +142,11 @@ class ReaderDeviceTest {
         rule.waitForIdle()
         rule.onNodeWithContentDescription("Назад").assertExists()
         rule.runOnIdle{view.zoomBy(2f)}
-        rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Назад").fetchSemanticsNodes().isEmpty()}
-        rule.onAllNodesWithText("Длинное письмо").assertCountEquals(0)
-        rule.onAllNodesWithText("Вложения").assertCountEquals(0)
-        rule.onAllNodesWithText("Показать изображения").assertCountEquals(0)
+        rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
+        rule.onNodeWithText("Вложения").assertExists()
+        rule.onNodeWithText("Показать изображения").assertExists()
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
         rule.runOnIdle{
             assertSame(view,webView())
@@ -181,7 +182,12 @@ class ReaderDeviceTest {
         rule.waitForIdle()
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         history.assertIsDisplayed()
-        val originalTop=history.fetchSemanticsNode().boundsInRoot.top
+        fun historyGap(): Float {
+            var bottom=0
+            rule.runOnIdle{val location=IntArray(2);view.getLocationInWindow(location);bottom=location[1]+view.height}
+            return history.fetchSemanticsNode().boundsInRoot.top-bottom
+        }
+        val originalGap=historyGap()
         repeat(4) {
             rule.runOnIdle{view.zoomBy(2f)}
             rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
@@ -189,7 +195,7 @@ class ReaderDeviceTest {
             rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
             rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
             rule.waitForIdle()
-            assertEquals("History must return to the same position",originalTop,history.fetchSemanticsNode().boundsInRoot.top,8f*view.resources.displayMetrics.density)
+            assertEquals("History must remain attached to the reading window after reset",originalGap,historyGap(),8f*view.resources.displayMetrics.density)
         }
     }
     @Test fun twoFingerGestureBelowShortMailUsesItsWebView() {

@@ -9,8 +9,8 @@ import kotlin.math.roundToInt
 
 /** One continuous scroll: header -> bounded HTML viewport -> attachments and reply controls. */
 class ReaderScroll(val outer: ScrollState) {
+    val toolbar=ReaderToolbarState()
     var pinchActive=false
-    var zoomed=false
     var viewportTop=0
         set(value){bodyAnchor+=field-value;field=value}
     var viewportHeight by mutableIntStateOf(0)
@@ -27,14 +27,6 @@ class ReaderScroll(val outer: ScrollState) {
     fun scroll(pixels: Float): Float {
         if(pinchActive)return 0f
         val body=view?:return outer.dispatchRawDelta(pixels)
-        if(zoomed) {
-            // Enlarged HTML owns the vertical drag first. Only its unconsumed remainder
-            // reaches the header; horizontal movement never enters this vertical path.
-            var left=pixels
-            left-=body.scrollContent(left.roundToInt())
-            left-=outer.dispatchRawDelta(left)
-            return pixels-left
-        }
         val anchor=bodyAnchor.coerceIn(0,outer.maxValue)
         var left=pixels
         // Only consume the header/footer portion preceding the body in this direction.
@@ -44,10 +36,22 @@ class ReaderScroll(val outer: ScrollState) {
         left-=outer.dispatchRawDelta(step)
         left-=body.scrollContent(left.roundToInt())
         left-=outer.dispatchRawDelta(left)
-        return pixels-left
+        val consumed=pixels-left
+        toolbar.scroll(consumed)
+        return consumed
     }
     fun attach(body: MailHtmlWebView){view=body;body.scrollPage={scroll(it)}}
     fun detach(body: MailHtmlWebView){if(view===body)view=null;body.scrollPage=null}
 }
 
 data class HorizontalScrollMetrics(val offset: Int=0,val extent: Int=0,val range: Int=0)
+
+/** Scroll-driven overlay state. It never changes the document's layout constraints. */
+class ReaderToolbarState {
+    var height by mutableIntStateOf(0)
+    var hiddenPixels by mutableFloatStateOf(0f)
+        private set
+    fun scroll(consumedPixels: Float) {
+        if(consumedPixels.isFinite())hiddenPixels=(hiddenPixels+consumedPixels).coerceIn(0f,height.toFloat())
+    }
+}

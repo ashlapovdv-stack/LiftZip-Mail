@@ -1,5 +1,9 @@
 package ru.liftzip.mail
 
+import android.graphics.Rect
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewGroup
@@ -73,20 +77,76 @@ class ReaderZoomDeviceTest {
         rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.contentHeight>0 && it.height>20}?:false};ready}
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
     }
-    private fun center(): Offset=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
+    private fun center(): Offset {
+        var result=Offset.Zero
+        rule.runOnUiThread {
+            val rect=Rect();assertTrue(webView()!!.getGlobalVisibleRect(rect))
+            val root=IntArray(2);rule.activity.window.decorView.getLocationOnScreen(root)
+            result=Offset(rect.exactCenterX()-root[0],rect.exactCenterY()-root[1])
+        }
+        return result
+    }
 
+    // Pace real Android dispatches in wall-clock time. Compose's queued test gestures
+    // and a sleep inside performTouchInput cannot represent a stationary real-time hold.
+    private inner class Pinch(private val focus: Offset,private var half: Float) {
+        private val downTime=SystemClock.uptimeMillis()
+        private fun event(action: Int,count: Int) {
+            val props=Array(count){index->MotionEvent.PointerProperties().apply{id=index;toolType=MotionEvent.TOOL_TYPE_FINGER}}
+            val coords=Array(count){index->MotionEvent.PointerCoords().apply{x=focus.x+if(index==0)-half else half;y=focus.y;pressure=1f;size=1f}}
+            val event=MotionEvent.obtain(downTime,SystemClock.uptimeMillis(),action,count,props,coords,0,0,1f,1f,0,0,InputDevice.SOURCE_TOUCHSCREEN,0)
+            try {rule.runOnUiThread{rule.activity.window.decorView.dispatchTouchEvent(event)}}finally{event.recycle()}
+            SystemClock.sleep(20)
+        }
+        fun down(){event(MotionEvent.ACTION_DOWN,1);event(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),2)}
+        fun move(next: Float){half=next;event(MotionEvent.ACTION_MOVE,2)}
+        fun up(){event(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),2);event(MotionEvent.ACTION_UP,1)}
+    }
     private fun continuousOutAndBack(center: Offset,halfStart: Float,halfEnd: Float,steps: Int=24) {
-        rule.onRoot().performTouchInput {
-            down(0,center-Offset(halfStart,0f));down(1,center+Offset(halfStart,0f))
-            for(step in 1..steps) {
-                val half=halfStart+(halfEnd-halfStart)*step/steps
-                moveTo(0,center-Offset(half,0f));moveTo(1,center+Offset(half,0f));move()
+        val pinch=Pinch(center,halfStart);pinch.down()
+        for(step in 1..steps)pinch.move(halfStart+(halfEnd-halfStart)*step/steps)
+        for(step in 1..steps)pinch.move(halfEnd+(halfStart-halfEnd)*step/steps)
+        pinch.up()
+    }
+
+    private fun drag(start: Offset,delta: Offset) {
+        val downTime=SystemClock.uptimeMillis()
+        fun send(action: Int,point: Offset) {
+            val event=MotionEvent.obtain(downTime,SystemClock.uptimeMillis(),action,point.x,point.y,0)
+            event.source=InputDevice.SOURCE_TOUCHSCREEN
+            try{rule.runOnUiThread{rule.activity.window.decorView.dispatchTouchEvent(event)}}finally{event.recycle()}
+        }
+        send(MotionEvent.ACTION_DOWN,start)
+        for(step in 1..24){SystemClock.sleep(20);send(MotionEvent.ACTION_MOVE,start+delta*(step/24f))}
+        // Release at rest so a fling cannot mask the direction/viewport assertions.
+        SystemClock.sleep(200);send(MotionEvent.ACTION_MOVE,start+delta);send(MotionEvent.ACTION_UP,start+delta)
+        rule.waitForIdle()
+    }
+
+    @Test fun toolbarHidesAndReturnsDuringScrollBeforeAndAfterNativePinch() {
+        rule.setContent{MailTheme{reader()}}
+        val view=loaded()
+        rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
+        val density=view.resources.displayMetrics.density
+        val nativeHeight=view.height
+        repeat(2){pass->
+            if(pass==1) {
+                val focus=center();val sampler=FrameSampler(view,focus.y);sampler.start()
+                val pinch=Pinch(focus,48f*density);pinch.down()
+                for(step in 1..20)pinch.move((48f+48f*step/20)*density)
+                pinch.up();SystemClock.sleep(250)
+                val samples=sampler.stop();rule.waitForIdle()
+                assertTrue("Native pinch did not enlarge HTML",samples.any{it.progress>0.1f})
+                assertStableViewport(samples)
             }
-            for(step in 1..steps) {
-                val half=halfEnd+(halfStart-halfEnd)*step/steps
-                moveTo(0,center-Offset(half,0f));moveTo(1,center+Offset(half,0f));move()
-            }
-            up(1);up(0)
+            rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+            drag(center(),Offset(0f,-240f*density))
+            rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+            rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
+            rule.runOnIdle{assertEquals("Hiding chrome must not resize WebView",nativeHeight,view.height)}
+            drag(center(),Offset(0f,120f*density))
+            rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+            rule.runOnIdle{assertEquals("Revealing chrome must not resize WebView",nativeHeight,view.height);assertSame(view,webView())}
         }
     }
 
@@ -127,28 +187,24 @@ class ReaderZoomDeviceTest {
         continuousOutAndBack(focus,48f*density,160f*density)
         // Keep sampling after UP so a deferred chrome/layout update cannot escape the check.
         Thread.sleep(250)
-        rule.waitForIdle()
         val samples=sampler.stop()
         rule.waitForIdle()
         assertAnchorContinuous(samples,density)
         rule.runOnIdle{assertSame(view,webView())}
-        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").assertExists()
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
     }
 
-    @Test fun pinchFromPartiallyCollapsedPanelKeepsScreenGeometryStable() {
+    @Test fun pinchFromPartiallyHiddenToolbarKeepsScreenGeometryStable() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
         rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
-        var initial=0f
-        rule.runOnUiThread{initial=view.scale;view.zoomBy(1.2f)}
-        rule.waitUntil(10_000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>initial*1.05f};enlarged}
+        rule.runOnIdle{view.scrollPage?.invoke(20f*view.resources.displayMetrics.density)}
         rule.waitForIdle()
         val focus=center()
         val sampler=FrameSampler(view,focus.y);sampler.start()
         continuousOutAndBack(focus,48f*view.resources.displayMetrics.density,160f*view.resources.displayMetrics.density)
         Thread.sleep(250)
-        rule.waitForIdle()
         val samples=sampler.stop()
         assertTrue("No frames sampled",samples.size>4)
         assertStableViewport(samples)
@@ -161,17 +217,11 @@ class ReaderZoomDeviceTest {
         rule.runOnIdle{view.scrollContent(10_000)}
         val focus=center();val density=view.resources.displayMetrics.density
         val sampler=FrameSampler(view,focus.y);sampler.start()
-        rule.onRoot().performTouchInput {
-            down(0,focus-Offset(48f*density,0f));down(1,focus+Offset(48f*density,0f))
-            for(step in 1..16) {
-                val half=(48f+22f*step/16)*density
-                moveTo(0,focus-Offset(half,0f));moveTo(1,focus+Offset(half,0f));move()
-            }
-            // The UI thread remains free while both fingers are stationary at partial collapse.
-            Thread.sleep(400)
-            move()
-            up(1);up(0)
-        }
+        val pinch=Pinch(focus,48f*density);pinch.down()
+        for(step in 1..16)pinch.move((48f+22f*step/16)*density)
+        SystemClock.sleep(400)
+        pinch.move(70f*density)
+        pinch.up()
         val samples=sampler.stop();rule.waitForIdle()
         assertTrue("The fixture must stop inside the transition",samples.any{it.progress>0.1f && it.progress<0.9f})
         val lastScaleChange=samples.zipWithNext().filter{abs(it.first.scale-it.second.scale)>0.00001f}.maxOfOrNull{it.second.time}?:0L
