@@ -405,11 +405,11 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val ready=remember(document,headerHeight,bodyWidth){document?.let{doc->
         if(bodyWidth<=0)null else doc.withReaderInset(0,bodyWidth)
     }}
-    var height by remember(message.id,message.contentVersion,ready){mutableIntStateOf(8)}
-    var baseScale by remember(message.id,message.contentVersion,ready){mutableFloatStateOf(1f)}
-    var prepared by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
-    var nativeComplete by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
-    var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
+    var height by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableIntStateOf(8)}
+    var baseScale by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableFloatStateOf(1f)}
+    var prepared by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
+    var nativeComplete by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
+    var rendered by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
     val latestMeasuring by rememberUpdatedState(!prepared)
     val latestMeasured by rememberUpdatedState<(Int)->Unit>({measured->
         if(latestMeasuring && scroll?.pinchActive!=true && web!=null)height=measured
@@ -426,7 +426,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val nativeDocument=remember(ready,prepared,viewport,bodyWidth,baseScale,headerHeight){ready?.let{doc->
         if(prepared)document?.withReaderInset(headerHeight,bodyWidth,baseScale)?.withReaderCanvas(viewport,bodyWidth,baseScale) else doc
     }}
-    LaunchedEffect(nativeComplete,web,ready) {
+    LaunchedEffect(nativeComplete,web,ready,headerHeight,bodyWidth) {
         if(nativeComplete)web?.afterVisualLayout{rendered=true}
     }
     SideEffect{if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared complete=$nativeComplete rendered=$rendered failed=$failed")}
@@ -474,8 +474,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 }
             }
         }
-        Column(Modifier.fillMaxWidth().testTag("reader-message-header").onSizeChanged{headerHeight=it.height;scroll?.headerHeight=it.height}
-            .readerChrome(scroll?.toolbar?.zoomProgress?:0f,scroll?.headerOffset?:0f)
+        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height;scroll?.headerHeight=it.height}
+            .readerChrome(scroll?.toolbar?.zoomProgress?:0f,scroll?.headerOffset?:0f).testTag("reader-message-header")
             .background(androidx.compose.ui.graphics.Color.White)) {
             header()
             if(document?.externalImages==true)Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {

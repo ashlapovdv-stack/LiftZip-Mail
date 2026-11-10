@@ -1,8 +1,6 @@
 package ru.liftzip.mail
 
 import android.graphics.Rect
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
 import android.os.SystemClock
 import android.view.InputDevice
@@ -13,6 +11,7 @@ import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -208,20 +207,18 @@ class ReaderZoomDeviceTest {
             val toolbar=rule.onNodeWithTag("reader-toolbar").fetchSemanticsNode().boundsInRoot
             val subject=rule.onNodeWithText(m.subject).fetchSemanticsNode().boundsInRoot
             assertTrue("Toolbar covers subject: $toolbar / $subject",toolbar.bottom<=subject.top+2f)
-            var firstGreen=-1
-            rule.runOnUiThread {
-                val bitmap=Bitmap.createBitmap(view.width,view.height,Bitmap.Config.ARGB_8888)
-                try {
-                    view.draw(Canvas(bitmap))
-                    val x=view.width/2
-                    firstGreen=(0 until bitmap.height).firstOrNull{y->
-                        val pixel=bitmap.getPixel(x,y)
-                        Color.green(pixel)>200 && Color.red(pixel)<50 && Color.blue(pixel)<50
-                    }?:-1
-                }finally{bitmap.recycle()}
+            val bitmap=rule.onRoot().captureToImage().asAndroidBitmap()
+            val x=bitmap.width/2
+            val greenRows=(0 until bitmap.height).filter{y->
+                val pixel=bitmap.getPixel(x,y)
+                Color.green(pixel)>220 && Color.red(pixel)<35 && Color.blue(pixel)<35
             }
+            val firstGreen=greenRows.firstOrNull()?:-1
+            var expectedHeight=0f
+            rule.runOnUiThread{expectedHeight=40f*view.scale}
+            assertTrue("First HTML row is clipped: actual=${greenRows.size} expected=$expectedHeight",greenRows.size>=expectedHeight-3f)
             assertTrue("Native content marker was not rendered",firstGreen>=0)
-            assertTrue("Header covers first HTML row: header=$header nativeTop=$firstGreen",topInRoot(view)+firstGreen>=header.bottom-3f)
+            assertTrue("Header covers first HTML row: header=$header nativeTop=$firstGreen",firstGreen>=header.bottom-3f)
         }
         assertNoOverlap()
         val focus=center();val density=view.resources.displayMetrics.density
