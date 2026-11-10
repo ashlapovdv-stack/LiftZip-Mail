@@ -41,8 +41,8 @@ import kotlin.math.roundToInt
 
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
-    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={},
-    private val horizontalChanged: (HorizontalScrollMetrics)->Unit={},
+    private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float,Boolean)->Unit={_,_->},
+    private val pinchChanged: (Boolean)->Unit={},private val horizontalChanged: (HorizontalScrollMetrics)->Unit={},
     private val waitForDocumentLayout: Boolean=false): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
     private var renderScale=resources.displayMetrics.density
@@ -70,6 +70,12 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var velocity: VelocityTracker?=null
     private var startX=0f;private var startY=0f;private var lastY=0f
     private var dragging=false;private var zooming=false;private var flingY=0
+    // Native scale and Compose chrome have different owners during a real pinch. The
+    // provenance flag also covers renderer callbacks delivered after ACTION_UP.
+    private var pinchGestureActive=false
+    private var externalPinchActive=false
+    private var pinchScaleDirty=false
+    private val diagnosticsLocation=IntArray(2)
     private val animateFling=object: Runnable {
         override fun run() {
             if(!live || !fling.computeScrollOffset())return
@@ -77,6 +83,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             if(delta!=0 && abs(movePage(delta.toFloat()))<0.5f){fling.abortAnimation();return}
             postOnAnimation(this)
         }
+    }
+    private fun recordGeometry(source: String,event: MotionEvent?=null) {
+        getLocationOnScreen(diagnosticsLocation)
+        MailZoomDiagnostics.record("webGeometry source=$source screenX=${diagnosticsLocation[0]} screenY=${diagnosticsLocation[1]} width=$width height=$height scale=$renderScale scrollX=$scrollX scrollY=$scrollY action=${event?.actionMasked?:-1} pointers=${event?.pointerCount?:0} pinch=${pinchGestureActive||externalPinchActive}")
     }
     init {
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -113,9 +123,10 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             }
             override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){
                 MailZoomDiagnostics.record("scale old=$oldScale new=$newScale webH=${view.height} scrollY=${view.scrollY} contentH=${view.contentHeight}")
-                renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
+                renderScale=newScale;recordGeometry("scale");publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
-                post{if(live)zoomChanged(progress)}
+                val fromPinch=pinchGestureActive||externalPinchActive||pinchScaleDirty
+                post{if(live)zoomChanged(progress,fromPinch)}
             }}
             override fun onPageCommitVisible(view: WebView,url: String){prepareVisibleDocument(url)}
             override fun onPageFinished(view: WebView,url: String){prepareVisibleDocument(url)}
@@ -138,7 +149,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                                 val adjusted=html.replace(Regex("(<meta name=\"viewport\" content=\"width=)[^,\"]+")){match->match.groupValues[1]+cssWidth}
                                 if(adjusted!=html){
                                     documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
-                                    initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0
+                                    initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0;pinchScaleDirty=false
                                     setInitialScale(0);loadDataWithBaseURL(documentUrl,adjusted,"text/html","UTF-8",null)
                                     return
                                 }
@@ -177,13 +188,14 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
         layoutRevision++;layoutPending=false;awaitingInitialLayout=false
         measuredInitialLayout=false
-        initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0
+        initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0;pinchScaleDirty=false
         fling.abortAnimation();scrollTo(0,0)
         setInitialScale(0)
         loadDataWithBaseURL(documentUrl,next.html,"text/html","UTF-8",null)
     }
     fun fitWidth() {
         if(!live || width<=0)return
+        pinchScaleDirty=false
         // Use the rendered extent, including borders, padding and nested tables, rather than
         // assuming that the sender's nominal table width is the final page width.
         val factor=width.toFloat()/computeHorizontalScrollRange().coerceAtLeast(width)
@@ -191,6 +203,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     fun resetZoom() {
         val base=initialScale?:return
+        pinchScaleDirty=false
         if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
     }
     fun atInitialScale(): Boolean = initialScale?.let{renderScale<=it*1.03f}?:true
@@ -210,7 +223,35 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         // Layout moves the WebView while its header scrolls. Velocity must use screen coordinates.
         MotionEvent.obtain(event).also{copy->copy.offsetLocation(event.rawX-event.x,event.rawY-event.y);velocity?.addMovement(copy);copy.recycle()}
     }
+    private fun setPinchGesture(active: Boolean) {
+        if(pinchGestureActive==active)return
+        pinchGestureActive=active
+        if(active){pinchScaleDirty=true;fling.abortAnimation();removeCallbacks(animateFling)}
+        MailZoomDiagnostics.record("pinchState active=$active")
+        pinchChanged(active)
+    }
+    fun setExternalPinchActive(active: Boolean) {
+        if(externalPinchActive==active)return
+        externalPinchActive=active
+        if(active){pinchScaleDirty=true;fling.abortAnimation();removeCallbacks(animateFling)}
+        MailZoomDiagnostics.record("externalPinchState active=$active")
+    }
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        when(event.actionMasked) {
+            MotionEvent.ACTION_DOWN->if(pinchGestureActive)setPinchGesture(false)
+            MotionEvent.ACTION_POINTER_DOWN->if(event.pointerCount>=2){MailZoomDiagnostics.start();setPinchGesture(true)}
+            MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->{
+                // The native view consumes the complete stream before Compose is allowed to
+                // resume scrolling. No MotionEvent or pointer coordinate is changed.
+                val result=super.dispatchTouchEvent(event)
+                if(pinchGestureActive)setPinchGesture(false)
+                return result
+            }
+        }
+        return super.dispatchTouchEvent(event)
+    }
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        recordGeometry("touch",event)
         MailZoomDiagnostics.touch(event)
         if(!live)return false
         when(event.actionMasked) {
@@ -258,6 +299,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) {
         super.onSizeChanged(w,h,oldw,oldh)
         MailZoomDiagnostics.record("webSize w=$w h=$h oldW=$oldw oldH=$oldh scrollY=$scrollY")
+        recordGeometry("size")
         if(w!=oldw || h!=oldh){
             val layout=++layoutRevision;val documentId=documentRevision
             layoutPending=true
@@ -305,9 +347,12 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
 }
 
-internal fun readerBodyHeight(normal: Int,expanded: Int,zoomed: Boolean): Int=if(zoomed && expanded>0)expanded else normal
+// The pinch viewport is the document's own reading window. Zooming must scale content inside
+// that window; replacing the window with another height during the gesture makes native WebView
+// resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
+internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,zoomProgress: Float=0f,onZoomChanged: (Float)->Unit={},zoomViewportHeight: Int=0) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,zoomProgress: Float=0f,onZoomChanged: (Float,Boolean)->Unit={_,_->},onPinchChanged: (Boolean)->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
@@ -324,6 +369,7 @@ internal fun readerBodyHeight(normal: Int,expanded: Int,zoomed: Boolean): Int=if
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
     val latestZoom by rememberUpdatedState(onZoomChanged)
+    val latestPinch by rememberUpdatedState(onPinchChanged)
     val latestExpanded by rememberUpdatedState(zoomed)
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
@@ -349,22 +395,20 @@ internal fun readerBodyHeight(normal: Int,expanded: Int,zoomed: Boolean): Int=if
                         // The WebView publishes the unzoomed document geometry only; while
                         // zoomed its reading window is fixed and must not be overwritten
                         // by a callback.
-                        if(!latestExpanded && web!=null)height=measured
-                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},horizontalChanged={scroll?.horizontal=it},waitForDocumentLayout=true)
+                        if(!latestExpanded && scroll?.pinchActive!=true && web!=null)height=measured
+                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f,false)},zoomChanged={progress,fromPinch->latestZoom(progress,fromPinch)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},waitForDocumentLayout=true)
                     web=view
                     view.onReleased={scroll?.detach(view);if(web===view)web=null}
                     scroll?.attach(view)
                     addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                 }catch(e: Exception){failed=true;loader.close()}
             }},
-                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=(10f*(1f-zoomProgress)).dp).height(with(density){
-                    val normal=height.coerceAtMost(viewport)
-                    val expanded=zoomViewportHeight.takeIf{it>0}?:scroll?.viewportHeight?.takeIf{it>0}?:viewport
-                    readerBodyHeight(normal,expanded,zoomed).toDp()
+                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=10.dp).height(with(density){
+                    readerBodyHeight(height.coerceAtMost(viewport)).toDp()
                 }).graphicsLayer{alpha=if(rendered)1f else 0f}
                     .onGloballyPositioned{
                         scroll?.position(it.positionInWindow().y.toInt())
-                        MailZoomDiagnostics.record("bodyLayout progress=$zoomProgress zoomed=$zoomed top=${it.positionInWindow().y} layoutH=${it.size.height} webH=${scroll?.view?.height} fixedViewport=$zoomViewportHeight")
+                        MailZoomDiagnostics.record("bodyLayout progress=$zoomProgress zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${it.positionInWindow().y} layoutH=${it.size.height} webH=${scroll?.view?.height} fixedViewport=0")
                     },
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})

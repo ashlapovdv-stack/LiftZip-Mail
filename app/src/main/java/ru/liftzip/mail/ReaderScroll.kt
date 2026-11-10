@@ -9,6 +9,7 @@ import kotlin.math.roundToInt
 
 /** One continuous scroll: header -> bounded HTML viewport -> attachments and reply controls. */
 class ReaderScroll(val outer: ScrollState) {
+    var pinchActive=false
     var zoomed=false
     var viewportTop=0
         set(value){bodyAnchor+=field-value;field=value}
@@ -19,13 +20,21 @@ class ReaderScroll(val outer: ScrollState) {
     fun position(top: Int){bodyAnchor=outer.value+top-viewportTop}
     val connection=object: NestedScrollConnection {
         override fun onPreScroll(available: Offset,source: NestedScrollSource): Offset {
-            if(view==null)return Offset.Zero
+            if(view==null || pinchActive)return Offset.Zero
             return Offset(0f,-scroll(-available.y))
         }
     }
     fun scroll(pixels: Float): Float {
+        if(pinchActive)return 0f
         val body=view?:return outer.dispatchRawDelta(pixels)
-        if(zoomed)return body.scrollContent(pixels.roundToInt()).toFloat()
+        if(zoomed) {
+            // Enlarged HTML owns the vertical drag first. Only its unconsumed remainder
+            // reaches the header; horizontal movement never enters this vertical path.
+            var left=pixels
+            left-=body.scrollContent(left.roundToInt())
+            left-=outer.dispatchRawDelta(left)
+            return pixels-left
+        }
         val anchor=bodyAnchor.coerceIn(0,outer.maxValue)
         var left=pixels
         // Only consume the header/footer portion preceding the body in this direction.

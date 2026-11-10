@@ -4,17 +4,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ReaderZoomGeometryTest {
-    @Test fun zoomUsesOneStableViewportInsteadOfResizingOnEveryProgressStep() {
-        val normal=600;val expanded=2200
-        assertEquals(normal,readerBodyHeight(normal,expanded,zoomed=false))
-        assertEquals(expanded,readerBodyHeight(normal,expanded,zoomed=true))
-        val heights=List(101){step->readerBodyHeight(normal,expanded,zoomed=step>0)}
-        assertEquals(2,heights.toSet().size)
-        assertEquals(expanded,heights.last())
+    @Test fun zoomKeepsTheDocumentReadingWindowAtItsNormalHeight() {
+        val normal=600
+        assertEquals(normal,readerBodyHeight(normal))
+        // Any intermediate or completed zoom state must use the same native window. Changing
+        // the height here re-enters native WebView layout in the middle of the pinch stream.
+        val heights=List(101){step->readerBodyHeight(normal)}
+        assertEquals(1,heights.toSet().size)
+        assertEquals(normal,heights.last())
     }
 
-    @Test fun normalDocumentHeightIsRestoredAtInitialScale() {
-        assertEquals(600,readerBodyHeight(600,2200,zoomed=false))
-        assertEquals(600,readerBodyHeight(600,0,zoomed=true))
+    @Test fun differentDocumentHeightsStillProduceIndependentReadingWindows() {
+        assertEquals(300,readerBodyHeight(300))
+        assertEquals(2048,readerBodyHeight(2048))
     }
 }

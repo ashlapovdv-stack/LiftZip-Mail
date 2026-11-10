@@ -91,6 +91,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -752,8 +753,20 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
-    var zoomViewportHeight by remember(m.id){mutableIntStateOf(0)}
+    var pinchActive by remember(m.id){mutableStateOf(false)}
     val readerContext=LocalContext.current
+    val readerScope=rememberCoroutineScope()
+    val updatePinch: (Boolean)->Unit={active->
+        // Synchronous ownership transfer: no later scale/layout callback can move the
+        // WebView while the native two-pointer stream is active.
+        scroll.pinchActive=active
+        pinchActive=active
+        MailZoomDiagnostics.record("composePinch active=$active outer=${outer.value}")
+        if(active)readerScope.launch(start=CoroutineStart.UNDISPATCHED){
+            // Cancels an already running outer fling instead of merely disabling future drags.
+            outer.scroll(MutatePriority.UserInput){}
+        }
+    }
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
@@ -761,7 +774,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
         }
-    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress).onGloballyPositioned{MailZoomDiagnostics.record("topBar progress=$zoomProgress top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress).onGloballyPositioned{MailZoomDiagnostics.record("topBar progress=$zoomProgress pinch=$pinchActive top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -783,7 +796,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 do {
                     val event=awaitPointerEvent(PointerEventPass.Initial)
                     if(outside && event.changes.count{it.pressed}>=2) {
-                        if(!pinch) MailZoomDiagnostics.start()
+                        if(!pinch) {
+                            MailZoomDiagnostics.start()
+                            view?.setExternalPinchActive(true)
+                            updatePinch(true)
+                        }
                         pinch=true
                         val factor=event.calculateZoom()
                         MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size} zoom=$zoomProgress")
@@ -791,11 +808,15 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     }
                     if(pinch)event.changes.forEach{it.consume()}
                 }while(event.changes.any{it.pressed})
-                if(pinch) MailZoomDiagnostics.finish()
+                if(pinch) {
+                    view?.setExternalPinchActive(false)
+                    updatePinch(false)
+                    MailZoomDiagnostics.finish()
+                }
             }
         }) {
-        Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value}")}
-            .nestedScroll(scroll.connection).verticalScroll(outer)) {
+        Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive")}
+            .nestedScroll(scroll.connection).verticalScroll(outer,enabled=!pinchActive)) {
             if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().combinedClickable(onClick={subjectExpanded=!subjectExpanded},onLongClick={
@@ -837,19 +858,18 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             else {
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,zoomProgress=zoomProgress,onZoomChanged={progress->
-                    if(progress>0f && zoomProgress==0f) {
-                        // Capture the invariant container bottom once to prevent per-frame WebView resizing.
-                        zoomViewportHeight=(readerOrigin.y.toInt()+scroll.viewportHeight).coerceAtLeast(1)
-                        MailZoomDiagnostics.record("zoomViewport height=$zoomViewportHeight")
-                    }else if(progress==0f)zoomViewportHeight=0
-                    zoomProgress=progress
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,zoomProgress=zoomProgress,onZoomChanged={progress,fromPinch->
+                    // Native pinch never owns Compose chrome geometry. Do not replay its final
+                    // progress on ACTION_UP: retaining the frozen panel avoids an exit jump.
+                    if(!fromPinch && !scroll.pinchActive)zoomProgress=progress
                     val zoomed=progress>0.001f
                     scroll.zoomed=zoomed;htmlZoomed=zoomed
-                },zoomViewportHeight=zoomViewportHeight)
-                if(!htmlZoomed && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
+                },onPinchChanged=updatePinch)
+                // Keep the scroll extent unchanged by zoom. Removing these nodes during a
+                // gesture can clamp outer.value and move the WebView even with a frozen header.
+                if(parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
             }
-            if(!htmlZoomed)Spacer(Modifier.height(100.dp))
+            Spacer(Modifier.height(100.dp))
         }
         val showHorizontal by remember(scroll){derivedStateOf{scroll.horizontal.let{it.range>it.extent && it.extent>0}}}
         if(htmlZoomed && showHorizontal)Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start=4.dp,end=80.dp,bottom=4.dp).height(4.dp).testTag("reader-horizontal-scrollbar").drawBehind {
