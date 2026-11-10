@@ -207,10 +207,11 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     fun relativeScale(): Float=initialScale?.takeIf{it>0f}?.let{renderScale/it}?:1f
     fun atInitialScale(): Boolean = initialScale?.let{renderScale<=it*1.03f}?:true
     fun afterVisualLayout(callback: ()->Unit) {
+        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","request visual layout h=$height")
         val revision=documentRevision
         post {
             if(live && revision==documentRevision)postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
-                if(live && revision==documentRevision)callback()
+                if(live && revision==documentRevision){if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","visual layout ready h=$height");callback()}
             }})
         }
     }
@@ -342,6 +343,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             post{if(live && revision==documentRevision)ready()}
         }
         if(value==lastHeight)return
+        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","height=$height document=$documentHeight content=$content base=$base scale=$renderScale value=$value awaiting=$awaitingInitialLayout pending=$layoutPending")
         lastHeight=value
         val revision=documentRevision
         post{if(live && revision==documentRevision)heightChanged(value)}
@@ -389,14 +391,14 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var prepared by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
     var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
     var visualRequested by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
-    val latestPrepared by rememberUpdatedState({prepared=true})
+    val latestPrepared by rememberUpdatedState({if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","document prepared");prepared=true})
     val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     Box(Modifier.fillMaxWidth().onSizeChanged{bodyWidth=it.width}) {
         if(failed)Column(Modifier.padding(top=with(density){headerHeight.toDp()})) {
             Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
             plain.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
         } else if(ready!=null) {
-            val windowHeight=if(prepared)viewport else height.coerceAtMost(viewport)
+            val windowHeight=if(prepared)viewport else maxOf(height,headerHeight+1).coerceAtMost(viewport)
             // The native child always has the complete viewport after initial preparation.
             // Its unzoomed document extent alone determines where the Compose history follows.
             androidx.compose.ui.layout.Layout(content={
@@ -417,6 +419,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                             scroll?.position(coordinates.positionInWindow().y.toInt())
                             MailZoomDiagnostics.record("bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${coordinates.positionInWindow().y} layoutH=${coordinates.size.height} webH=${scroll?.view?.height}")
                             val view=web
+                            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered requested=$visualRequested normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")
                             if(prepared && !visualRequested && view!=null) {
                                 visualRequested=true
                                 view.afterVisualLayout{rendered=true}
