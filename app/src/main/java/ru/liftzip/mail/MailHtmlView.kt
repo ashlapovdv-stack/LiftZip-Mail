@@ -89,8 +89,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         }
     }
     private fun recordGeometry(source: String,event: MotionEvent?=null) {
+        if(!MailZoomDiagnostics.isRecording)return
         getLocationOnScreen(diagnosticsLocation)
-        MailZoomDiagnostics.record("webGeometry source=$source screenX=${diagnosticsLocation[0]} screenY=${diagnosticsLocation[1]} width=$width height=$height scale=$renderScale scrollX=$scrollX scrollY=$scrollY action=${event?.actionMasked?:-1} pointers=${event?.pointerCount?:0} pinch=${pinchGestureActive||externalPinchActive}")
+        MailZoomDiagnostics.record {"webGeometry source=$source screenX=${diagnosticsLocation[0]} screenY=${diagnosticsLocation[1]} width=$width height=$height scale=$renderScale scrollX=$scrollX scrollY=$scrollY action=${event?.actionMasked?:-1} pointers=${event?.pointerCount?:0} pinch=${pinchGestureActive||externalPinchActive}"}
     }
     init {
         setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -126,7 +127,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 release(rendererGone=true);failed();return true
             }
             override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){
-                MailZoomDiagnostics.record("scale old=$oldScale new=$newScale webH=${view.height} scrollY=${view.scrollY} contentH=${view.contentHeight}")
+                MailZoomDiagnostics.record {"scale old=$oldScale new=$newScale webH=${view.height} scrollY=${view.scrollY} contentH=${view.contentHeight}"}
                 renderScale=newScale;recordGeometry("scale");publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
                 post{if(live)zoomChanged(progress)}
@@ -225,11 +226,11 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         waitForDocumentLayout=enabled
     }
     fun afterVisualLayout(callback: ()->Unit) {
-        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","request visual layout h=$height")
+        if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","request visual layout h=$height")
         val revision=documentRevision
         post {
             if(live && revision==documentRevision)postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
-                if(live && revision==documentRevision){if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","visual layout ready h=$height");callback()}
+                if(live && revision==documentRevision){if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","visual layout ready h=$height");callback()}
             }})
         }
     }
@@ -253,14 +254,14 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(pinchGestureActive==active)return
         pinchGestureActive=active
         if(active){fling.abortAnimation();removeCallbacks(animateFling)}
-        MailZoomDiagnostics.record("pinchState active=$active")
+        MailZoomDiagnostics.record {"pinchState active=$active"}
         pinchChanged(active)
     }
     fun setExternalPinchActive(active: Boolean) {
         if(externalPinchActive==active)return
         externalPinchActive=active
         if(active){fling.abortAnimation();removeCallbacks(animateFling)}
-        MailZoomDiagnostics.record("externalPinchState active=$active")
+        MailZoomDiagnostics.record {"externalPinchState active=$active"}
     }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if(!interactionEnabled)return false
@@ -326,7 +327,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) {
         super.onSizeChanged(w,h,oldw,oldh)
-        MailZoomDiagnostics.record("webSize w=$w h=$h oldW=$oldw oldH=$oldh scrollY=$scrollY")
+        MailZoomDiagnostics.record {"webSize w=$w h=$h oldW=$oldw oldH=$oldh scrollY=$scrollY"}
         recordGeometry("size")
         if(w!=oldw || h!=oldh){
             val layout=++layoutRevision;val documentId=documentRevision
@@ -362,7 +363,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             post{if(live && revision==documentRevision)ready()}
         }
         if(value==lastHeight)return
-        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","height=$height document=$documentHeight content=$content base=$base scale=$renderScale value=$value awaiting=$awaitingInitialLayout pending=$layoutPending")
+        if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","height=$height document=$documentHeight content=$content base=$base scale=$renderScale value=$value awaiting=$awaitingInitialLayout pending=$layoutPending")
         lastHeight=value
         val revision=documentRevision
         post{if(live && revision==documentRevision)heightChanged(value)}
@@ -415,7 +416,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
         if(latestMeasuring && scroll?.pinchActive!=true && web!=null)intrinsicHeight=measured
     })
     val latestPrepared by rememberUpdatedState({
-        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","document prepared measuring=${!prepared}")
+        if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","document prepared measuring=${!prepared}")
         if(!prepared) {
             baseScale=web?.fittedScale()?:1f
             prepared=true
@@ -431,7 +432,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     LaunchedEffect(nativeComplete,web,ready,headerHeight,bodyWidth) {
         if(nativeComplete)web?.afterVisualLayout{rendered=true}
     }
-    SideEffect{if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared complete=$nativeComplete rendered=$rendered failed=$failed")}
+    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared complete=$nativeComplete rendered=$rendered failed=$failed")}
     Box(Modifier.fillMaxWidth().onSizeChanged{bodyWidth=it.width}) {
         if(failed)Column(Modifier.padding(top=with(density){headerHeight.toDp()})) {
             Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
@@ -456,9 +457,9 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                         .graphicsLayer{alpha=if(rendered)1f else 0f}
                         .onGloballyPositioned{coordinates->
                             scroll?.position(coordinates.positionInWindow().y.toInt())
-                            MailZoomDiagnostics.record("bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${coordinates.positionInWindow().y} layoutH=${coordinates.size.height} webH=${scroll?.view?.height}")
+                            MailZoomDiagnostics.record {"bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${coordinates.positionInWindow().y} layoutH=${coordinates.size.height} webH=${scroll?.view?.height}"}
                             val view=web
-                            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered complete=$nativeComplete normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")
+                            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered complete=$nativeComplete normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")
                         },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{interactionEnabled=rendered;measuringDocument(!prepared);viewport(viewport);show(nativeDocument?:ready,density.fontScale)}},
                         onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
                 }
