@@ -257,10 +257,25 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                 route=="sender" -> SenderSettingsScreen(s,onBack={route="settings"},onDefault=vm::setDefaultAccount)
                 route=="advanced" -> AdvancedSettingsScreen(onBack={route="settings"},onSection={route=it})
                 route=="about" -> AboutSettingsScreen(onBack={route="settings"})
-                route=="diagnostics" -> DiagnosticsScreen(s,onBack={route="settings"},onPermission={
-                    if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
-                },onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestore=vm::restoreBackground,onRetryBodies=vm::retryBodies)
+                route=="diagnostics" -> Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f)) {
+                        DiagnosticsScreen(s,onBack={route="settings"},onPermission={
+                            if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
+                        },onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestore=vm::restoreBackground,onRetryBodies=vm::retryBodies)
+                    }
+                    if(BuildConfig.DEBUG) {
+                        HorizontalDivider()
+                        Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
+                            Button(onClick={
+                                val clipboard=context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Диагностика HTML",MailZoomDiagnostics.snapshot()))
+                                android.widget.Toast.makeText(context,"Диагностика HTML скопирована",android.widget.Toast.LENGTH_SHORT).show()
+                            },modifier=Modifier.weight(1f)) { Text("Скопировать диагностику HTML") }
+                            TextButton(onClick={MailZoomDiagnostics.clear()}) { Text("Очистить") }
+                        }
+                    }
+                }
                 route=="message-missing" -> MissingMessageScreen(onBack={goInbox()})
                 route=="preview" && preview!=null -> AttachmentPreviewScreen(preview!!,onBack={preview=null;route="reader"},onExternal={openExternal(preview!!)})
                 route=="compose" && draft!=null -> {
@@ -723,7 +738,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
         }
-    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress).onGloballyPositioned{MailZoomDiagnostics.record("topBar progress=$zoomProgress top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -733,7 +748,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
         }
     })}}) { padding->
-        Box(Modifier.padding(padding).fillMaxSize().onGloballyPositioned{readerOrigin=it.positionInWindow()}.pointerInput(scroll) {
+        Box(Modifier.padding(padding).fillMaxSize().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height} progress=$zoomProgress")}.pointerInput(scroll) {
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
                 val view=scroll.view
@@ -745,15 +760,18 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 do {
                     val event=awaitPointerEvent(PointerEventPass.Initial)
                     if(outside && event.changes.count{it.pressed}>=2) {
+                        if(!pinch) MailZoomDiagnostics.start()
                         pinch=true
                         val factor=event.calculateZoom()
+                        MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size} zoom=$zoomProgress")
                         if(factor.isFinite() && factor>0f && factor!=1f)view?.zoomBy(factor.coerceIn(0.8f,1.25f))
                     }
                     if(pinch)event.changes.forEach{it.consume()}
                 }while(event.changes.any{it.pressed})
+                if(pinch) MailZoomDiagnostics.finish()
             }
         }) {
-        Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
+        Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value}")}
             .nestedScroll(scroll.connection).verticalScroll(outer)) {
             if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
