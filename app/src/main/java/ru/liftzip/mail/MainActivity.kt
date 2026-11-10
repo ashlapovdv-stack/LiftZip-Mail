@@ -253,8 +253,16 @@ private val Paper=Color(0xFFF8F9F6)
                 route=="diagnostics" -> Column(Modifier.fillMaxSize()) {
                     if(BuildConfig.DEBUG) {
                         var htmlDiagnosticStatus by remember { mutableStateOf("Сначала воспроизведите рывки в письме, затем вернитесь сюда.") }
+                        var zoomDiagnosticsEnabled by remember { mutableStateOf(MailZoomDiagnostics.isEnabled) }
                         Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal=16.dp,vertical=12.dp)) {
                             Text("Диагностика HTML",style=MaterialTheme.typography.titleMedium)
+                            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                                Text("Записывать диагностику масштабирования",Modifier.weight(1f),style=MaterialTheme.typography.bodyMedium)
+                                Switch(checked=zoomDiagnosticsEnabled,onCheckedChange={enabled->
+                                    MailZoomDiagnostics.setEnabled(enabled)
+                                    zoomDiagnosticsEnabled=MailZoomDiagnostics.isEnabled
+                                })
+                            }
                             Text(htmlDiagnosticStatus,style=MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.height(8.dp))
                             Button(onClick={
@@ -731,21 +739,21 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
     val conversation by produceState<QuotedConversation?>(null,m.id,m.body,m.htmlBody) {
-        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation start body=${m.body.length} html=${m.htmlBody.length}")
+        if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation start body=${m.body.length} html=${m.htmlBody.length}")
         val result=withContext(kotlinx.coroutines.Dispatchers.Default){
-            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation worker start")
+            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation worker start")
             val parsed=ReaderDocuments.conversation(m.body)
-            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation text parsed")
+            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation text parsed")
             val separate=HtmlMail.canSeparateHtmlHistory(m.htmlBody)
-            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation HTML parsed")
+            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation HTML parsed")
             if(separate)parsed else parsed.copy(messages=emptyList())
         }
         value=result
-        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation complete")
+        if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation complete")
     }
     // Observe the async result in the screen composition, before passing it to Scaffold subcomposition.
     val currentConversation=conversation
-    SideEffect{if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","reader state parsed=${currentConversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
+    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","reader state parsed=${currentConversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
     var messageMenu by remember(m.id){mutableStateOf(false)}
@@ -762,14 +770,14 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         // WebView while the native two-pointer stream is active.
         scroll.pinchActive=active
         pinchActive=active
-        MailZoomDiagnostics.record("composePinch active=$active outer=${outer.value}")
+        MailZoomDiagnostics.record {"composePinch active=$active outer=${outer.value}"}
         if(active)readerScope.launch(start=CoroutineStart.UNDISPATCHED){
             // Cancels an already running outer fling instead of merely disabling future drags.
             outer.scroll(MutatePriority.UserInput){}
         }
     }
     // The toolbar is an overlay: hiding it never changes the native reading viewport.
-    val toolbar: @Composable () -> Unit = {Box(Modifier.fillMaxWidth().onSizeChanged{scroll.toolbar.height=it.height}.readerChrome(scroll.toolbar.zoomProgress,if(scroll.zoomProgress>0f)scroll.chromeOffset else scroll.toolbar.hiddenPixels).testTag("reader-toolbar").onGloballyPositioned{MailZoomDiagnostics.record("topBar hidden=${scroll.toolbar.hiddenPixels} pinch=$pinchActive top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(windowInsets=WindowInsets(0,0,0,0),colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    val toolbar: @Composable () -> Unit = {Box(Modifier.fillMaxWidth().onSizeChanged{scroll.toolbar.height=it.height}.readerChrome(scroll.toolbar.zoomProgress,if(scroll.zoomProgress>0f)scroll.chromeOffset else scroll.toolbar.hiddenPixels).testTag("reader-toolbar").onGloballyPositioned{MailZoomDiagnostics.record {"topBar hidden=${scroll.toolbar.hiddenPixels} pinch=$pinchActive top=${it.positionInWindow().y} height=${it.size.height}"}}) {TopAppBar(windowInsets=WindowInsets(0,0,0,0),colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -824,7 +832,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
         }
     }) { padding->
-        Box(Modifier.padding(padding).fillMaxSize().clipToBounds().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height}")}.pointerInput(scroll) {
+        Box(Modifier.padding(padding).fillMaxSize().clipToBounds().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record {"readerContainer top=${readerOrigin.y} height=${it.size.height}"}}.pointerInput(scroll) {
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
                 val outsideContent=down.position.y+readerOrigin.y !in scroll.contentTop..scroll.contentBottom
@@ -843,7 +851,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                             }
                             pinch=true
                             val factor=event.calculateZoom()
-                            MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size}")
+                            MailZoomDiagnostics.record {"outsidePinch factor=$factor pointers=${event.changes.size}"}
                             if(factor.isFinite() && factor>0f && factor!=1f)view.zoomBy(factor.coerceIn(0.8f,1.25f))
                         }
                         if(pinch)event.changes.forEach{it.consume()}
@@ -857,7 +865,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 }
             }
         }) {
-        Column(Modifier.fillMaxSize().testTag("reader-viewport").onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive")}
+        Column(Modifier.fillMaxSize().testTag("reader-viewport").onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record {"scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive"}}
             .nestedScroll(scroll.connection).verticalScroll(outer,enabled=!pinchActive)) {
             val parsed=currentConversation
             if(m.previewOnly || !m.contentCached || parsed==null) {
