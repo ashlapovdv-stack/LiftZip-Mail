@@ -826,7 +826,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     }) { padding->
         Box(Modifier.padding(padding).fillMaxSize().clipToBounds().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height}")}.pointerInput(scroll) {
             awaitEachGesture {
-                awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                val outsideContent=down.position.y+readerOrigin.y !in scroll.contentTop..scroll.contentBottom
                 val view=scroll.view?.takeIf{it.interactionEnabled}
                 var pinch=false
                 try {
@@ -834,7 +835,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                         val event=awaitPointerEvent(PointerEventPass.Initial)
                         // The original DOWN decides ownership, including gestures over Compose
                         // history/header controls and below a short document's logical extent.
-                        if(view!=null && (pinch || !view.ownsTouchStream) && event.changes.count{it.pressed}>=2) {
+                        if(view!=null && (pinch || outsideContent || !view.ownsTouchStream) && event.changes.count{it.pressed}>=2) {
                             if(!pinch) {
                                 MailZoomDiagnostics.start()
                                 view.setExternalPinchActive(true)

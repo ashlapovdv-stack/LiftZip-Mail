@@ -172,6 +172,7 @@ class HtmlMailDeviceTest {
                 MailHtmlBody(message,message.body,false,onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
             }}}
             rule.waitUntil(15_000){requests.get()==1}
+            rule.waitUntil(15_000){rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().isNotEmpty()}
             rule.waitUntil(10_000){greenPixels()>50}
             rule.onNodeWithText("Показать изображения").assertDoesNotExist()
             val pixels=rule.onRoot().captureToImage().toPixelMap()

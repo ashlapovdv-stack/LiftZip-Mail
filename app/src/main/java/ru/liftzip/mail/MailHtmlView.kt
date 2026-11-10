@@ -452,7 +452,10 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                         },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{interactionEnabled=rendered;measuringDocument(!prepared);viewport(viewport);show(nativeDocument?:ready,density.fontScale)}},
                         onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
                 }
-                Spacer(Modifier.testTag(if(rendered)"mail-body" else "mail-preparing-content").fillMaxWidth().height(with(density){contentHeight.toDp()}))
+                Spacer(Modifier.testTag(if(rendered)"mail-body" else "mail-preparing-content").onGloballyPositioned{coordinates->
+                    scroll?.contentTop=coordinates.positionInWindow().y
+                    scroll?.contentBottom=coordinates.positionInWindow().y+coordinates.size.height
+                }.fillMaxWidth().height(with(density){contentHeight.toDp()}))
             }){measurables,constraints->
                 val unbounded=constraints.copy(minHeight=0,maxHeight=androidx.compose.ui.unit.Constraints.Infinity)
                 val child=measurables[0].measure(unbounded)

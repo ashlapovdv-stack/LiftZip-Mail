@@ -20,6 +20,8 @@ class ReaderScroll(val outer: ScrollState) {
         (headerOffset/headerHeight).coerceIn(0f,1f)
     var nativeScrollY by mutableIntStateOf(0)
     var pinchActive=false
+    var contentTop=0f
+    var contentBottom=0f
     var viewportTop=0
         set(value){bodyAnchor+=field-value;field=value}
     var viewportHeight by mutableIntStateOf(0)

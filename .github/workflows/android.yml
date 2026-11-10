@@ -100,6 +100,7 @@ jobs:
           name: device-test-reports
           path: |
             upgrade-check.txt
+            device-timeout.txt
             ui-checks/
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
@@ -137,16 +138,18 @@ jobs:
             bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderZoomDeviceTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
             mkdir -p ui-checks
             for image in reader-initial reader-zoom-hidden reader-reset; do adb exec-out cat /data/local/tmp/liftzip-ui-checks/$image.png > ui-checks/$image.png; done
-            python - <<'PY'
-            import base64
-            from pathlib import Path
-            for path in sorted(Path("ui-checks").glob("reader-*.png")):
-                data=path.read_bytes()
-                assert data.startswith(bytes.fromhex("89504e470d0a1a0a")),str(path)
-                print("IMAGE_BEGIN "+path.name)
-                print(base64.encodebytes(data).decode(),end="")
-                print("IMAGE_END")
-            PY
+      - name: Review reader screenshots
+        run: |
+          python - <<'PY'
+          import base64
+          from pathlib import Path
+          for path in sorted(Path("ui-checks").glob("reader-*.png")):
+              data=path.read_bytes()
+              assert data.startswith(bytes.fromhex("89504e470d0a1a0a")),str(path)
+              print("IMAGE_BEGIN "+path.name)
+              print(base64.encodebytes(data).decode(),end="")
+              print("IMAGE_END")
+          PY
       - name: Show current reader trace on failure
         if: failure()
         run: grep -R --include='*logcat*' -F 'MailReaderReady' app/build/outputs/androidTest-results/ || true
