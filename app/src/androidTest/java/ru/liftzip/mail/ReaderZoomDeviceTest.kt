@@ -1,6 +1,9 @@
 package ru.liftzip.mail
 
 import android.graphics.Rect
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -193,6 +196,48 @@ class ReaderZoomDeviceTest {
         rule.onNodeWithText("Показать изображения").assertIsDisplayed()
         screenshot("reader-reset")
         rule.runOnIdle{assertSame(view,webView())}
+    }
+
+    @Test fun fittedWideMailDoesNotOverlapChromeAtPartialZoom() {
+        val m=message.copy(subject="Subject that occupies two lines above the sender and images",
+            htmlBody="<div style='height:40px;background:#00ff00'></div><table width='720'><tr><td>Letter</td></tr></table><p style='white-space:nowrap'>"+"UNBREAKABLE".repeat(25)+"</p><img src='https://reader-fixture.invalid/image.png'>")
+        rule.setContent{MailTheme{reader(m)}}
+        val view=loaded()
+        fun assertNoOverlap() {
+            val header=rule.onNodeWithTag("reader-message-header").fetchSemanticsNode().boundsInRoot
+            val toolbar=rule.onNodeWithTag("reader-toolbar").fetchSemanticsNode().boundsInRoot
+            val subject=rule.onNodeWithText(m.subject).fetchSemanticsNode().boundsInRoot
+            assertTrue("Toolbar covers subject: $toolbar / $subject",toolbar.bottom<=subject.top+2f)
+            var firstGreen=-1
+            rule.runOnUiThread {
+                val bitmap=Bitmap.createBitmap(view.width,view.height,Bitmap.Config.ARGB_8888)
+                try {
+                    view.draw(Canvas(bitmap))
+                    val x=view.width/2
+                    firstGreen=(0 until bitmap.height).firstOrNull{y->
+                        val pixel=bitmap.getPixel(x,y)
+                        Color.green(pixel)>200 && Color.red(pixel)<50 && Color.blue(pixel)<50
+                    }?:-1
+                }finally{bitmap.recycle()}
+            }
+            assertTrue("Native content marker was not rendered",firstGreen>=0)
+            assertTrue("Header covers first HTML row: header=$header nativeTop=$firstGreen",topInRoot(view)+firstGreen>=header.bottom-3f)
+        }
+        assertNoOverlap()
+        val focus=center();val density=view.resources.displayMetrics.density
+        val sampler=FrameSampler(view,focus.y);sampler.start()
+        val pinch=Pinch(focus,48f*density);pinch.down()
+        try {
+            for(step in 1..8)pinch.move((48f+10f*step/8)*density)
+            rule.waitForIdle()
+            assertNoOverlap()
+            screenshot("reader-partial-no-overlap")
+        }finally{pinch.up()}
+        assertStableViewport(sampler.stop())
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+        rule.waitUntil(10_000){var initial=false;rule.runOnUiThread{initial=view.atInitialScale()};initial}
+        rule.waitForIdle()
+        assertNoOverlap()
     }
 
     private fun assertStableViewport(samples: List<Sample>) {

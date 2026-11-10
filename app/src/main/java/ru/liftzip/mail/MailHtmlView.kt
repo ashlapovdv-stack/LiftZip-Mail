@@ -212,6 +212,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         val base=initialScale?:return
         if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
     }
+    internal fun fittedScale(): Float=initialScale?:renderScale
     internal fun documentGeneration(): Long=documentRevision
     fun relativeScale(): Float=initialScale?.takeIf{it>0f}?.let{renderScale/it}?:1f
     fun atInitialScale(): Boolean = initialScale?.let{renderScale<=it*1.03f}?:true
@@ -402,9 +403,10 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var headerHeight by remember(message.id){mutableIntStateOf(0)}
     var bodyWidth by remember(message.id){mutableIntStateOf(0)}
     val ready=remember(document,headerHeight,bodyWidth){document?.let{doc->
-        if(bodyWidth<=0)null else doc.withReaderInset(headerHeight,bodyWidth)
+        if(bodyWidth<=0)null else doc.withReaderInset(0,bodyWidth)
     }}
     var height by remember(message.id,message.contentVersion,ready){mutableIntStateOf(8)}
+    var baseScale by remember(message.id,message.contentVersion,ready){mutableFloatStateOf(1f)}
     var prepared by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
     var nativeComplete by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
     var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
@@ -414,10 +416,16 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     })
     val latestPrepared by rememberUpdatedState({
         if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","document prepared measuring=${!prepared}")
-        if(!prepared)prepared=true else nativeComplete=true
+        if(!prepared) {
+            baseScale=web?.fittedScale()?:1f
+            height+=headerHeight
+            prepared=true
+        } else nativeComplete=true
     })
     val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
-    val nativeDocument=remember(ready,prepared,viewport,bodyWidth){ready?.let{doc->if(prepared)doc.withReaderCanvas(viewport,bodyWidth) else doc}}
+    val nativeDocument=remember(ready,prepared,viewport,bodyWidth,baseScale,headerHeight){ready?.let{doc->
+        if(prepared)document?.withReaderInset(headerHeight,bodyWidth,baseScale)?.withReaderCanvas(viewport,bodyWidth,baseScale) else doc
+    }}
     LaunchedEffect(nativeComplete,web,ready) {
         if(nativeComplete)web?.afterVisualLayout{rendered=true}
     }
@@ -466,7 +474,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 }
             }
         }
-        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height;scroll?.headerHeight=it.height}
+        Column(Modifier.fillMaxWidth().testTag("reader-message-header").onSizeChanged{headerHeight=it.height;scroll?.headerHeight=it.height}
             .readerChrome(scroll?.toolbar?.zoomProgress?:0f,scroll?.headerOffset?:0f)
             .background(androidx.compose.ui.graphics.Color.White)) {
             header()

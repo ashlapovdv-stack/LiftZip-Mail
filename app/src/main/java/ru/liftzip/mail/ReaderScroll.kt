@@ -19,6 +19,7 @@ class ReaderScroll(val outer: ScrollState) {
     // Visibility follows native zoom progress even when the focal point lies
     // inside the document inset. Native scroll only positions the overlay.
     val chromeZoomProgress: Float get()=zoomProgress.coerceIn(0f,1f)
+    val chromeOffset: Float get()=maxOf(headerOffset,headerHeight*chromeZoomProgress,0f)
     var nativeScrollY by mutableIntStateOf(0)
     var pinchActive=false
     var contentTop=0f
