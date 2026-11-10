@@ -82,6 +82,9 @@ class ReaderZoomDeviceTest {
             rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.interactionEnabled && it.contentHeight>0 && it.height>20}?:false};ready}
         }catch(error: Throwable) {
             rule.onRoot().printToLog("MailReaderTree")
+            Thread.getAllStackTraces().filterKeys{it.name.contains("DefaultDispatcher")}.forEach{(thread,stack)->
+                android.util.Log.i("MailReaderReady","worker ${thread.name}: "+stack.joinToString(" | "))
+            }
             rule.runOnUiThread{val v=webView();android.util.Log.i("MailReaderReady","load timeout view=$v enabled=${v?.interactionEnabled} h=${v?.height} content=${v?.contentHeight}")}
             throw error
         }

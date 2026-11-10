@@ -731,11 +731,19 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
     val conversation by produceState<QuotedConversation?>(null,m.id,m.body,m.htmlBody) {
-        value=withContext(kotlinx.coroutines.Dispatchers.Default){
+        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation start body=${m.body.length} html=${m.htmlBody.length}")
+        val result=withContext(kotlinx.coroutines.Dispatchers.Default){
+            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation worker start")
             val parsed=ReaderDocuments.conversation(m.body)
-            if(HtmlMail.canSeparateHtmlHistory(m.htmlBody))parsed else parsed.copy(messages=emptyList())
+            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation text parsed")
+            val separate=HtmlMail.canSeparateHtmlHistory(m.htmlBody)
+            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation HTML parsed")
+            if(separate)parsed else parsed.copy(messages=emptyList())
         }
+        value=result
+        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation complete")
     }
+    SideEffect{if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","reader state parsed=${conversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
     var messageMenu by remember(m.id){mutableStateOf(false)}
