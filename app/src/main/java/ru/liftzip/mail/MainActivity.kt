@@ -743,7 +743,9 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         value=result
         if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation complete")
     }
-    SideEffect{if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","reader state parsed=${conversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
+    // Observe the async result in the screen composition, before passing it to Scaffold subcomposition.
+    val currentConversation=conversation
+    SideEffect{if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","reader state parsed=${currentConversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
     var messageMenu by remember(m.id){mutableStateOf(false)}
@@ -855,7 +857,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         }) {
         Column(Modifier.fillMaxSize().testTag("reader-viewport").onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive")}
             .nestedScroll(scroll.connection).verticalScroll(outer,enabled=!pinchActive)) {
-            val parsed=conversation
+            val parsed=currentConversation
             if(m.previewOnly || !m.contentCached || parsed==null) {
                 messageHeader()
                 if(loadingError!=null)Column(Modifier.padding(16.dp)) {
