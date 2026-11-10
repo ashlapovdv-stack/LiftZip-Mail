@@ -208,10 +208,10 @@ class ReaderZoomDeviceTest {
             val subject=rule.onNodeWithText(m.subject).fetchSemanticsNode().boundsInRoot
             assertTrue("Toolbar covers subject: $toolbar / $subject",toolbar.bottom<=subject.top+2f)
             val bitmap=rule.onRoot().captureToImage().asAndroidBitmap()
-            val x=bitmap.width/2
+            val row=IntArray(bitmap.width)
             val greenRows=(0 until bitmap.height).filter{y->
-                val pixel=bitmap.getPixel(x,y)
-                Color.green(pixel)>220 && Color.red(pixel)<35 && Color.blue(pixel)<35
+                bitmap.getPixels(row,0,bitmap.width,0,y,bitmap.width,1)
+                row.any{pixel->Color.green(pixel)>220 && Color.red(pixel)<35 && Color.blue(pixel)<35}
             }
             val firstGreen=greenRows.firstOrNull()?:-1
             var expectedHeight=0f
@@ -220,6 +220,7 @@ class ReaderZoomDeviceTest {
             assertTrue("Native content marker was not rendered",firstGreen>=0)
             assertTrue("Header covers first HTML row: header=$header nativeTop=$firstGreen",firstGreen>=header.bottom-3f)
         }
+        screenshot("reader-fitted-base")
         assertNoOverlap()
         val focus=center();val density=view.resources.displayMetrics.density
         val sampler=FrameSampler(view,focus.y);sampler.start()
@@ -227,8 +228,8 @@ class ReaderZoomDeviceTest {
         try {
             for(step in 1..8)pinch.move((48f+10f*step/8)*density)
             rule.waitForIdle()
-            assertNoOverlap()
             screenshot("reader-partial-no-overlap")
+            assertNoOverlap()
         }finally{pinch.up()}
         assertStableViewport(sampler.stop())
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
