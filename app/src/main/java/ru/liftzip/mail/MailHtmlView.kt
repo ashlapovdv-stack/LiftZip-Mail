@@ -111,7 +111,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 (parent as? ViewGroup)?.removeView(this@MailHtmlWebView)
                 release(rendererGone=true);failed();return true
             }
-            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
+            override fun onScaleChanged(view: WebView,oldScale: Float,newScale: Float){
+                MailZoomDiagnostics.record("scale old=$oldScale new=$newScale webH=${view.height} scrollY=${view.scrollY} contentH=${view.contentHeight}")
+                renderScale=newScale;publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
                 post{if(live)zoomChanged(progress)}
             }}
@@ -209,6 +211,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         MotionEvent.obtain(event).also{copy->copy.offsetLocation(event.rawX-event.x,event.rawY-event.y);velocity?.addMovement(copy);copy.recycle()}
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        MailZoomDiagnostics.touch(event)
         if(!live)return false
         when(event.actionMasked) {
             MotionEvent.ACTION_DOWN->{
@@ -254,6 +257,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) {
         super.onSizeChanged(w,h,oldw,oldh)
+        MailZoomDiagnostics.record("webSize w=$w h=$h oldW=$oldw oldH=$oldh scrollY=$scrollY")
         if(w!=oldw || h!=oldh){
             val layout=++layoutRevision;val documentId=documentRevision
             layoutPending=true

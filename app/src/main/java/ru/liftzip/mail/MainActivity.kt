@@ -723,7 +723,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
         }
-    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress).onGloballyPositioned{MailZoomDiagnostics.record("topBar progress=$zoomProgress top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -733,7 +733,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
         }
     })}}) { padding->
-        Box(Modifier.padding(padding).fillMaxSize().onGloballyPositioned{readerOrigin=it.positionInWindow()}.pointerInput(scroll) {
+        Box(Modifier.padding(padding).fillMaxSize().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height} progress=$zoomProgress")}.pointerInput(scroll) {
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
                 val view=scroll.view
@@ -753,7 +753,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 }while(event.changes.any{it.pressed})
             }
         }) {
-        Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height}
+        Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value}")}
             .nestedScroll(scroll.connection).verticalScroll(outer)) {
             if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
