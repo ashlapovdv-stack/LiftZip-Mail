@@ -21,3 +21,9 @@ internal fun MailHtmlDocument.withReaderInset(headerPixels: Int,viewportWidth: I
     val inset="<div aria-hidden=\"true\" style=\"display:block!important;height:calc(100vw * $ratio)!important;margin:0!important;padding:0!important;border:0!important;pointer-events:none!important\"></div>"
     return copy(html=html.replaceFirst("<body>","<body>$inset"))
 }
+
+/** Added only after intrinsic measurement. This native canvas permits focal panning even for short mail. */
+internal fun MailHtmlDocument.withReaderCanvas(viewportHeight: Int,viewportWidth: Int): MailHtmlDocument {
+    val ratio=viewportHeight.toDouble()/viewportWidth.coerceAtLeast(1)
+    return copy(html=html.replaceFirst("</head>","<style>html,body{min-height:calc(100vw * $ratio)!important}</style></head>"))
+}
