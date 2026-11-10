@@ -745,12 +745,15 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 do {
                     val event=awaitPointerEvent(PointerEventPass.Initial)
                     if(outside && event.changes.count{it.pressed}>=2) {
+                        if(!pinch) MailZoomDiagnostics.start()
                         pinch=true
                         val factor=event.calculateZoom()
+                        MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size} zoom=$zoomProgress")
                         if(factor.isFinite() && factor>0f && factor!=1f)view?.zoomBy(factor.coerceIn(0.8f,1.25f))
                     }
                     if(pinch)event.changes.forEach{it.consume()}
                 }while(event.changes.any{it.pressed})
+                if(pinch) MailZoomDiagnostics.finish()
             }
         }) {
         Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value}")}
