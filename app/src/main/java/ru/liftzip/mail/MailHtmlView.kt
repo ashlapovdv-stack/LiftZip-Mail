@@ -405,23 +405,25 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val ready=remember(document,headerHeight,bodyWidth){document?.let{doc->
         if(bodyWidth<=0)null else doc.withReaderInset(0,bodyWidth)
     }}
-    var height by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableIntStateOf(8)}
+    var intrinsicHeight by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableIntStateOf(8)}
     var baseScale by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableFloatStateOf(1f)}
     var prepared by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
     var nativeComplete by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
     var rendered by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
     val latestMeasuring by rememberUpdatedState(!prepared)
     val latestMeasured by rememberUpdatedState<(Int)->Unit>({measured->
-        if(latestMeasuring && scroll?.pinchActive!=true && web!=null)height=measured
+        if(latestMeasuring && scroll?.pinchActive!=true && web!=null)intrinsicHeight=measured
     })
     val latestPrepared by rememberUpdatedState({
         if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","document prepared measuring=${!prepared}")
         if(!prepared) {
             baseScale=web?.fittedScale()?:1f
-            height+=headerHeight
             prepared=true
         } else nativeComplete=true
     })
+    // Keep the measured HTML extent separate from the Compose header. A late
+    // measurement must never overwrite or double-add the header contribution.
+    val height=intrinsicHeight+if(prepared)headerHeight else 0
     val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     val nativeDocument=remember(ready,prepared,viewport,bodyWidth,baseScale,headerHeight){ready?.let{doc->
         if(prepared)document?.withReaderInset(headerHeight,bodyWidth,baseScale)?.withReaderCanvas(viewport,bodyWidth,baseScale) else doc
