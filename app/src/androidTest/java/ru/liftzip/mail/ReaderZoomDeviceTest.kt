@@ -1,9 +1,6 @@
 package ru.liftzip.mail
 
 import android.graphics.Rect
-import android.graphics.Bitmap
-import androidx.compose.ui.graphics.asAndroidBitmap
-import java.io.File
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -165,10 +162,7 @@ class ReaderZoomDeviceTest {
         }
     }
 
-    private fun screenshot(name: String) {
-        val bitmap=rule.onRoot().captureToImage().asAndroidBitmap()
-        File(rule.activity.filesDir,name+".png").outputStream().use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
-    }
+    private fun screenshot(name: String){saveDeviceScreenshot(rule,name)}
     @Test fun nativePinchHidesMenuSubjectAndImagesThenResetRestoresThem() {
         val rows=(1..80).joinToString(""){index->"<tr><td style='padding:16px;background:#abc9ed'>Row $index</td><td style='padding:16px'>Table content $index</td></tr>"}
         val withImages=message.copy(htmlBody="<p>Ответ</p><img src='https://example.com/reader-test.png'><table style='width:1200px'>$rows</table><div class='gmail_quote'><p>Предыдущий текст</p></div>")
@@ -286,6 +280,31 @@ class ReaderZoomDeviceTest {
         assertEquals("Native scroll changed after scale stopped",0f,range{it.scrollY.toFloat()},1f)
         assertEquals("Document anchor moved after scale stopped",0f,range{it.anchorY},view.resources.displayMetrics.density+1f)
         rule.runOnIdle{assertSame(view,webView())}
+    }
+
+
+    @Test fun imageToggleAtPartialZoomPreservesTheReadingPosition() {
+        val withImages=message.copy(htmlBody="<p>Ответ</p><img src='https://reader-fixture.invalid/image.png'><div style='height:100000px'></div>")
+        rule.setContent{MailTheme{reader(withImages)}}
+        val view=loaded()
+        rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
+        rule.runOnIdle{view.zoomBy(1.12f)}
+        rule.waitForIdle()
+        for(label in listOf("Показать изображения","Скрыть внешние изображения")) {
+            var scale=1f;var y=0;var revision=0L
+            rule.runOnIdle{scale=view.relativeScale();y=view.scrollY;revision=view.documentGeneration()}
+            rule.onNodeWithText(label).performClick()
+            rule.waitUntil(15_000){
+                var ready=false
+                rule.runOnUiThread{ready=view.documentGeneration()>revision && view.interactionEnabled}
+                ready
+            }
+            rule.runOnIdle{
+                assertSame(view,webView())
+                assertEquals("Image toggle reset zoom",scale,view.relativeScale(),0.03f)
+                assertEquals("Image toggle moved the reading position",y.toFloat(),view.scrollY.toFloat(),3f)
+            }
+        }
     }
 
     @Test fun tenRealPinchCyclesDoNotAccumulateHistoryOffset() {

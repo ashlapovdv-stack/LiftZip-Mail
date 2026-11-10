@@ -63,6 +63,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var awaitingInitialLayout=false
     private data class ReadingAnchor(val relativeScale: Float,val cssX: Float,val cssY: Float)
     private var pendingAnchor: ReadingAnchor?=null
+    private var deferredAnchor: ReadingAnchor?=null
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     var ownsTouchStream=false
@@ -184,8 +185,13 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(document===next)return
         val old=document
         val base=initialScale
-        pendingAnchor=if(old!=null && old.externalAllowed!=next.externalAllowed && base!=null && base>0f && renderScale>0f)
-            ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale) else null
+        // Intrinsic measurement stays at base scale. Restore the reading anchor
+        // only after the fixed native canvas is installed.
+        pendingAnchor=if(waitForDocumentLayout)null else {
+            deferredAnchor?:if(old!=null && old.externalAllowed!=next.externalAllowed && base!=null && base>0f && renderScale>0f)
+                ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale) else null
+        }
+        if(!waitForDocumentLayout)deferredAnchor=null
         document=next
         documentRevision++;documentUrl="${HtmlMail.ORIGIN}document/$documentRevision/"
         layoutRevision++;layoutPending=false;awaitingInitialLayout=false
@@ -206,9 +212,17 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         val base=initialScale?:return
         if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
     }
+    internal fun documentGeneration(): Long=documentRevision
     fun relativeScale(): Float=initialScale?.takeIf{it>0f}?.let{renderScale/it}?:1f
     fun atInitialScale(): Boolean = initialScale?.let{renderScale<=it*1.03f}?:true
-    fun measuringDocument(enabled: Boolean){waitForDocumentLayout=enabled}
+    fun measuringDocument(enabled: Boolean) {
+        if(enabled && !waitForDocumentLayout) {
+            val base=initialScale
+            if(document!=null && base!=null && base>0f && renderScale>0f)
+                deferredAnchor=ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale)
+        }
+        waitForDocumentLayout=enabled
+    }
     fun afterVisualLayout(callback: ()->Unit) {
         if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","request visual layout h=$height")
         val revision=documentRevision
@@ -383,7 +397,6 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val latestLink by rememberUpdatedState(onLink)
     val latestZoom by rememberUpdatedState(onZoomChanged)
     val latestPinch by rememberUpdatedState(onPinchChanged)
-    val latestExpanded by rememberUpdatedState(zoomed)
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     var headerHeight by remember(message.id){mutableIntStateOf(0)}
@@ -397,7 +410,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
     val latestMeasuring by rememberUpdatedState(!prepared)
     val latestMeasured by rememberUpdatedState<(Int)->Unit>({measured->
-        if(latestMeasuring && !latestExpanded && scroll?.pinchActive!=true && web!=null)height=measured
+        if(latestMeasuring && scroll?.pinchActive!=true && web!=null)height=measured
     })
     val latestPrepared by rememberUpdatedState({
         if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","document prepared measuring=${!prepared}")
