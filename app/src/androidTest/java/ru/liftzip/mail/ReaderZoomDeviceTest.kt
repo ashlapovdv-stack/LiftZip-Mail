@@ -77,7 +77,7 @@ class ReaderZoomDeviceTest {
         ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("No inline images")},{},{},{},{},{},{})
     }
     private fun loaded(): MailHtmlWebView {
-        rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.contentHeight>0 && it.height>20}?:false};ready}
+        rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.interactionEnabled && it.contentHeight>0 && it.height>20}?:false};ready}
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
     }
     private fun center(): Offset {
@@ -160,7 +160,8 @@ class ReaderZoomDeviceTest {
         File(rule.activity.filesDir,name+".png").outputStream().use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
     }
     @Test fun nativePinchHidesMenuSubjectAndImagesThenResetRestoresThem() {
-        val withImages=message.copy(htmlBody=message.htmlBody.replace("<p>Ответ</p>","<p>Ответ</p><img src='https://example.com/reader-test.png'>"))
+        val rows=(1..80).joinToString(""){index->"<tr><td style='padding:16px;background:#abc9ed'>Row $index</td><td style='padding:16px'>Table content $index</td></tr>"}
+        val withImages=message.copy(htmlBody="<p>Ответ</p><img src='https://example.com/reader-test.png'><table style='width:1200px'>$rows</table><div class='gmail_quote'><p>Предыдущий текст</p></div>")
         rule.setContent{MailTheme{reader(withImages)}}
         val view=loaded()
         rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}

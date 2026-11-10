@@ -29,7 +29,7 @@ class ReaderDeviceTest {
         ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("No inline images")},{},{},{},{},{},{})
     }
     private fun loaded(): MailHtmlWebView {
-        rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.contentHeight>0 && it.height>20}?:false};ready}
+        rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.interactionEnabled && it.contentHeight>0 && it.height>20}?:false};ready}
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
     }
     @Test fun unavailableBodyShowsErrorWithoutPresentingThePreviewAsMail() {
