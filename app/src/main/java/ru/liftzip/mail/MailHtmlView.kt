@@ -205,6 +205,14 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
     }
     fun atInitialScale(): Boolean = initialScale?.let{renderScale<=it*1.03f}?:true
+    fun afterVisualLayout(callback: ()->Unit) {
+        val revision=documentRevision
+        post {
+            if(live && revision==documentRevision)postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){
+                if(live && revision==documentRevision)callback()
+            }})
+        }
+    }
     fun viewport(pixels: Int) {
         val next=pixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
         if(viewport!=next){viewport=next;publishHeight()}
@@ -410,7 +418,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                             val view=web
                             if(prepared && !visualRequested && view!=null) {
                                 visualRequested=true
-                                view.post{view.postVisualStateCallback(0L,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){rendered=true}})}
+                                view.afterVisualLayout{rendered=true}
                             }
                         },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{interactionEnabled=rendered;viewport(viewport);show(ready,density.fontScale)}},
                         onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
