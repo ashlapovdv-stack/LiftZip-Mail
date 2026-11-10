@@ -19,6 +19,7 @@ internal object MailZoomDiagnostics {
     private val history = ArrayDeque<String>()
     private const val HISTORY_LIMIT = 12000
     private var active = false
+    private var flushPending = false
     private var dropped = 0
     private var generation = 0
     private val flushTask = Runnable { flush() }
@@ -39,11 +40,16 @@ internal object MailZoomDiagnostics {
         }
     }
 
-    fun clear() { history.clear(); records.clear(); active = false; handler.removeCallbacks(flushTask) }
+    fun clear() { history.clear(); records.clear(); active = false; flushPending = false; handler.removeCallbacks(flushTask) }
 
     fun start() {
         if (!BuildConfig.DEBUG) return
-        if (active) return
+        if (active) {
+            if (!flushPending) return
+            // A new gesture must not inherit the previous session or its delayed flush.
+            handler.removeCallbacks(flushTask)
+            flush()
+        }
         active = true
         generation++
         dropped = 0
@@ -62,19 +68,22 @@ internal object MailZoomDiagnostics {
         if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN && event.pointerCount >= 2) start()
         if (!active) return
         record("touch action=${event.actionMasked} pointers=${event.pointerCount} x=${event.x} y=${event.y}")
+        // A pinch owns the gesture until the final pointer is gone. Finishing at
+        // POINTER_UP would miss subsequent geometry and late renderer callbacks.
         if (event.actionMasked == MotionEvent.ACTION_UP ||
-            event.actionMasked == MotionEvent.ACTION_CANCEL ||
-            (event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.pointerCount <= 2)) finish()
+            event.actionMasked == MotionEvent.ACTION_CANCEL) finish()
     }
 
     fun finish() {
         if (!active) return
         handler.removeCallbacks(flushTask)
+        flushPending = true
         handler.postDelayed(flushTask, 900L)
     }
 
     private fun flush() {
         if (!active) return
+        flushPending = false
         record("gestureEnd dropped=$dropped")
         active = false
         while (records.isNotEmpty()) {

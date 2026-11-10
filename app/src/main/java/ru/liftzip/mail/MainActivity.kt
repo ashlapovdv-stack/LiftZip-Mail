@@ -30,7 +30,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInRoot
@@ -91,6 +90,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -124,13 +124,6 @@ class MainActivity: ComponentActivity() {
 
 private val Olive=Color(0xFF4C5D47)
 private val Paper=Color(0xFFF8F9F6)
-
-internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLayer { alpha=1f-progress.coerceIn(0f,1f) }
-    .clipToBounds().layout { measurable,constraints ->
-        val placeable=measurable.measure(constraints.copy(minHeight=0))
-        val height=(placeable.height*(1f-progress.coerceIn(0f,1f))).toInt().coerceIn(0,constraints.maxHeight)
-        layout(placeable.width,height){placeable.placeRelative(0,0)}
-    }
 
 @Composable internal fun MailTheme(style: MailStyle=MailStyle.STANDARD,content: @Composable ()->Unit) {
     val dark=isSystemInDarkTheme()
@@ -258,22 +251,44 @@ internal fun Modifier.zoomCollapse(progress: Float): Modifier = this.graphicsLay
                 route=="advanced" -> AdvancedSettingsScreen(onBack={route="settings"},onSection={route=it})
                 route=="about" -> AboutSettingsScreen(onBack={route="settings"})
                 route=="diagnostics" -> Column(Modifier.fillMaxSize()) {
+                    if(BuildConfig.DEBUG) {
+                        var htmlDiagnosticStatus by remember { mutableStateOf("Сначала воспроизведите рывки в письме, затем вернитесь сюда.") }
+                        Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(horizontal=16.dp,vertical=12.dp)) {
+                            Text("Диагностика HTML",style=MaterialTheme.typography.titleMedium)
+                            Text(htmlDiagnosticStatus,style=MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(8.dp))
+                            Button(onClick={
+                                val report=MailZoomDiagnostics.snapshot()
+                                val clipboard=context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Диагностика HTML",report))
+                                htmlDiagnosticStatus="Скопировано: ${report.length} символов. Можно вставить в сообщение."
+                                android.widget.Toast.makeText(context,"HTML-диагностика скопирована (${report.length} символов)",android.widget.Toast.LENGTH_LONG).show()
+                            },modifier=Modifier.fillMaxWidth()) { Text("Скопировать диагностику HTML") }
+                            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically) {
+                                OutlinedButton(onClick={
+                                    val report=MailZoomDiagnostics.snapshot()
+                                    val intent=Intent(Intent.ACTION_SEND).apply {
+                                        type="text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT,"Диагностика HTML Почта")
+                                        putExtra(Intent.EXTRA_TEXT,report)
+                                    }
+                                    context.startActivity(Intent.createChooser(intent,"Отправить диагностику HTML"))
+                                    htmlDiagnosticStatus="Отчёт подготовлен: ${report.length} символов."
+                                },modifier=Modifier.weight(1f)) { Text("Отправить") }
+                                TextButton(onClick={
+                                    MailZoomDiagnostics.clear()
+                                    htmlDiagnosticStatus="Журнал очищен. Повторите жест в письме."
+                                    android.widget.Toast.makeText(context,"Журнал HTML очищен",android.widget.Toast.LENGTH_SHORT).show()
+                                }) { Text("Очистить") }
+                            }
+                        }
+                        HorizontalDivider()
+                    }
                     Box(Modifier.weight(1f)) {
                         DiagnosticsScreen(s,onBack={route="settings"},onPermission={
                             if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                             else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
                         },onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestore=vm::restoreBackground,onRetryBodies=vm::retryBodies)
-                    }
-                    if(BuildConfig.DEBUG) {
-                        HorizontalDivider()
-                        Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
-                            Button(onClick={
-                                val clipboard=context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Диагностика HTML",MailZoomDiagnostics.snapshot()))
-                                android.widget.Toast.makeText(context,"Диагностика HTML скопирована",android.widget.Toast.LENGTH_SHORT).show()
-                            },modifier=Modifier.weight(1f)) { Text("Скопировать диагностику HTML") }
-                            TextButton(onClick={MailZoomDiagnostics.clear()}) { Text("Очистить") }
-                        }
                     }
                 }
                 route=="message-missing" -> MissingMessageScreen(onBack={goInbox()})
@@ -716,11 +731,21 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
     val conversation by produceState<QuotedConversation?>(null,m.id,m.body,m.htmlBody) {
-        value=withContext(kotlinx.coroutines.Dispatchers.Default){
+        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation start body=${m.body.length} html=${m.htmlBody.length}")
+        val result=withContext(kotlinx.coroutines.Dispatchers.Default){
+            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation worker start")
             val parsed=ReaderDocuments.conversation(m.body)
-            if(HtmlMail.canSeparateHtmlHistory(m.htmlBody))parsed else parsed.copy(messages=emptyList())
+            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation text parsed")
+            val separate=HtmlMail.canSeparateHtmlHistory(m.htmlBody)
+            if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation HTML parsed")
+            if(separate)parsed else parsed.copy(messages=emptyList())
         }
+        value=result
+        if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","conversation complete")
     }
+    // Observe the async result in the screen composition, before passing it to Scaffold subcomposition.
+    val currentConversation=conversation
+    SideEffect{if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","reader state parsed=${currentConversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
     var messageMenu by remember(m.id){mutableStateOf(false)}
@@ -729,16 +754,22 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
-    var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
+    var pinchActive by remember(m.id){mutableStateOf(false)}
     val readerContext=LocalContext.current
-    BackHandler(enabled=actionsExpanded){actionsExpanded=false}
-    Scaffold(containerColor=Color.White,floatingActionButton={
-        Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-        if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
-        ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
-            onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
+    val readerScope=rememberCoroutineScope()
+    val updatePinch: (Boolean)->Unit={active->
+        // Synchronous ownership transfer: no later scale/layout callback can move the
+        // WebView while the native two-pointer stream is active.
+        scroll.pinchActive=active
+        pinchActive=active
+        MailZoomDiagnostics.record("composePinch active=$active outer=${outer.value}")
+        if(active)readerScope.launch(start=CoroutineStart.UNDISPATCHED){
+            // Cancels an already running outer fling instead of merely disabling future drags.
+            outer.scroll(MutatePriority.UserInput){}
         }
-    },topBar={if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress).onGloballyPositioned{MailZoomDiagnostics.record("topBar progress=$zoomProgress top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    }
+    // The toolbar is an overlay: hiding it never changes the native reading viewport.
+    val toolbar: @Composable () -> Unit = {Box(Modifier.fillMaxWidth().onSizeChanged{scroll.toolbar.height=it.height}.readerChrome(scroll.toolbar.zoomProgress,if(scroll.zoomProgress>0f)scroll.chromeOffset else scroll.toolbar.hiddenPixels).testTag("reader-toolbar").onGloballyPositioned{MailZoomDiagnostics.record("topBar hidden=${scroll.toolbar.hiddenPixels} pinch=$pinchActive top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(windowInsets=WindowInsets(0,0,0,0),colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -747,33 +778,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     onClick={messageMenu=false;onSpam()})
             }
         }
-    })}}) { padding->
-        Box(Modifier.padding(padding).fillMaxSize().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height} progress=$zoomProgress")}.pointerInput(scroll) {
-            awaitEachGesture {
-                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
-                val view=scroll.view
-                val location=IntArray(2)
-                view?.getLocationInWindow(location)
-                val x=down.position.x+readerOrigin.x;val y=down.position.y+readerOrigin.y
-                val outside=view!=null && (x<location[0] || x>=location[0]+view.width || y<location[1] || y>=location[1]+view.height)
-                var pinch=false
-                do {
-                    val event=awaitPointerEvent(PointerEventPass.Initial)
-                    if(outside && event.changes.count{it.pressed}>=2) {
-                        if(!pinch) MailZoomDiagnostics.start()
-                        pinch=true
-                        val factor=event.calculateZoom()
-                        MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size} zoom=$zoomProgress")
-                        if(factor.isFinite() && factor>0f && factor!=1f)view?.zoomBy(factor.coerceIn(0.8f,1.25f))
-                    }
-                    if(pinch)event.changes.forEach{it.consume()}
-                }while(event.changes.any{it.pressed})
-                if(pinch) MailZoomDiagnostics.finish()
-            }
-        }) {
-        Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value}")}
-            .nestedScroll(scroll.connection).verticalScroll(outer)) {
-            if(zoomProgress<0.999f)Box(Modifier.zoomCollapse(zoomProgress)) {Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
+    })}}
+    val messageHeader: @Composable () -> Unit = {
+            // Measured overlay content; its space is represented inside the HTML document.
+            Spacer(Modifier.height(with(LocalDensity.current){scroll.toolbar.height.toDp()}))
+            Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().combinedClickable(onClick={subjectExpanded=!subjectExpanded},onLongClick={
                 val clipboard=readerContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -805,24 +814,73 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 }
             }
             HorizontalDivider(Modifier.padding(vertical=10.dp))
-            }}
-            val parsed=conversation
+            }
+    }
+    BackHandler(enabled=actionsExpanded){actionsExpanded=false}
+    Scaffold(containerColor=Color.White,floatingActionButton={
+        Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
+        ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
+            onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
+        }
+    }) { padding->
+        Box(Modifier.padding(padding).fillMaxSize().clipToBounds().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height}")}.pointerInput(scroll) {
+            awaitEachGesture {
+                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                val outsideContent=down.position.y+readerOrigin.y !in scroll.contentTop..scroll.contentBottom
+                val view=scroll.view?.takeIf{it.interactionEnabled}
+                var pinch=false
+                try {
+                    do {
+                        val event=awaitPointerEvent(PointerEventPass.Initial)
+                        // The original DOWN decides ownership, including gestures over Compose
+                        // history/header controls and below a short document's logical extent.
+                        if(view!=null && (pinch || outsideContent || !view.ownsTouchStream) && event.changes.count{it.pressed}>=2) {
+                            if(!pinch) {
+                                MailZoomDiagnostics.start()
+                                view.setExternalPinchActive(true)
+                                updatePinch(true)
+                            }
+                            pinch=true
+                            val factor=event.calculateZoom()
+                            MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size}")
+                            if(factor.isFinite() && factor>0f && factor!=1f)view.zoomBy(factor.coerceIn(0.8f,1.25f))
+                        }
+                        if(pinch)event.changes.forEach{it.consume()}
+                    }while(event.changes.any{it.pressed})
+                }finally {
+                    if(pinch) {
+                        view?.setExternalPinchActive(false)
+                        updatePinch(false)
+                        MailZoomDiagnostics.finish()
+                    }
+                }
+            }
+        }) {
+        Column(Modifier.fillMaxSize().testTag("reader-viewport").onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive")}
+            .nestedScroll(scroll.connection).verticalScroll(outer,enabled=!pinchActive)) {
+            val parsed=currentConversation
             if(m.previewOnly || !m.contentCached || parsed==null) {
+                messageHeader()
                 if(loadingError!=null)Column(Modifier.padding(16.dp)) {
                     Text("Не удалось загрузить письмо: $loadingError",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick=onRetryLoad){Text("Повторить")}
                 } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             else {
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,zoomProgress=zoomProgress,onZoomChanged={progress->
-                    zoomProgress=progress
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                    // One zoom progress drives every chrome overlay, never the native viewport.
+                    scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
-                    scroll.zoomed=zoomed;htmlZoomed=zoomed
-                })
-                if(!htmlZoomed && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
+                    htmlZoomed=zoomed
+                },onPinchChanged=updatePinch)
+                // Keep the scroll extent unchanged by zoom. Removing these nodes during a
+                // gesture can clamp outer.value and move the WebView even with a frozen header.
+                if(parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
             }
-            if(!htmlZoomed)Spacer(Modifier.height(100.dp))
+            Spacer(Modifier.height(100.dp))
         }
+        toolbar()
         val showHorizontal by remember(scroll){derivedStateOf{scroll.horizontal.let{it.range>it.extent && it.extent>0}}}
         if(htmlZoomed && showHorizontal)Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start=4.dp,end=80.dp,bottom=4.dp).height(4.dp).testTag("reader-horizontal-scrollbar").drawBehind {
             val horizontal=scroll.horizontal

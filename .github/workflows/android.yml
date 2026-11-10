@@ -11,6 +11,10 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -96,6 +100,65 @@ jobs:
           name: device-test-reports
           path: |
             upgrade-check.txt
+            device-timeout.txt
+            ui-checks/
+            app/build/reports/androidTests/
+            app/build/outputs/androidTest-results/
+          retention-days: 14
+
+  reader-gestures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Free runner space for the Android userdata image
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc
+          df -h /home/runner
+      - name: Enable emulator acceleration
+        run: sudo chmod 666 /dev/kvm
+      - name: Test actual Compose gestures on Android 15
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -no-metrics
+          script: |
+            bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderZoomDeviceTest#nativePinchHidesMenuSubjectAndImagesThenResetRestoresThem -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
+            bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderZoomDeviceTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
+            mkdir -p ui-checks
+            for image in reader-initial reader-zoom-hidden reader-reset reader-partial-no-overlap reader-fitted-base; do adb exec-out cat /data/local/tmp/liftzip-ui-checks/$image.png > ui-checks/$image.png; done
+      - name: Review reader screenshots
+        run: |
+          python - <<'PY'
+          import base64
+          from pathlib import Path
+          for path in sorted(Path("ui-checks").glob("reader-*.png")):
+              data=path.read_bytes()
+              assert data.startswith(bytes.fromhex("89504e470d0a1a0a")),str(path)
+              print("IMAGE_BEGIN "+path.name)
+              print(base64.encodebytes(data).decode(),end="")
+              print("IMAGE_END")
+          PY
+      - name: Show current reader trace on failure
+        if: failure()
+        run: grep -R --include='*logcat*' -F 'MailReaderReady' app/build/outputs/androidTest-results/ || true
+      - name: Save reader gesture reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reader-gesture-reports
+          path: |
             ui-checks/
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
