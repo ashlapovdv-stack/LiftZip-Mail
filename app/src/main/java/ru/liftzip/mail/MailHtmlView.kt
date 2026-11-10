@@ -305,7 +305,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
 }
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,zoomProgress: Float=0f,onZoomChanged: (Float)->Unit={}) {
+internal fun readerBodyHeight(normal: Int,expanded: Int,zoomed: Boolean): Int=if(zoomed && expanded>0)expanded else normal
+
+@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,zoomProgress: Float=0f,onZoomChanged: (Float)->Unit={},zoomViewportHeight: Int=0) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
@@ -345,8 +347,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 try {
                     val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{measured->
                         // The WebView publishes the unzoomed document geometry only; while
-                        // zoomed the reading window is interpolated from it and must not
-                        // be overwritten by a callback.
+                        // zoomed its reading window is fixed and must not be overwritten
+                        // by a callback.
                         if(!latestExpanded && web!=null)height=measured
                     },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},horizontalChanged={scroll?.horizontal=it},waitForDocumentLayout=true)
                     web=view
@@ -355,8 +357,15 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                     addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                 }catch(e: Exception){failed=true;loader.close()}
             }},
-                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=(10f*(1f-zoomProgress)).dp).height(with(density){val normal=height.coerceAtMost(viewport);val expanded=scroll?.viewportHeight?.takeIf{it>0}?:viewport;(normal+(expanded-normal)*zoomProgress).toDp()}).graphicsLayer{alpha=if(rendered)1f else 0f}
-                    .onGloballyPositioned{scroll?.position(it.positionInWindow().y.toInt())},
+                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=(10f*(1f-zoomProgress)).dp).height(with(density){
+                    val normal=height.coerceAtMost(viewport)
+                    val expanded=zoomViewportHeight.takeIf{it>0}?:scroll?.viewportHeight?.takeIf{it>0}?:viewport
+                    readerBodyHeight(normal,expanded,zoomed).toDp()
+                }).graphicsLayer{alpha=if(rendered)1f else 0f}
+                    .onGloballyPositioned{
+                        scroll?.position(it.positionInWindow().y.toInt())
+                        MailZoomDiagnostics.record("bodyLayout progress=$zoomProgress zoomed=$zoomed top=${it.positionInWindow().y} layoutH=${it.size.height} webH=${scroll?.view?.height} fixedViewport=$zoomViewportHeight")
+                    },
                 update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
                 onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
         }
