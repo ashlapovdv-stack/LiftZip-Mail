@@ -65,6 +65,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var pendingAnchor: ReadingAnchor?=null
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+    var ownsTouchStream=false
+        private set
     var interactionEnabled=true
     var scrollPage: ((Float)->Float)?=null
     var onReleased: (()->Unit)?=null
@@ -248,12 +250,13 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if(!interactionEnabled)return false
         when(event.actionMasked) {
-            MotionEvent.ACTION_DOWN->if(pinchGestureActive)setPinchGesture(false)
+            MotionEvent.ACTION_DOWN->{ownsTouchStream=true;if(pinchGestureActive)setPinchGesture(false)}
             MotionEvent.ACTION_POINTER_DOWN->if(event.pointerCount>=2){MailZoomDiagnostics.start();setPinchGesture(true)}
             MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->{
                 // The native view consumes the complete stream before Compose is allowed to
                 // resume scrolling. No MotionEvent or pointer coordinate is changed.
                 val result=super.dispatchTouchEvent(event)
+                ownsTouchStream=false
                 if(pinchGestureActive)setPinchGesture(false)
                 return result
             }
@@ -351,7 +354,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     fun release(rendererGone: Boolean=false){
         if(!live)return
-        live=false;removeCallbacks(animateFling);fling.abortAnimation();velocity?.recycle();velocity=null
+        live=false;ownsTouchStream=false;removeCallbacks(animateFling);fling.abortAnimation();velocity?.recycle();velocity=null
         onReleased?.invoke();onReleased=null;scrollPage=null
         if(!rendererGone)stopLoading()
         document=null;destroy()
@@ -386,7 +389,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var headerHeight by remember(message.id){mutableIntStateOf(0)}
     var bodyWidth by remember(message.id){mutableIntStateOf(0)}
     val ready=remember(document,headerHeight,bodyWidth){document?.let{doc->
-        if(headerHeight<=0 || bodyWidth<=0)null else doc.withReaderInset(headerHeight,bodyWidth)
+        if(bodyWidth<=0)null else doc.withReaderInset(headerHeight,bodyWidth)
     }}
     var height by remember(message.id,message.contentVersion,ready){mutableIntStateOf(8)}
     var prepared by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
@@ -412,6 +415,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
             plain.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
         } else if(ready!=null) {
             val windowHeight=if(prepared)viewport else height.coerceAtMost(viewport)
+            val contentTop=(headerHeight-(scroll?.headerOffset?:0f)).coerceIn(0f,viewport.toFloat()).roundToInt()
+            val contentHeight=((if(zoomed)viewport else height.coerceAtMost(viewport))-contentTop).coerceAtLeast(0)
             // The native child always has the complete viewport after initial preparation.
             // Its unzoomed document extent alone determines where the Compose history follows.
             androidx.compose.ui.layout.Layout(content={
@@ -424,7 +429,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                             scroll?.attach(view)
                             addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                         }catch(e: Exception){android.util.Log.e("MailReaderReady","create failed",e);failed=true;loader.close()}
-                    }},modifier=Modifier.testTag("mail-body").fillMaxWidth().height(with(density){windowHeight.toDp()})
+                    }},modifier=Modifier.testTag("mail-native-window").fillMaxWidth().height(with(density){windowHeight.toDp()})
                         .graphicsLayer{alpha=if(rendered)1f else 0f}
                         .onGloballyPositioned{coordinates->
                             scroll?.position(coordinates.positionInWindow().y.toInt())
@@ -434,9 +439,15 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                         },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{interactionEnabled=rendered;measuringDocument(!prepared);viewport(viewport);show(nativeDocument?:ready,density.fontScale)}},
                         onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
                 }
+                Spacer(Modifier.testTag(if(rendered)"mail-body" else "mail-preparing-content").fillMaxWidth().height(with(density){contentHeight.toDp()}))
             }){measurables,constraints->
-                val child=measurables.single().measure(constraints.copy(minHeight=0,maxHeight=androidx.compose.ui.unit.Constraints.Infinity))
-                layout(child.width,height.coerceAtMost(viewport).coerceAtLeast(1)){child.placeRelative(0,0)}
+                val unbounded=constraints.copy(minHeight=0,maxHeight=androidx.compose.ui.unit.Constraints.Infinity)
+                val child=measurables[0].measure(unbounded)
+                val contentBounds=measurables[1].measure(unbounded)
+                layout(child.width,height.coerceAtMost(viewport).coerceAtLeast(1)){
+                    child.placeRelative(0,0)
+                    contentBounds.placeRelative(0,contentTop)
+                }
             }
         }
         Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height;scroll?.headerHeight=it.height}

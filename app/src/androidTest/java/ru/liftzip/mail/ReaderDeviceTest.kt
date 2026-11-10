@@ -142,7 +142,7 @@ class ReaderDeviceTest {
         rule.runOnIdle{view.zoomBy(1.2f)}
         rule.waitForIdle()
         rule.onNodeWithContentDescription("Назад").assertExists()
-        rule.runOnIdle{view.zoomBy(2f)}
+        rule.runOnIdle{view.zoomBy(6f)}
         rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()

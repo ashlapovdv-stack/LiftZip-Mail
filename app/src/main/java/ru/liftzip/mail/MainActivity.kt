@@ -826,32 +826,33 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     }) { padding->
         Box(Modifier.padding(padding).fillMaxSize().clipToBounds().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height}")}.pointerInput(scroll) {
             awaitEachGesture {
-                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
                 val view=scroll.view?.takeIf{it.interactionEnabled}
-                val location=IntArray(2)
-                view?.getLocationInWindow(location)
-                val x=down.position.x+readerOrigin.x;val y=down.position.y+readerOrigin.y
-                val outside=view!=null && (x<location[0] || x>=location[0]+view.width || y<location[1] || y>=location[1]+view.height)
                 var pinch=false
-                do {
-                    val event=awaitPointerEvent(PointerEventPass.Initial)
-                    if(outside && event.changes.count{it.pressed}>=2) {
-                        if(!pinch) {
-                            MailZoomDiagnostics.start()
-                            view?.setExternalPinchActive(true)
-                            updatePinch(true)
+                try {
+                    do {
+                        val event=awaitPointerEvent(PointerEventPass.Initial)
+                        // The original DOWN decides ownership, including gestures over Compose
+                        // history/header controls and below a short document's logical extent.
+                        if(view!=null && (pinch || !view.ownsTouchStream) && event.changes.count{it.pressed}>=2) {
+                            if(!pinch) {
+                                MailZoomDiagnostics.start()
+                                view.setExternalPinchActive(true)
+                                updatePinch(true)
+                            }
+                            pinch=true
+                            val factor=event.calculateZoom()
+                            MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size}")
+                            if(factor.isFinite() && factor>0f && factor!=1f)view.zoomBy(factor.coerceIn(0.8f,1.25f))
                         }
-                        pinch=true
-                        val factor=event.calculateZoom()
-                        MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size}")
-                        if(factor.isFinite() && factor>0f && factor!=1f)view?.zoomBy(factor.coerceIn(0.8f,1.25f))
+                        if(pinch)event.changes.forEach{it.consume()}
+                    }while(event.changes.any{it.pressed})
+                }finally {
+                    if(pinch) {
+                        view?.setExternalPinchActive(false)
+                        updatePinch(false)
+                        MailZoomDiagnostics.finish()
                     }
-                    if(pinch)event.changes.forEach{it.consume()}
-                }while(event.changes.any{it.pressed})
-                if(pinch) {
-                    view?.setExternalPinchActive(false)
-                    updatePinch(false)
-                    MailZoomDiagnostics.finish()
                 }
             }
         }) {
