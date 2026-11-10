@@ -12,6 +12,7 @@ import android.widget.FrameLayout
 import android.widget.OverScroller
 import android.webkit.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -42,7 +43,7 @@ import kotlin.math.roundToInt
 /** The app owns the resource map. A message cannot expose file/content URIs or execute code. */
 class MailHtmlWebView(context: Context,private val image: (MailImageSource)->MailImageData?,private val link: (String)->Unit,
     private val heightChanged: (Int)->Unit,private val ready: ()->Unit={},private val failed: ()->Unit={},private val zoomChanged: (Float)->Unit={},
-    private val pinchChanged: (Boolean)->Unit={},private val horizontalChanged: (HorizontalScrollMetrics)->Unit={},
+    private val pinchChanged: (Boolean)->Unit={},private val horizontalChanged: (HorizontalScrollMetrics)->Unit={},private val verticalChanged: (Int)->Unit={},
     private val waitForDocumentLayout: Boolean=false): WebView(context) {
     @Volatile private var document: MailHtmlDocument?=null
     private var renderScale=resources.displayMetrics.density
@@ -63,6 +64,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var pendingAnchor: ReadingAnchor?=null
     @Volatile private var live=true
     private var viewport=resources.displayMetrics.heightPixels.coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+    var interactionEnabled=true
     var scrollPage: ((Float)->Float)?=null
     var onReleased: (()->Unit)?=null
     private val fling=OverScroller(context)
@@ -232,6 +234,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         MailZoomDiagnostics.record("externalPinchState active=$active")
     }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if(!interactionEnabled)return false
         when(event.actionMasked) {
             MotionEvent.ACTION_DOWN->if(pinchGestureActive)setPinchGesture(false)
             MotionEvent.ACTION_POINTER_DOWN->if(event.pointerCount>=2){MailZoomDiagnostics.start();setPinchGesture(true)}
@@ -287,7 +290,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         return super.onTouchEvent(event)
     }
     override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight();publishHorizontal()}
-    override fun onScrollChanged(l: Int,t: Int,oldl: Int,oldt: Int){super.onScrollChanged(l,t,oldl,oldt);publishHorizontal()}
+    override fun onScrollChanged(l: Int,t: Int,oldl: Int,oldt: Int){super.onScrollChanged(l,t,oldl,oldt);verticalChanged(t);publishHorizontal()}
     private fun publishHorizontal(){
         if(live)horizontalChanged(HorizontalScrollMetrics(computeHorizontalScrollOffset(),computeHorizontalScrollExtent(),computeHorizontalScrollRange()))
     }
@@ -347,7 +350,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
 // resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
 internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={}) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var height by remember(message.id){mutableIntStateOf(8)}
@@ -368,47 +371,62 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val latestExpanded by rememberUpdatedState(zoomed)
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
-    val ready=document
+    var headerHeight by remember(message.id){mutableIntStateOf(0)}
+    var bodyWidth by remember(message.id){mutableIntStateOf(0)}
+    val ready=remember(document,headerHeight,bodyWidth){document?.let{doc->
+        if(headerHeight<=0 || bodyWidth<=0)null else doc.withReaderInset(headerHeight,bodyWidth)
+    }}
+    var prepared by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
     var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
-    val latestRendered by rememberUpdatedState({rendered=true})
-    val viewport=((scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels)-with(density){20.dp.roundToPx()}).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
-    if(failed) {
-        Text("Показываем текстовую версию письма",Modifier.padding(vertical=10.dp),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
-        // Small native blocks also avoid an unbounded single Text layout after a renderer failure.
-        plain.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
-    }
-    else if(ready==null)Text("Подготавливаем письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
-    else {
-        if(rendered && ready.externalImages)Box {Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
-            if(ready.externalImages)TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
-        }}
-        Box {
-        key(message.id,message.contentVersion) {
-            AndroidView(factory={c->FrameLayout(c).apply {
-                try {
-                    val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{measured->
-                        // The WebView publishes the unzoomed document geometry only; while
-                        // zoomed its reading window is fixed and must not be overwritten
-                        // by a callback.
-                        if(!latestExpanded && scroll?.pinchActive!=true && web!=null)height=measured
-                    },ready={latestRendered()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},waitForDocumentLayout=true)
-                    web=view
-                    view.onReleased={scroll?.detach(view);if(web===view)web=null}
-                    scroll?.attach(view)
-                    addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
-                }catch(e: Exception){failed=true;loader.close()}
-            }},
-                modifier=Modifier.testTag("mail-body").fillMaxWidth().padding(vertical=10.dp).height(with(density){
-                    readerBodyHeight(height.coerceAtMost(viewport)).toDp()
-                }).graphicsLayer{alpha=if(rendered)1f else 0f}
-                    .onGloballyPositioned{
-                        scroll?.position(it.positionInWindow().y.toInt())
-                        MailZoomDiagnostics.record("bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${it.positionInWindow().y} layoutH=${it.size.height} webH=${scroll?.view?.height} fixedViewport=0")
-                    },
-                update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{viewport(viewport);show(ready,density.fontScale)}},
-                onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
+    var visualRequested by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
+    val latestPrepared by rememberUpdatedState({prepared=true})
+    val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+    Box(Modifier.fillMaxWidth().onSizeChanged{bodyWidth=it.width}) {
+        if(failed)Column(Modifier.padding(top=with(density){headerHeight.toDp()})) {
+            Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
+            plain.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
+        } else if(ready!=null) {
+            val windowHeight=if(prepared)viewport else height.coerceAtMost(viewport)
+            // The native child always has the complete viewport after initial preparation.
+            // Its unzoomed document extent alone determines where the Compose history follows.
+            androidx.compose.ui.layout.Layout(content={
+                key(message.id,message.contentVersion) {
+                    AndroidView(factory={c->FrameLayout(c).apply {
+                        try {
+                            val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{measured->
+                                if(!latestExpanded && scroll?.pinchActive!=true && web!=null)height=measured
+                            },ready={latestPrepared()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},verticalChanged={scroll?.nativeScrollY=it},waitForDocumentLayout=true)
+                            web=view
+                            view.onReleased={scroll?.detach(view);if(web===view)web=null}
+                            scroll?.attach(view)
+                            addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
+                        }catch(e: Exception){failed=true;loader.close()}
+                    }},modifier=Modifier.testTag("mail-body").fillMaxWidth().height(with(density){windowHeight.toDp()})
+                        .graphicsLayer{alpha=if(rendered)1f else 0f}
+                        .onGloballyPositioned{coordinates->
+                            scroll?.position(coordinates.positionInWindow().y.toInt())
+                            MailZoomDiagnostics.record("bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${coordinates.positionInWindow().y} layoutH=${coordinates.size.height} webH=${scroll?.view?.height}")
+                            val view=web
+                            if(prepared && !visualRequested && view!=null) {
+                                visualRequested=true
+                                view.post{view.postVisualStateCallback(0L,object: WebView.VisualStateCallback(){override fun onComplete(requestId: Long){rendered=true}})}
+                            }
+                        },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{interactionEnabled=rendered;viewport(viewport);show(ready,density.fontScale)}},
+                        onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
+                }
+            }){measurables,constraints->
+                val child=measurables.single().measure(constraints.copy(minHeight=0,maxHeight=androidx.compose.ui.unit.Constraints.Infinity))
+                layout(child.width,height.coerceAtMost(viewport).coerceAtLeast(1)){child.placeRelative(0,0)}
+            }
         }
-        if(!rendered)Text("Подготавливаем письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height}
+            .readerChrome(scroll?.toolbar?.zoomProgress?:0f,(scroll?.nativeScrollY?:0).toFloat())
+            .background(androidx.compose.ui.graphics.Color.White)) {
+            header()
+            if(document?.externalImages==true)Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
+                TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
+            }
         }
+        if(!failed && !rendered)Text("Подготавливаем письмо…",Modifier.padding(top=with(density){headerHeight.toDp()},bottom=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

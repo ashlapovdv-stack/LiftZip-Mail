@@ -759,7 +759,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         }
     }
     // The toolbar is an overlay: hiding it never changes the native reading viewport.
-    val toolbar: @Composable () -> Unit = {Box(Modifier.fillMaxWidth().testTag("reader-toolbar").onSizeChanged{scroll.toolbar.height=it.height}.graphicsLayer{translationY=-scroll.toolbar.hiddenPixels}.onGloballyPositioned{MailZoomDiagnostics.record("topBar hidden=${scroll.toolbar.hiddenPixels} pinch=$pinchActive top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(windowInsets=WindowInsets(0,0,0,0),colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
+    val toolbar: @Composable () -> Unit = {Box(Modifier.fillMaxWidth().testTag("reader-toolbar").onSizeChanged{scroll.toolbar.height=it.height}.readerChrome(scroll.toolbar.zoomProgress,scroll.toolbar.hiddenPixels).onGloballyPositioned{MailZoomDiagnostics.record("topBar hidden=${scroll.toolbar.hiddenPixels} pinch=$pinchActive top=${it.positionInWindow().y} height=${it.size.height}")}) {TopAppBar(windowInsets=WindowInsets(0,0,0,0),colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
         if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
@@ -769,48 +769,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
         }
     })}}
-    BackHandler(enabled=actionsExpanded){actionsExpanded=false}
-    Scaffold(containerColor=Color.White,floatingActionButton={
-        Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-        if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
-        ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
-            onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
-        }
-    }) { padding->
-        Box(Modifier.padding(padding).fillMaxSize().clipToBounds().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height}")}.pointerInput(scroll) {
-            awaitEachGesture {
-                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
-                val view=scroll.view
-                val location=IntArray(2)
-                view?.getLocationInWindow(location)
-                val x=down.position.x+readerOrigin.x;val y=down.position.y+readerOrigin.y
-                val outside=view!=null && (x<location[0] || x>=location[0]+view.width || y<location[1] || y>=location[1]+view.height)
-                var pinch=false
-                do {
-                    val event=awaitPointerEvent(PointerEventPass.Initial)
-                    if(outside && event.changes.count{it.pressed}>=2) {
-                        if(!pinch) {
-                            MailZoomDiagnostics.start()
-                            view?.setExternalPinchActive(true)
-                            updatePinch(true)
-                        }
-                        pinch=true
-                        val factor=event.calculateZoom()
-                        MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size}")
-                        if(factor.isFinite() && factor>0f && factor!=1f)view?.zoomBy(factor.coerceIn(0.8f,1.25f))
-                    }
-                    if(pinch)event.changes.forEach{it.consume()}
-                }while(event.changes.any{it.pressed})
-                if(pinch) {
-                    view?.setExternalPinchActive(false)
-                    updatePinch(false)
-                    MailZoomDiagnostics.finish()
-                }
-            }
-        }) {
-        Column(Modifier.fillMaxSize().onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive")}
-            .nestedScroll(scroll.connection).verticalScroll(outer,enabled=!pinchActive)) {
-            // Initial toolbar space scrolls with the header, outside the native viewport.
+    val messageHeader: @Composable () -> Unit = {
+            // Measured overlay content; its space is represented inside the HTML document.
             Spacer(Modifier.height(with(LocalDensity.current){scroll.toolbar.height.toDp()}))
             Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
             if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -845,22 +805,66 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
             HorizontalDivider(Modifier.padding(vertical=10.dp))
             }
+    }
+    BackHandler(enabled=actionsExpanded){actionsExpanded=false}
+    Scaffold(containerColor=Color.White,floatingActionButton={
+        Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
+        ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
+            onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
+        }
+    }) { padding->
+        Box(Modifier.padding(padding).fillMaxSize().clipToBounds().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record("readerContainer top=${readerOrigin.y} height=${it.size.height}")}.pointerInput(scroll) {
+            awaitEachGesture {
+                val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
+                val view=scroll.view?.takeIf{it.interactionEnabled}
+                val location=IntArray(2)
+                view?.getLocationInWindow(location)
+                val x=down.position.x+readerOrigin.x;val y=down.position.y+readerOrigin.y
+                val outside=view!=null && (x<location[0] || x>=location[0]+view.width || y<location[1] || y>=location[1]+view.height)
+                var pinch=false
+                do {
+                    val event=awaitPointerEvent(PointerEventPass.Initial)
+                    if(outside && event.changes.count{it.pressed}>=2) {
+                        if(!pinch) {
+                            MailZoomDiagnostics.start()
+                            view?.setExternalPinchActive(true)
+                            updatePinch(true)
+                        }
+                        pinch=true
+                        val factor=event.calculateZoom()
+                        MailZoomDiagnostics.record("outsidePinch factor=$factor pointers=${event.changes.size}")
+                        if(factor.isFinite() && factor>0f && factor!=1f)view?.zoomBy(factor.coerceIn(0.8f,1.25f))
+                    }
+                    if(pinch)event.changes.forEach{it.consume()}
+                }while(event.changes.any{it.pressed})
+                if(pinch) {
+                    view?.setExternalPinchActive(false)
+                    updatePinch(false)
+                    MailZoomDiagnostics.finish()
+                }
+            }
+        }) {
+        Column(Modifier.fillMaxSize().testTag("reader-viewport").onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record("scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive")}
+            .nestedScroll(scroll.connection).verticalScroll(outer,enabled=!pinchActive)) {
             val parsed=conversation
             if(m.previewOnly || !m.contentCached || parsed==null) {
+                messageHeader()
                 if(loadingError!=null)Column(Modifier.padding(16.dp)) {
                     Text("Не удалось загрузить письмо: $loadingError",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick=onRetryLoad){Text("Повторить")}
                 } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             else {
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,onZoomChanged={progress->
-                    // Scale controls HTML/FAB state only; scrolling owns toolbar visibility.
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                    // One zoom progress drives every chrome overlay, never the native viewport.
+                    scroll.toolbar.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
                 },onPinchChanged=updatePinch)
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
-                if(parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
+                if(parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
             }
             Spacer(Modifier.height(100.dp))
         }

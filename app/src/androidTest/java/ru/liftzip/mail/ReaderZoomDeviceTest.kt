@@ -1,6 +1,9 @@
 package ru.liftzip.mail
 
 import android.graphics.Rect
+import android.graphics.Bitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import java.io.File
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -123,7 +126,7 @@ class ReaderZoomDeviceTest {
         rule.waitForIdle()
     }
 
-    @Test fun toolbarHidesAndReturnsDuringScrollBeforeAndAfterNativePinch() {
+    @Test fun scrollControlsToolbarAtBaseScaleAndZoomTakesPriorityAfterPinch() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
         rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
@@ -139,15 +142,52 @@ class ReaderZoomDeviceTest {
                 assertTrue("Native pinch did not enlarge HTML",samples.any{it.progress>0.1f})
                 assertStableViewport(samples)
             }
-            rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+            if(pass==0)rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+            else rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
             drag(center(),Offset(0f,-240f*density))
             rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
             rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
             rule.runOnIdle{assertEquals("Hiding chrome must not resize WebView",nativeHeight,view.height)}
             drag(center(),Offset(0f,120f*density))
-            rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+            if(pass==0)rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+            else rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
             rule.runOnIdle{assertEquals("Revealing chrome must not resize WebView",nativeHeight,view.height);assertSame(view,webView())}
         }
+    }
+
+    private fun screenshot(name: String) {
+        val bitmap=rule.onRoot().captureToImage().asAndroidBitmap()
+        File(rule.activity.filesDir,name+".png").outputStream().use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
+    }
+    @Test fun nativePinchHidesMenuSubjectAndImagesThenResetRestoresThem() {
+        val withImages=message.copy(htmlBody=message.htmlBody.replace("<p>Ответ</p>","<p>Ответ</p><img src='https://example.com/reader-test.png'>"))
+        rule.setContent{MailTheme{reader(withImages)}}
+        val view=loaded()
+        rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
+        rule.onNodeWithText("Показать изображения").assertIsDisplayed()
+        screenshot("reader-initial")
+        val focus=center();val density=view.resources.displayMetrics.density
+        val sampler=FrameSampler(view,focus.y);sampler.start()
+        val pinch=Pinch(focus,48f*density);pinch.down()
+        for(step in 1..24)pinch.move((48f+80f*step/24)*density)
+        pinch.up();SystemClock.sleep(300)
+        val samples=sampler.stop();rule.waitForIdle()
+        assertStableViewport(samples)
+        assertTrue("Pinch must reach the fully hidden chrome state",samples.any{it.progress>=0.999f})
+        rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+        rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
+        rule.onNodeWithText("Показать изображения").assertIsNotDisplayed()
+        screenshot("reader-zoom-hidden")
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+        rule.waitUntil(10_000){var initial=false;rule.runOnUiThread{initial=view.atInitialScale()};initial}
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
+        rule.onNodeWithText("Показать изображения").assertIsDisplayed()
+        screenshot("reader-reset")
+        rule.runOnIdle{assertSame(view,webView())}
     }
 
     private fun assertStableViewport(samples: List<Sample>) {

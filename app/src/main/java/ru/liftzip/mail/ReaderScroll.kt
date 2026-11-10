@@ -10,6 +10,7 @@ import kotlin.math.roundToInt
 /** One continuous scroll: header -> bounded HTML viewport -> attachments and reply controls. */
 class ReaderScroll(val outer: ScrollState) {
     val toolbar=ReaderToolbarState()
+    var nativeScrollY by mutableIntStateOf(0)
     var pinchActive=false
     var viewportTop=0
         set(value){bodyAnchor+=field-value;field=value}
@@ -49,9 +50,10 @@ data class HorizontalScrollMetrics(val offset: Int=0,val extent: Int=0,val range
 /** Scroll-driven overlay state. It never changes the document's layout constraints. */
 class ReaderToolbarState {
     var height by mutableIntStateOf(0)
-    var hiddenPixels by mutableFloatStateOf(0f)
-        private set
+    var zoomProgress by mutableFloatStateOf(0f)
+    private var scrollHiddenPixels by mutableFloatStateOf(0f)
+    val hiddenPixels: Float get()=maxOf(scrollHiddenPixels,zoomProgress.coerceIn(0f,1f)*height)
     fun scroll(consumedPixels: Float) {
-        if(consumedPixels.isFinite())hiddenPixels=(hiddenPixels+consumedPixels).coerceIn(0f,height.toFloat())
+        if(consumedPixels.isFinite())scrollHiddenPixels=(scrollHiddenPixels+consumedPixels).coerceIn(0f,height.toFloat())
     }
 }

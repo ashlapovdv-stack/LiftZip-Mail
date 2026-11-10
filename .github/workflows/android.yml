@@ -130,12 +130,15 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -no-metrics
           script: |
             bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderZoomDeviceTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
+            mkdir -p ui-checks
+            for image in reader-initial reader-zoom-hidden reader-reset; do adb exec-out run-as ru.liftzip.mail cat files/$image.png > ui-checks/$image.png; done
       - name: Save reader gesture reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: reader-gesture-reports
           path: |
+            ui-checks/
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
           retention-days: 14

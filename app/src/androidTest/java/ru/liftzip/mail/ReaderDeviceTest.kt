@@ -130,7 +130,7 @@ class ReaderDeviceTest {
             assertEquals("History must return together with the scale",original,returned,tolerance)
         }
     }
-    @Test fun zoomingHtmlDoesNotChangeChromeOrReplaceTheWebView() {
+    @Test fun zoomingHtmlHidesAllChromeWithoutReplacingTheWebView() {
         val short=message.copy(htmlBody="<p>Текст письма для увеличения</p><img src='https://example.com/example.png'><table width='720'><tr><td>Содержимое</td></tr></table>",body="Текст письма для увеличения",attachments=listOf(Attachment("1","file.pdf","application/pdf",100)))
         rule.setContent{MailTheme{reader(short)}}
         val view=loaded()
@@ -143,10 +143,10 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Назад").assertExists()
         rule.runOnIdle{view.zoomBy(2f)}
         rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
-        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
-        rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
-        rule.onNodeWithText("Вложения").assertExists()
-        rule.onNodeWithText("Показать изображения").assertExists()
+        rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+        rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
+        rule.onNodeWithText("Вложения").assertIsNotDisplayed()
+        rule.onNodeWithText("Показать изображения").assertIsNotDisplayed()
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
         rule.runOnIdle{
             assertSame(view,webView())
