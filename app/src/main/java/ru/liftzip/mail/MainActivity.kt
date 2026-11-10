@@ -730,6 +730,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var zoomProgress by remember(m.id){mutableFloatStateOf(0f)}
+    var zoomViewportHeight by remember(m.id){mutableIntStateOf(0)}
     val readerContext=LocalContext.current
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
@@ -815,10 +816,15 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
             else {
                 MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,zoomProgress=zoomProgress,onZoomChanged={progress->
+                    if(progress>0f && zoomProgress==0f) {
+                        // Capture the invariant container bottom once to prevent per-frame WebView resizing.
+                        zoomViewportHeight=(readerOrigin.y.toInt()+scroll.viewportHeight).coerceAtLeast(1)
+                        MailZoomDiagnostics.record("zoomViewport height=$zoomViewportHeight")
+                    }else if(progress==0f)zoomViewportHeight=0
                     zoomProgress=progress
                     val zoomed=progress>0.001f
                     scroll.zoomed=zoomed;htmlZoomed=zoomed
-                })
+                },zoomViewportHeight=zoomViewportHeight)
                 if(!htmlZoomed && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
             }
             if(!htmlZoomed)Spacer(Modifier.height(100.dp))
