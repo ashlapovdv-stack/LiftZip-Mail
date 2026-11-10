@@ -16,10 +16,30 @@ internal object MailZoomDiagnostics {
     private const val LIMIT = 4096
     private val handler = Handler(Looper.getMainLooper())
     private val records = ArrayDeque<String>()
+    private val history = ArrayDeque<String>()
+    private const val HISTORY_LIMIT = 12000
     private var active = false
     private var dropped = 0
     private var generation = 0
     private val flushTask = Runnable { flush() }
+
+    /** Retained in memory across reader navigation; never includes message content. */
+    fun snapshot(): String {
+        if (!BuildConfig.DEBUG) return "Диагностика масштабирования доступна только в debug-сборке."
+        val lines = history.toMutableList()
+        if (active) lines.addAll(records)
+        return buildString {
+            appendLine("Диагностика HTML-масштабирования")
+            appendLine("Версия: "+BuildConfig.VERSION_NAME)
+            appendLine("Android: "+android.os.Build.VERSION.SDK_INT)
+            appendLine("Устройcтво: "+android.os.Build.MANUFACTURER+" "+android.os.Build.MODEL)
+            appendLine("Событий: "+lines.size)
+            if (lines.isEmpty()) appendLine("Жесты масштабирования ещё не зарегистрированы.")
+            lines.forEach { appendLine(it) }
+        }
+    }
+
+    fun clear() { history.clear(); records.clear(); active = false; handler.removeCallbacks(flushTask) }
 
     fun start() {
         if (!BuildConfig.DEBUG) return
@@ -57,7 +77,12 @@ internal object MailZoomDiagnostics {
         if (!active) return
         record("gestureEnd dropped=$dropped")
         active = false
-        while (records.isNotEmpty()) Log.i(TAG, records.removeFirst())
+        while (records.isNotEmpty()) {
+            val line = records.removeFirst()
+            if (history.size >= HISTORY_LIMIT) history.removeFirst()
+            history.addLast(line)
+            Log.i(TAG, line)
+        }
         dropped = 0
     }
 }
