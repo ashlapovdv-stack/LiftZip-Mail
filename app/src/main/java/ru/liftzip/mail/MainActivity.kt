@@ -858,7 +858,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             else {
                 MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
-                    scroll.toolbar.zoomProgress=progress
+                    scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
                 },onPinchChanged=updatePinch)

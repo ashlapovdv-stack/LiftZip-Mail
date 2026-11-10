@@ -9,7 +9,15 @@ import kotlin.math.roundToInt
 
 /** One continuous scroll: header -> bounded HTML viewport -> attachments and reply controls. */
 class ReaderScroll(val outer: ScrollState) {
-    val toolbar=ReaderToolbarState()
+    val toolbar=ReaderToolbarState{chromeZoomProgress}
+    var zoomProgress by mutableFloatStateOf(0f)
+    var nativeScaleRatio by mutableFloatStateOf(1f)
+    var headerHeight by mutableIntStateOf(0)
+    // Match the overlay's lower edge to the natively scaled/scrolled document inset.
+    // No native scroll position, touch coordinate or viewport constraint is changed here.
+    val headerOffset: Float get()=nativeScrollY-headerHeight*(nativeScaleRatio-1f)
+    val chromeZoomProgress: Float get()=if(zoomProgress<=0f || headerHeight<=0)0f else
+        (headerOffset/headerHeight).coerceIn(0f,1f)
     var nativeScrollY by mutableIntStateOf(0)
     var pinchActive=false
     var viewportTop=0
@@ -48,9 +56,9 @@ class ReaderScroll(val outer: ScrollState) {
 data class HorizontalScrollMetrics(val offset: Int=0,val extent: Int=0,val range: Int=0)
 
 /** Scroll-driven overlay state. It never changes the document's layout constraints. */
-class ReaderToolbarState {
+class ReaderToolbarState(private val zoom: ()->Float={0f}) {
     var height by mutableIntStateOf(0)
-    var zoomProgress by mutableFloatStateOf(0f)
+    val zoomProgress: Float get()=zoom()
     private var scrollHiddenPixels by mutableFloatStateOf(0f)
     val hiddenPixels: Float get()=maxOf(scrollHiddenPixels,zoomProgress.coerceIn(0f,1f)*height)
     fun scroll(consumedPixels: Float) {

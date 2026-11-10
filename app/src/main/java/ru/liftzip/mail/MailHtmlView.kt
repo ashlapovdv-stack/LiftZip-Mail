@@ -204,6 +204,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         val base=initialScale?:return
         if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
     }
+    fun relativeScale(): Float=initialScale?.takeIf{it>0f}?.let{renderScale/it}?:1f
     fun atInitialScale(): Boolean = initialScale?.let{renderScale<=it*1.03f}?:true
     fun afterVisualLayout(callback: ()->Unit) {
         val revision=documentRevision
@@ -404,7 +405,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                         try {
                             val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{measured->
                                 if(!latestExpanded && scroll?.pinchActive!=true && web!=null)height=measured
-                            },ready={latestPrepared()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={latestZoom(it)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},verticalChanged={scroll?.nativeScrollY=it},waitForDocumentLayout=true)
+                            },ready={latestPrepared()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={progress->scroll?.nativeScaleRatio=web?.relativeScale()?:1f;latestZoom(progress)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},verticalChanged={scroll?.nativeScrollY=it},waitForDocumentLayout=true)
                             web=view
                             view.onReleased={scroll?.detach(view);if(web===view)web=null}
                             scroll?.attach(view)
@@ -428,8 +429,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 layout(child.width,height.coerceAtMost(viewport).coerceAtLeast(1)){child.placeRelative(0,0)}
             }
         }
-        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height}
-            .readerChrome(scroll?.toolbar?.zoomProgress?:0f,(scroll?.nativeScrollY?:0).toFloat())
+        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height;scroll?.headerHeight=it.height}
+            .readerChrome(scroll?.toolbar?.zoomProgress?:0f,scroll?.headerOffset?:0f)
             .background(androidx.compose.ui.graphics.Color.White)) {
             header()
             if(document?.externalImages==true)Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
