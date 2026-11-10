@@ -137,6 +137,9 @@ jobs:
             bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderZoomDeviceTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
             mkdir -p ui-checks
             for image in reader-initial reader-zoom-hidden reader-reset; do adb exec-out run-as ru.liftzip.mail cat files/$image.png > ui-checks/$image.png; done
+      - name: Show current reader trace on failure
+        if: failure()
+        run: grep -R --include='*logcat*' -F 'MailReaderReady' app/build/outputs/androidTest-results/ || true
       - name: Save reader gesture reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -159,4 +162,4 @@ jobs:
           github-token: ${{ github.token }}
           path: previous-reader-report
       - name: Show reader preparation trace
-        run: rg --glob '*logcat*' 'MailReaderReady' previous-reader-report || true
+        run: grep -R -F 'MailReaderReady' previous-reader-report || true
