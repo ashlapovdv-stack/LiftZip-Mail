@@ -405,6 +405,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     LaunchedEffect(nativeComplete,web,ready) {
         if(nativeComplete)web?.afterVisualLayout{rendered=true}
     }
+    SideEffect{if(BuildConfig.DEBUG)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared complete=$nativeComplete rendered=$rendered failed=$failed")}
     Box(Modifier.fillMaxWidth().onSizeChanged{bodyWidth=it.width}) {
         if(failed)Column(Modifier.padding(top=with(density){headerHeight.toDp()})) {
             Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
@@ -422,7 +423,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                             view.onReleased={scroll?.detach(view);if(web===view)web=null}
                             scroll?.attach(view)
                             addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
-                        }catch(e: Exception){failed=true;loader.close()}
+                        }catch(e: Exception){android.util.Log.e("MailReaderReady","create failed",e);failed=true;loader.close()}
                     }},modifier=Modifier.testTag("mail-body").fillMaxWidth().height(with(density){windowHeight.toDp()})
                         .graphicsLayer{alpha=if(rendered)1f else 0f}
                         .onGloballyPositioned{coordinates->

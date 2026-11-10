@@ -77,7 +77,14 @@ class ReaderZoomDeviceTest {
         ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("No inline images")},{},{},{},{},{},{})
     }
     private fun loaded(): MailHtmlWebView {
-        rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.interactionEnabled && it.contentHeight>0 && it.height>20}?:false};ready}
+        rule.waitForIdle()
+        try {
+            rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.interactionEnabled && it.contentHeight>0 && it.height>20}?:false};ready}
+        }catch(error: Throwable) {
+            rule.onRoot().printToLog("MailReaderTree")
+            rule.runOnUiThread{val v=webView();android.util.Log.i("MailReaderReady","load timeout view=$v enabled=${v?.interactionEnabled} h=${v?.height} content=${v?.contentHeight}")}
+            throw error
+        }
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
     }
     private fun center(): Offset {
