@@ -390,11 +390,13 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
     val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
     val background=if(message.htmlBody.isNotBlank() && MaterialTheme.colorScheme.surface.luminance()<0.4f)"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
-    val document by produceState<MailHtmlDocument?>(null,message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,history,external,foreground,background) {
-        try {
-            value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,history,external,foreground,background))}
-        }catch(e: CancellationException){throw e}catch(e: Exception){failed=true}
+    val documentKey=remember(message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,history,external,foreground,background){
+        ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,history,external,foreground,background)
     }
+    val document by key(documentKey){produceState(ReaderDocuments.html.peek(documentKey),documentKey) {
+        try {value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(documentKey)}}
+        catch(e: CancellationException){throw e}catch(e: Exception){failed=true}
+    }}
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
     val latestZoom by rememberUpdatedState(onZoomChanged)
@@ -403,14 +405,18 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     DisposableEffect(loader){onDispose{loader.close()}}
     var headerHeight by remember(message.id){mutableIntStateOf(0)}
     var bodyWidth by remember(message.id){mutableIntStateOf(0)}
-    val ready=remember(document,headerHeight,bodyWidth){document?.let{doc->
+    val ready=remember(document,bodyWidth){document?.let{doc->
         if(bodyWidth<=0)null else doc.withReaderInset(0,bodyWidth)
     }}
-    var intrinsicHeight by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableIntStateOf(8)}
-    var baseScale by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableFloatStateOf(1f)}
-    var prepared by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
-    var nativeComplete by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
-    var rendered by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
+    val geometryKey=remember(document,bodyWidth,density.density,density.fontScale){
+        document?.takeIf{bodyWidth>0}?.let{ReaderGeometryCache.Key(it,bodyWidth,density.density,density.fontScale)}
+    }
+    val cachedGeometry=remember(geometryKey){geometryKey?.let{ReaderDocuments.geometry.peek(it)}}
+    var intrinsicHeight by remember(message.id,message.contentVersion,ready){mutableIntStateOf(cachedGeometry?.height?:8)}
+    var baseScale by remember(message.id,message.contentVersion,ready){mutableFloatStateOf(cachedGeometry?.scale?:1f)}
+    var prepared by remember(message.id,message.contentVersion,ready){mutableStateOf(cachedGeometry!=null)}
+    var nativeComplete by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
+    var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
     val latestMeasuring by rememberUpdatedState(!prepared)
     val latestMeasured by rememberUpdatedState<(Int)->Unit>({measured->
         if(latestMeasuring && scroll?.pinchActive!=true && web!=null)intrinsicHeight=measured
@@ -432,13 +438,16 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     LaunchedEffect(nativeComplete,web,ready,headerHeight,bodyWidth) {
         if(nativeComplete)web?.afterVisualLayout{rendered=true}
     }
+    LaunchedEffect(rendered,geometryKey,intrinsicHeight,baseScale) {
+        if(rendered && prepared)geometryKey?.let{ReaderDocuments.geometry.put(it,ReaderGeometryCache.Geometry(intrinsicHeight,baseScale))}
+    }
     SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared complete=$nativeComplete rendered=$rendered failed=$failed")}
     Box(Modifier.fillMaxWidth().onSizeChanged{bodyWidth=it.width}) {
         if(failed)Column(Modifier.padding(top=with(density){headerHeight.toDp()})) {
             Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
             // Rendering input may be a current-reply projection; fallback always owns the complete letter.
             message.body.ifBlank{"В письме нет доступного текстового содержимого."}.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
-        } else if(ready!=null) {
+        } else if(ready!=null && headerHeight>0) {
             val windowHeight=if(prepared)viewport else height.coerceAtMost(viewport)
             val contentTop=(headerHeight-(scroll?.headerOffset?:0f)).coerceIn(0f,viewport.toFloat()).roundToInt()
             val contentHeight=((if(zoomed)viewport else height.coerceAtMost(viewport))-contentTop).coerceAtLeast(0)
@@ -486,6 +495,14 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
             }
         }
-        if(!failed && !rendered)Text("Подготавливаем письмо…",Modifier.padding(top=with(density){headerHeight.toDp()},bottom=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+        // Announce real slow work only. Cached analysis, document and geometry avoid
+        // repeated preparation; the native visual commit still owns interaction readiness.
+        var slowPreparation by remember(documentKey){mutableStateOf(false)}
+        LaunchedEffect(rendered,failed,documentKey) {
+            slowPreparation=false
+            if(!rendered && !failed){kotlinx.coroutines.delay(300);slowPreparation=true}
+        }
+        if(slowPreparation && !failed && !rendered)CircularProgressIndicator(
+            Modifier.padding(top=with(density){headerHeight.toDp()},start=16.dp).size(20.dp).testTag("reader-preparation-progress"),strokeWidth=2.dp)
     }
 }
