@@ -41,6 +41,19 @@ class ReaderDeviceTest {
         rule.runOnIdle{view.setFindListener(null);view.clearMatches()}
         return found
     }
+    private fun changeHistory(view: MailHtmlWebView,toggle: SemanticsNodeInteraction,expanded: Boolean) {
+        var revision=0L
+        rule.runOnIdle{revision=view.documentGeneration()}
+        toggle.performClick()
+        toggle.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,
+            if(expanded)"Развернуто" else "Свернуто"))
+        rule.waitUntil(15_000) {
+            var ready=false
+            rule.runOnUiThread{ready=view.documentGeneration()>revision && view.interactionEnabled && view.progress==100}
+            ready
+        }
+        rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
+    }
     @Test fun unavailableBodyShowsErrorWithoutPresentingThePreviewAsMail() {
         val m=message.copy(body="Текст из списка",htmlBody="",contentCached=false,previewOnly=false)
         var retries=0
@@ -109,12 +122,11 @@ class ReaderDeviceTest {
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
         assertEquals(1,matches(view,"Цитата текущего ответа"));assertEquals(0,matches(view,"Старое письмо"))
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
-        history.assertIsDisplayed();history.performClick()
-        loaded()
-        rule.waitUntil(15000){matches(view,"Старое письмо")==1}
+        history.assertIsDisplayed();changeHistory(view,history,true)
+        assertEquals(1,matches(view,"Старое письмо"))
         assertEquals(1,matches(view,"Цитата текущего ответа"))
-        history.performClick();loaded()
-        rule.waitUntil(15000){matches(view,"Старое письмо")==0}
+        changeHistory(view,history,false)
+        assertEquals(0,matches(view,"Старое письмо"))
         assertEquals(1,matches(view,"Цитата текущего ответа"))
     }
     @Test fun russianGenericNestedHistoryCanBeExpandedAndCollapsedInTheNativeReader() {
@@ -129,11 +141,11 @@ class ReaderDeviceTest {
         val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 2")
         toggle.assertIsDisplayed()
         assertEquals(1,matches(view,"Текущий ответ"));assertEquals(0,matches(view,"Первый ответ"))
-        toggle.performClick();loaded()
-        rule.waitUntil(15000){matches(view,"Второй ответ")==1}
+        changeHistory(view,toggle,true)
+        assertEquals(1,matches(view,"Второй ответ"))
         assertEquals(1,matches(view,"Первый ответ"));assertEquals(1,matches(view,"Текущий ответ"))
-        toggle.performClick();loaded()
-        rule.waitUntil(15000){matches(view,"Первый ответ")==0}
+        changeHistory(view,toggle,false)
+        assertEquals(0,matches(view,"Первый ответ"))
         assertEquals(1,matches(view,"Текущий ответ"))
     }
     @Test fun ambiguousHistoryBoundaryShowsFullHtmlWithoutADuplicatingPanel() {
