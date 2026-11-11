@@ -26,7 +26,7 @@ class ReaderPreparationTest {
         val key=ReaderGeometryCache.Key(doc,1080,3f,1f)
         val cache=ReaderGeometryCache();val geometry=ReaderGeometryCache.Geometry(250,3f)
         cache.put(key,geometry);assertEquals(geometry,cache.peek(key))
-        for(other in listOf(key.copy(width=720),key.copy(fontScale=1.2f),key.copy(density=2f),key.copy(document=doc.copy(html="changed"))))assertNull(cache.peek(other))
+        for(other in listOf(key.copy(width=720),key.copy(viewport=1500),key.copy(fontScale=1.2f),key.copy(density=2f),key.copy(document=doc.copy(html="changed"))))assertNull(cache.peek(other))
         cache.clear();assertNull(cache.peek(key))
     }
     @Test fun invalidGeometryAndOverBudgetDocumentsAreNeverRetained() {

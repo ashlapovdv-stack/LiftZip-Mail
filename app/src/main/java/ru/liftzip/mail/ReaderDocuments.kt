@@ -63,7 +63,7 @@ class ReaderAnalysisCache(private val budget: Long=4L*1024*1024,private val limi
 
 /** Only intrinsic, unzoomed geometry is reusable. No native view or scroll position is cached. */
 class ReaderGeometryCache(private val limit: Int=8,private val budget: Long=4L*1024*1024) {
-    data class Key(val document: MailHtmlDocument,val width: Int,val density: Float,val fontScale: Float)
+    data class Key(val document: MailHtmlDocument,val width: Int,val density: Float,val fontScale: Float,val viewport: Int=0)
     data class Geometry(val height: Int,val scale: Float)
     private val entries=LinkedHashMap<Key,Geometry>(8,0.75f,true)
     private var bytes=0L

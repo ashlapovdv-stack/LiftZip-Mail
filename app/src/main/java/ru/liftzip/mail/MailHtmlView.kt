@@ -409,15 +409,16 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val ready=remember(document,bodyWidth){document?.let{doc->
         if(bodyWidth<=0)null else doc.withReaderInset(0,bodyWidth)
     }}
-    val geometryKey=remember(document,bodyWidth,density.density,density.fontScale){
-        document?.takeIf{bodyWidth>0}?.let{ReaderGeometryCache.Key(it,bodyWidth,density.density,density.fontScale)}
+    val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+    val geometryKey=remember(document,bodyWidth,density.density,density.fontScale,viewport){
+        document?.takeIf{bodyWidth>0}?.let{ReaderGeometryCache.Key(it,bodyWidth,density.density,density.fontScale,viewport)}
     }
     val cachedGeometry=remember(geometryKey){geometryKey?.let{ReaderDocuments.geometry.peek(it)}}
-    var intrinsicHeight by remember(message.id,message.contentVersion,ready){mutableIntStateOf(cachedGeometry?.height?:8)}
-    var baseScale by remember(message.id,message.contentVersion,ready){mutableFloatStateOf(cachedGeometry?.scale?:1f)}
-    var prepared by remember(message.id,message.contentVersion,ready){mutableStateOf(cachedGeometry!=null)}
-    var nativeComplete by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
-    var rendered by remember(message.id,message.contentVersion,ready){mutableStateOf(false)}
+    var intrinsicHeight by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(cachedGeometry?.height?:8)}
+    var baseScale by remember(message.id,message.contentVersion,ready,geometryKey){mutableFloatStateOf(cachedGeometry?.scale?:1f)}
+    var prepared by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(cachedGeometry!=null)}
+    var nativeComplete by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
+    var rendered by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
     val latestMeasuring by rememberUpdatedState(!prepared)
     val latestMeasured by rememberUpdatedState<(Int)->Unit>({measured->
         if(latestMeasuring && scroll?.pinchActive!=true && web!=null)intrinsicHeight=measured
@@ -432,7 +433,6 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     // Keep the measured HTML extent separate from the Compose header. A late
     // measurement must never overwrite or double-add the header contribution.
     val height=intrinsicHeight+if(prepared)headerHeight else 0
-    val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     val nativeDocument=remember(ready,prepared,viewport,bodyWidth,baseScale,headerHeight){ready?.let{doc->
         if(prepared)document?.withReaderInset(headerHeight,bodyWidth,baseScale)?.withReaderCanvas(viewport,bodyWidth,baseScale) else doc
     }}
