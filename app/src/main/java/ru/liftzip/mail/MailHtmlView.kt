@@ -393,10 +393,14 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val documentKey=remember(message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,history,external,foreground,background){
         ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,history,external,foreground,background)
     }
-    val document by key(documentKey){produceState(ReaderDocuments.html.peek(documentKey),documentKey) {
+    val cachedDocument=remember(documentKey){ReaderDocuments.html.peek(documentKey)}
+    // Keep the current native host while the next document is prepared. A null
+    // transition would dispose the WebView and discard its reading/zoom anchor.
+    val preparedDocument by key(message.id,message.contentVersion){produceState(cachedDocument,documentKey) {
         try {value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(documentKey)}}
         catch(e: CancellationException){throw e}catch(e: Exception){failed=true}
     }}
+    val document=cachedDocument?:preparedDocument
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
     val latestZoom by rememberUpdatedState(onZoomChanged)

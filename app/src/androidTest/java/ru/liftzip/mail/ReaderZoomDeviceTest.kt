@@ -339,7 +339,10 @@ class ReaderZoomDeviceTest {
             rule.onNodeWithText(label).performClick()
             rule.waitUntil(15_000){
                 var ready=false
-                rule.runOnUiThread{ready=view.documentGeneration()>revision && view.interactionEnabled}
+                rule.runOnUiThread{
+                    webView()?.let{assertSame("Document transition replaced the native reader",view,it)}
+                    ready=view.documentGeneration()>revision && view.interactionEnabled
+                }
                 ready
             }
             rule.runOnIdle{
