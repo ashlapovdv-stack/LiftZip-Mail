@@ -44,7 +44,7 @@ class ReaderDeviceTest {
     private fun changeHistory(view: MailHtmlWebView,toggle: SemanticsNodeInteraction,expanded: Boolean) {
         var revision=0L
         rule.runOnIdle{revision=view.documentGeneration()}
-        toggle.performClick()
+        toggle.performScrollTo().assertIsDisplayed().performClick()
         toggle.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,
             if(expanded)"Развернуто" else "Свернуто"))
         rule.waitUntil(15_000) {
