@@ -233,7 +233,7 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{reader(message.copy(subject=subject,htmlBody="<p>Письмо</p>"))}}
         loaded()
         rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
-        rule.waitUntil(10000){var focused=false;rule.runOnUiThread{focused=rule.activity.hasWindowFocus()};focused}
+        waitForTestWindowFocus(rule,10000){var focused=false;rule.runOnUiThread{focused=rule.activity.hasWindowFocus()};focused}
         val node=rule.onNodeWithText(subject)
         node.performTouchInput{longClick()}
         rule.runOnIdle {
@@ -376,6 +376,8 @@ class ReaderDeviceTest {
         rule.runOnIdle{assertNull(webView())}
         rule.onNodeWithContentDescription("Ответить или переслать").performClick()
         rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
+        androidx.test.espresso.Espresso.pressBack()
+        rule.onAllNodesWithContentDescription("Ответить на письмо").assertCountEquals(0)
     }
     @Test fun collapsedHtmlHistoryRemainsReadableAfterRendererCrash() {
         assertCompleteFallbackAfterHistoryCrash(expanded=false)
@@ -396,6 +398,8 @@ class ReaderDeviceTest {
         rule.onNodeWithText("Текст после сбоя просмотрщика").assertIsDisplayed()
         rule.onNodeWithContentDescription("Ответить или переслать").performClick()
         rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
+        androidx.test.espresso.Espresso.pressBack()
+        rule.onAllNodesWithContentDescription("Ответить на письмо").assertCountEquals(0)
         rule.runOnIdle{assertNull(webView())}
         saveDeviceScreenshot(rule,"html-fallback")
     }

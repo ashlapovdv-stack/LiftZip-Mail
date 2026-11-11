@@ -45,7 +45,7 @@ class WindowBackgroundDeviceTest {
         }
         }
         rule.waitForIdle()
-        rule.waitUntil(15000) {
+        waitForTestWindowFocus(rule,15000) {
             var focused=false
             rule.runOnUiThread { focused=WindowTestActivity.current?.hasWindowFocus()==true }
             focused
