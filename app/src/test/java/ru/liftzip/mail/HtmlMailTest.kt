@@ -402,4 +402,62 @@ class HtmlMailTest {
         assertFalse(HtmlMail.analyzeHistory(source,historyConversation()).separateHistory)
     }
 
+    @Test fun linkedSenderAcrossEmptySeparatorsConfirmsTheSameMailRuHistory() {
+        val attribution="суббота, 07 ноября 2026 г., 23:51 +09:00 от Клиент [client@example.com] :"
+        val conversation=ConversationText.parse("Новый ответ\n\n$attribution\n> Старое письмо")
+        assertEquals("Клиент [client@example.com]",conversation.messages.single().sender)
+        val source="<p style='margin-top:0'>Новый ответ</p>"+
+            "<a href='mailto:client@example.com'>client@example.com</a><br><br>"+
+            "<blockquote id='mail-app-auto-quote' style='border-left:1px solid #0077FF;margin:0 0 0 10px;padding:0 0 0 10px'>"+
+            "<div class='nested'><div>Старое письмо</div></div></blockquote>"
+        val analysis=HtmlMail.analyzeHistory(source,conversation)
+        assertTrue(analysis.reason.toString(),analysis.separateHistory)
+        assertEquals(HtmlMail.HistoryReason.SEPARATED,analysis.reason)
+        val collapsed=Jsoup.parse(analysis.currentHtml)
+        assertTrue(collapsed.text().contains("Новый ответ"))
+        assertFalse(collapsed.text().contains("Старое письмо"))
+        assertFalse(collapsed.text().contains("client@example.com"))
+        val expanded=Jsoup.parse(HtmlMail.document(source,conversation.current,emptyList(),HtmlMail.noHistory(source)).html)
+        assertTrue(expanded.text().contains("Новый ответ"));assertTrue(expanded.text().contains("Старое письмо"))
+        assertEquals("mailto:client@example.com",expanded.selectFirst("a")!!.attr("href"))
+        assertTrue(expanded.selectFirst("blockquote")!!.attr("style").contains("border-left"))
+    }
+
+    @Test fun linkedSenderWithAnotherAddressCannotConfirmHistoryRemoval() {
+        val attribution="суббота, 07 ноября 2026 г., 23:51 +09:00 от Клиент [client@example.com] :"
+        val conversation=ConversationText.parse("Новый ответ\n\n$attribution\n> Старое письмо")
+        val source="<p>Новый ответ</p><a href='mailto:other@example.com'>other@example.com</a><br><br>"+
+            "<blockquote style='border-left:1px solid #0077FF'>Старое письмо</blockquote>"
+        val analysis=HtmlMail.analyzeHistory(source,conversation)
+        assertFalse(analysis.separateHistory);assertEquals(source,analysis.currentHtml)
+        assertTrue(Jsoup.parse(analysis.currentHtml).text().contains("Старое письмо"))
+    }
+
+    @Test fun independentPlainHistoryDoesNotNeedRepeatedAnchorDestinations() {
+        val source="<p>Новый ответ</p><div>$htmlHistoryHeader</div>"+
+            "<blockquote>Старое письмо <a href='https://example.com/old'>архив</a></blockquote>"
+        val conversation=historyConversation(old="Старое письмо архив")
+        val analysis=HtmlMail.analyzeHistory(source,conversation)
+        assertTrue(analysis.reason.toString(),analysis.separateHistory)
+        assertTrue(HtmlMail.text(source).contains("https://example.com/old"))
+        assertFalse(Jsoup.parse(analysis.currentHtml).text().contains("Старое письмо"))
+        val expanded=Jsoup.parse(HtmlMail.document(source,conversation.current,emptyList(),HtmlMail.noHistory(source)).html)
+        assertEquals("https://example.com/old",expanded.selectFirst("blockquote a")!!.attr("href"))
+        val mismatch=HtmlMail.analyzeHistory(source,historyConversation(old="Другое письмо архив"))
+        assertFalse(mismatch.separateHistory);assertEquals(source,mismatch.currentHtml)
+    }
+
+    @Test fun inlineCssQuoteRequiresAttributionAndACompletePlainMatch() {
+        val confirmed="<p>Новый ответ</p><div>$htmlHistoryHeader</div><div></div>"+
+            "<div style='border-inline-start:2px solid #2672c7;padding-left:8px'>Старое письмо</div>"
+        val analysis=HtmlMail.analyzeHistory(confirmed,historyConversation())
+        assertTrue(analysis.reason.toString(),analysis.separateHistory)
+        assertFalse(Jsoup.parse(analysis.currentHtml).text().contains("Старое письмо"))
+        val withoutAttribution="<p>Новый ответ</p><div style='border-left:2px solid #2672c7'>Старое письмо</div>"
+        val fallback=HtmlMail.analyzeHistory(withoutAttribution,historyConversation())
+        assertFalse(fallback.separateHistory);assertEquals(withoutAttribution,fallback.currentHtml)
+        val mismatch=HtmlMail.analyzeHistory(confirmed,historyConversation(old="Другое письмо"))
+        assertFalse(mismatch.separateHistory);assertEquals(confirmed,mismatch.currentHtml)
+    }
+
 }

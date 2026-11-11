@@ -6,7 +6,7 @@ data class QuotedMessage(val sender: String?,val date: String?,val body: String,
         return addresses.any{it.lowercase() in emails}
     }
 }
-data class QuotedConversation(val current: String,val messages: List<QuotedMessage>,val original: String)
+data class QuotedConversation(val current: String,val messages: List<QuotedMessage>,val original: String,val quotedBody: String?=null)
 
 /** Recognizes nested text quotations, not server threads. Ambiguous inline replies stay intact. */
 object ConversationText {
@@ -21,18 +21,20 @@ object ConversationText {
         if(!parts.canCollapse)return QuotedConversation(body,emptyList(),body)
         val messages=mutableListOf<QuotedMessage>()
         var remaining=parts.quoted.orEmpty()
+        var quotedBody: String?=null
         // Bound work for deeply nested or malformed messages; the full source is always accessible.
         repeat(32) {
             val lines=peel(remaining.replace("\r\n","\n").replace('\r','\n').trim().split('\n'))
             val header=header(lines)
             val text=peel(lines.drop(header?.lines?:0).dropWhile{it.isBlank()}).joinToString("\n").trim()
+            if(quotedBody==null)quotedBody=cleanQuote(text)
             val nested=ReplyText.split(text)
             messages+=QuotedMessage(header?.sender?.let(::cleanQuote),header?.date?.let(::cleanQuote),cleanQuote(if(nested.canCollapse)nested.current else text),header?.attribution?.let(::cleanQuote),header?.recipients?.let(::cleanQuote),header?.subject?.let(::cleanQuote))
-            if(!nested.canCollapse)return QuotedConversation(parts.current,messages,body)
+            if(!nested.canCollapse)return QuotedConversation(parts.current,messages,body,quotedBody)
             remaining=nested.quoted.orEmpty()
         }
         messages+=QuotedMessage(null,null,remaining)
-        return QuotedConversation(parts.current,messages,body)
+        return QuotedConversation(parts.current,messages,body,quotedBody)
     }
 
     private fun peel(source: List<String>): List<String> {

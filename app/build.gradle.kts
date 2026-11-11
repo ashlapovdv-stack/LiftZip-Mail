@@ -23,6 +23,7 @@ android {
         keyAlias = "androiddebugkey"
         keyPassword = "android"
     }
+    sourceSets.getByName("androidTest").assets.srcDir("src/test/resources")
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
