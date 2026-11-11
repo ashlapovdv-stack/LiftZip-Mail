@@ -938,7 +938,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
 }
 
 @Composable private fun InfoCard(text: String) {
-    Surface(color=MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.6f),shape=RoundedCornerShape(12.dp),modifier=Modifier.fillMaxWidth()) {
+    Surface(color=MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.6f),shape=RoundedCornerShape(12.dp),modifier=Modifier.fillMaxWidth().padding(vertical=8.dp)) {
         Text(text,Modifier.padding(14.dp),style=MaterialTheme.typography.bodySmall,lineHeight=19.sp)
     }
 }
@@ -1055,7 +1055,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         Button(onClick={if(d.previousDeliveryUncertain)confirmResend=true else onSend()},enabled=!s.busy && d.forwarding?.ready!=false,modifier=Modifier.weight(1f)){Icon(Icons.AutoMirrored.Outlined.Send,null);Spacer(Modifier.width(8.dp));Text(if(s.busy)"Подождите…" else "Отправить")}
     }}}) { padding->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            if(d.previousDeliveryUncertain)InfoCard("Результат предыдущей попытки неизвестен. Проверьте доставку перед повтором.")
+            if(d.previousDeliveryUncertain)InfoCard("Результат прошлой отправки неизвестен. Проверьте доставку перед повтором.")
             Box(Modifier.padding(horizontal=8.dp)) {
                 TextButton(onClick={senderMenu=true},enabled=!s.busy){Text("От: ${s.accounts.find{it.id==d.accountId}?.email.orEmpty()}");Icon(Icons.Outlined.ExpandMore,null)}
                 DropdownMenu(expanded=senderMenu,onDismissRequest={senderMenu=false}){s.accounts.forEach{a->DropdownMenuItem(text={Text(a.email+if(a.enabled)"" else " · выключен")},enabled=a.enabled,onClick={onChange(d.copy(accountId=a.id));senderMenu=false})}}
@@ -1063,7 +1063,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             OutlinedTextField(d.to,{onChange(d.copy(to=it))},label={Text("Кому")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
             OutlinedTextField(d.subject,{onChange(d.copy(subject=it))},label={Text("Тема")},modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
             d.forwarding?.takeIf{it.files.isNotEmpty()}?.let { plan->
-                Column(Modifier.padding(horizontal=20.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal=20.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                     Text(if(plan.ready)"Вложения готовы · ${plan.files.size}" else "Подготовка вложений · ${plan.files.count{it.status==ForwardStatus.READY}} из ${plan.files.size}",style=MaterialTheme.typography.labelLarge)
                     if(!plan.ready)Text("Можно вводить адрес и текст. Отправка станет доступна, когда файлы будут готовы.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     plan.files.forEach{file->ForwardFileCard(file,!s.busy,onRemove={onRemoveForward(file.key)})}
