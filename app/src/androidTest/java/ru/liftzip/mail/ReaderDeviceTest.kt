@@ -233,7 +233,7 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{reader(message.copy(subject=subject,htmlBody="<p>Письмо</p>"))}}
         loaded()
         rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
-        rule.waitUntil(10000){var focused=false;rule.runOnUiThread{focused=rule.activity.hasWindowFocus()};focused}
+        waitForTestWindowFocus(rule,10000){var focused=false;rule.runOnUiThread{focused=rule.activity.hasWindowFocus()};focused}
         val node=rule.onNodeWithText(subject)
         node.performTouchInput{longClick()}
         rule.runOnIdle {
@@ -354,6 +354,40 @@ class ReaderDeviceTest {
         }
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
     }
+    private fun assertCompleteFallbackAfterHistoryCrash(expanded: Boolean,rich: Boolean=true) {
+        val header="On Wed, 28 Oct 2026, Person <a@example.com> wrote:"
+        val body="Текущий ответ до сбоя\n\n$header\n> Старое письмо до сбоя"
+        val html=if(rich)"<p>Текущий ответ до сбоя</p><div class='gmail_attr'>"+
+            header.replace("<","&lt;").replace(">","&gt;")+"</div><div class='gmail_quote'>Старое письмо до сбоя</div>" else ""
+        rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
+        val view=loaded()
+        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        history.assertExists()
+        if(expanded) {
+            if(rich)changeHistory(view,history,true) else history.performScrollTo().performClick()
+        }
+        rule.runOnIdle{view.loadUrl("chrome://crash")}
+        rule.waitUntil(15_000){rule.onAllNodesWithText("Показываем текстовую версию письма").fetchSemanticsNodes().isNotEmpty()}
+        // The fallback owns the complete source, irrespective of quote visibility or format.
+        rule.onAllNodesWithText("Текущий ответ до сбоя",substring=true).assertCountEquals(1)
+        rule.onAllNodesWithText("Старое письмо до сбоя",substring=true).assertCountEquals(1)
+        rule.onNodeWithText(body).performScrollTo().assertIsDisplayed()
+        rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").assertCountEquals(0)
+        rule.runOnIdle{assertNull(webView())}
+        rule.onNodeWithContentDescription("Ответить или переслать").performClick()
+        rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        rule.onAllNodesWithContentDescription("Ответить на письмо").assertCountEquals(0)
+    }
+    @Test fun collapsedHtmlHistoryRemainsReadableAfterRendererCrash() {
+        assertCompleteFallbackAfterHistoryCrash(expanded=false)
+    }
+    @Test fun expandedHtmlHistoryRemainsReadableAfterRendererCrash() {
+        assertCompleteFallbackAfterHistoryCrash(expanded=true)
+    }
+    @Test fun plainHistoryIsNotDuplicatedInTheFullFallback() {
+        assertCompleteFallbackAfterHistoryCrash(expanded=true,rich=false)
+    }
     @Test fun losingTheWebRendererShowsSavedTextAndLeavesReplyControlsWorking() {
         val short=message.copy(htmlBody="<p>Текст после сбоя просмотрщика</p>",body="Текст после сбоя просмотрщика")
         rule.setContent{MailTheme{reader(short)}}
@@ -364,6 +398,8 @@ class ReaderDeviceTest {
         rule.onNodeWithText("Текст после сбоя просмотрщика").assertIsDisplayed()
         rule.onNodeWithContentDescription("Ответить или переслать").performClick()
         rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        rule.onAllNodesWithContentDescription("Ответить на письмо").assertCountEquals(0)
         rule.runOnIdle{assertNull(webView())}
         saveDeviceScreenshot(rule,"html-fallback")
     }
