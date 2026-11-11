@@ -152,7 +152,7 @@ class HtmlMailDeviceTest {
         val message=MailItem("theme-html","a",sender="S",senderEmail="s@example.com",recipients="r@example.com",subject="Test",body="Текст",date=1,htmlBody="<p>Текст</p><img src='cid:chart'>",contentVersion=MailContent.FORMAT_VERSION,attachments=listOf(attachment))
         try {
             rule.setContent {MaterialTheme(colorScheme=lightColorScheme(surface=Color(0xFFFFF8EF))) {Column(Modifier.fillMaxSize().background(Color(0xFFFFF8EF)).verticalScroll(rememberScrollState())) {
-                MailHtmlBody(message,message.body,false,onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
+                MailHtmlBody(message,message.body,HtmlMail.noHistory(message.htmlBody),onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
             }}}
             rule.waitUntil(15_000){requests.get()==1};rule.waitUntil(10_000){greenPixels()>50}
             val pixels=rule.onRoot().captureToImage().toPixelMap()
@@ -169,7 +169,7 @@ class HtmlMailDeviceTest {
             htmlBody="<p>Аналитики поделились прогнозом на Q4</p><img src='cid:chart' width='40' height='40'>",contentVersion=MailContent.FORMAT_VERSION,attachments=listOf(attachment))
         try {
             rule.setContent {MaterialTheme(colorScheme=darkColorScheme(surface=Color(0xFF171B16),onSurface=Color.White)) {Column(Modifier.fillMaxSize().background(Color(0xFF171B16)).verticalScroll(rememberScrollState())) {
-                MailHtmlBody(message,message.body,false,onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
+                MailHtmlBody(message,message.body,HtmlMail.noHistory(message.htmlBody),onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
             }}}
             rule.waitUntil(15_000){requests.get()==1}
             rule.waitUntil(15_000){rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().isNotEmpty()}
