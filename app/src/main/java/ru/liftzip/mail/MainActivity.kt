@@ -708,7 +708,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     Text(m.sender,Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=if(m.unread || card)FontWeight.Bold else FontWeight.Normal,fontSize=14.sp)
                     Text(date,Modifier.padding(start=8.dp),style=MaterialTheme.typography.labelSmall,color=if(m.unread)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Spacer(Modifier.height(2.dp));Text(m.subject.ifBlank{"Без темы"},maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=FontWeight.Bold,fontSize=14.sp)
+                Spacer(Modifier.height(2.dp));Text(m.subject.ifBlank{"Без темы"},maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=if(m.unread)FontWeight.Bold else FontWeight.Normal,fontSize=14.sp)
                 val snippet=remember(m.body){MailContent.snippet(m.body)}
                 Text(if(!m.contentCached)"Текст загрузится при открытии" else snippet,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=3.dp))
                 Row(Modifier.padding(top=3.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -908,11 +908,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
 @Composable internal fun ReaderActions(expanded: Boolean,canReply: Boolean,enabled: Boolean,onExpand: ()->Unit,onReply: ()->Unit,onForward: ()->Unit) {
     val color=MaterialTheme.colorScheme.primary
     Column(horizontalAlignment=Alignment.End,verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        if(expanded && canReply)Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+        if(expanded && canReply)Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
             Surface(shape=RoundedCornerShape(16.dp),color=Color.White,shadowElevation=2.dp,modifier=Modifier.clickable(enabled=enabled,onClick=onForward)){Text("Переслать",Modifier.padding(horizontal=12.dp,vertical=7.dp))}
             SmallFloatingActionButton(onClick={if(enabled)onForward()},shape=CircleShape,containerColor=color,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Переслать письмо"}) {Icon(Icons.AutoMirrored.Outlined.Forward,null)}
         }
-        Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
             if(expanded)Surface(shape=RoundedCornerShape(16.dp),color=Color.White,shadowElevation=2.dp,modifier=Modifier.clickable(enabled=enabled){if(canReply)onReply()else onForward()}){Text(if(canReply)"Ответить" else "Переслать",Modifier.padding(horizontal=12.dp,vertical=7.dp))}
             FloatingActionButton(onClick={if(enabled){if(!expanded)onExpand()else if(canReply)onReply()else onForward()}},shape=CircleShape,containerColor=color,contentColor=Color.White,
                 modifier=Modifier.semantics{contentDescription=if(!expanded)"Ответить или переслать" else if(canReply)"Ответить на письмо" else "Переслать письмо"}) {
@@ -938,7 +938,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
 }
 
 @Composable private fun InfoCard(text: String) {
-    Surface(color=MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.6f),shape=RoundedCornerShape(12.dp),modifier=Modifier.fillMaxWidth().padding(vertical=8.dp)) {
+    Surface(color=MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.6f),shape=RoundedCornerShape(12.dp),modifier=Modifier.fillMaxWidth()) {
         Text(text,Modifier.padding(14.dp),style=MaterialTheme.typography.bodySmall,lineHeight=19.sp)
     }
 }
@@ -986,6 +986,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             OutlinedTextField(password,{password=it},label={Text(if(initial!=null)"Новый пароль (необязательно)" else if(appPassword)"Пароль приложения" else "Пароль почтового ящика")},singleLine=true,
                 visualTransformation=if(showPassword)VisualTransformation.None else PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),
                 trailingIcon={IconButton(onClick={showPassword=!showPassword}){Icon(if(showPassword)Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,if(showPassword)"Скрыть пароль" else "Показать пароль")}},modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
+            if(initial!=null)Text("Оставьте поле пустым, чтобы сохранить действующий пароль.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             if(appPassword)InfoCard(when(provider){Provider.GMAIL->"Нужен отдельный пароль приложения Google. Обычный пароль аккаунта не подойдёт. Можно выбрать подключение через окно Google.";else->"Создайте отдельный пароль для почтового приложения в настройках безопасности ${provider.label}. Также разрешите доступ по IMAP."})
             } else InfoCard("Google попросит разрешить доступ к почте. Приложение не получает пароль аккаунта. Если разрешение будет отозвано, повторите подключение здесь.")
             TextButton(onClick={advanced=!advanced},enabled=!formBusy){Text(if(advanced)"Скрыть настройки серверов" else "Настройки серверов")}
@@ -1019,7 +1020,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                         }.addOnFailureListener{googleBusy=false;error=GoogleMailAuth.problem(it)}
                     }
                 }
-            },enabled=!formBusy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(formBusy)"Подождите…" else if(authKind==AuthKind.GOOGLE)"Подключить через Google" else "Проверить и подключить")}
+            },enabled=!formBusy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(formBusy)"Подождите…" else if(authKind==AuthKind.GOOGLE)"Подключить через Google" else if(initial==null)"Проверить и подключить" else "Проверить и сохранить")}
             Text("Проверим входящую и исходящую почту без отправки писем.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(18.dp))
         }
@@ -1054,7 +1055,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         Button(onClick={if(d.previousDeliveryUncertain)confirmResend=true else onSend()},enabled=!s.busy && d.forwarding?.ready!=false,modifier=Modifier.weight(1f)){Icon(Icons.AutoMirrored.Outlined.Send,null);Spacer(Modifier.width(8.dp));Text(if(s.busy)"Подождите…" else "Отправить")}
     }}}) { padding->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            if(d.previousDeliveryUncertain)InfoCard("Результат прошлой отправки неизвестен. Проверьте доставку перед повтором.")
+            if(d.previousDeliveryUncertain)InfoCard("Результат предыдущей попытки неизвестен. Проверьте доставку перед повтором.")
             Box(Modifier.padding(horizontal=8.dp)) {
                 TextButton(onClick={senderMenu=true},enabled=!s.busy){Text("От: ${s.accounts.find{it.id==d.accountId}?.email.orEmpty()}");Icon(Icons.Outlined.ExpandMore,null)}
                 DropdownMenu(expanded=senderMenu,onDismissRequest={senderMenu=false}){s.accounts.forEach{a->DropdownMenuItem(text={Text(a.email+if(a.enabled)"" else " · выключен")},enabled=a.enabled,onClick={onChange(d.copy(accountId=a.id));senderMenu=false})}}
@@ -1062,7 +1063,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             OutlinedTextField(d.to,{onChange(d.copy(to=it))},label={Text("Кому")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
             OutlinedTextField(d.subject,{onChange(d.copy(subject=it))},label={Text("Тема")},modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
             d.forwarding?.takeIf{it.files.isNotEmpty()}?.let { plan->
-                Column(Modifier.fillMaxWidth().padding(horizontal=20.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.padding(horizontal=20.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                     Text(if(plan.ready)"Вложения готовы · ${plan.files.size}" else "Подготовка вложений · ${plan.files.count{it.status==ForwardStatus.READY}} из ${plan.files.size}",style=MaterialTheme.typography.labelLarge)
                     if(!plan.ready)Text("Можно вводить адрес и текст. Отправка станет доступна, когда файлы будут готовы.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     plan.files.forEach{file->ForwardFileCard(file,!s.busy,onRemove={onRemoveForward(file.key)})}
