@@ -708,7 +708,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     Text(m.sender,Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=if(m.unread || card)FontWeight.Bold else FontWeight.Normal,fontSize=14.sp)
                     Text(date,Modifier.padding(start=8.dp),style=MaterialTheme.typography.labelSmall,color=if(m.unread)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Spacer(Modifier.height(2.dp));Text(m.subject.ifBlank{"Без темы"},maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=if(m.unread)FontWeight.Bold else FontWeight.Normal,fontSize=14.sp)
+                Spacer(Modifier.height(2.dp));Text(m.subject.ifBlank{"Без темы"},maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=FontWeight.Bold,fontSize=14.sp)
                 val snippet=remember(m.body){MailContent.snippet(m.body)}
                 Text(if(!m.contentCached)"Текст загрузится при открытии" else snippet,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=3.dp))
                 Row(Modifier.padding(top=3.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -738,15 +738,16 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         onSurface=Color(0xFF191919),onBackground=Color(0xFF191919),onSurfaceVariant=Color(0xFF4A4A4A),
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
-    val conversation by produceState<QuotedConversation?>(null,m.id,m.body,m.htmlBody) {
+    val conversation by produceState<Pair<QuotedConversation,HtmlMail.HistoryAnalysis>?>(null,m.id,m.body,m.htmlBody) {
         if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation start body=${m.body.length} html=${m.htmlBody.length}")
         val result=withContext(kotlinx.coroutines.Dispatchers.Default){
             if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation worker start")
             val parsed=ReaderDocuments.conversation(m.body)
             if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation text parsed")
-            val separate=HtmlMail.canSeparateHtmlHistory(m.htmlBody)
+            val history=HtmlMail.analyzeHistory(m.htmlBody,parsed)
             if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation HTML parsed")
-            if(separate)parsed else parsed.copy(messages=emptyList())
+            val visible=if(history.separateHistory)parsed else parsed.copy(messages=emptyList())
+            visible to history
         }
         value=result
         if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation complete")
@@ -876,7 +877,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             else {
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                val (parsed,history)=parsed
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
@@ -906,11 +908,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
 @Composable internal fun ReaderActions(expanded: Boolean,canReply: Boolean,enabled: Boolean,onExpand: ()->Unit,onReply: ()->Unit,onForward: ()->Unit) {
     val color=MaterialTheme.colorScheme.primary
     Column(horizontalAlignment=Alignment.End,verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        if(expanded && canReply)Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+        if(expanded && canReply)Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
             Surface(shape=RoundedCornerShape(16.dp),color=Color.White,shadowElevation=2.dp,modifier=Modifier.clickable(enabled=enabled,onClick=onForward)){Text("Переслать",Modifier.padding(horizontal=12.dp,vertical=7.dp))}
             SmallFloatingActionButton(onClick={if(enabled)onForward()},shape=CircleShape,containerColor=color,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Переслать письмо"}) {Icon(Icons.AutoMirrored.Outlined.Forward,null)}
         }
-        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+        Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
             if(expanded)Surface(shape=RoundedCornerShape(16.dp),color=Color.White,shadowElevation=2.dp,modifier=Modifier.clickable(enabled=enabled){if(canReply)onReply()else onForward()}){Text(if(canReply)"Ответить" else "Переслать",Modifier.padding(horizontal=12.dp,vertical=7.dp))}
             FloatingActionButton(onClick={if(enabled){if(!expanded)onExpand()else if(canReply)onReply()else onForward()}},shape=CircleShape,containerColor=color,contentColor=Color.White,
                 modifier=Modifier.semantics{contentDescription=if(!expanded)"Ответить или переслать" else if(canReply)"Ответить на письмо" else "Переслать письмо"}) {
@@ -984,7 +986,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             OutlinedTextField(password,{password=it},label={Text(if(initial!=null)"Новый пароль (необязательно)" else if(appPassword)"Пароль приложения" else "Пароль почтового ящика")},singleLine=true,
                 visualTransformation=if(showPassword)VisualTransformation.None else PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),
                 trailingIcon={IconButton(onClick={showPassword=!showPassword}){Icon(if(showPassword)Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,if(showPassword)"Скрыть пароль" else "Показать пароль")}},modifier=Modifier.fillMaxWidth(),enabled=!formBusy)
-            if(initial!=null)Text("Оставьте поле пустым, чтобы сохранить действующий пароль.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             if(appPassword)InfoCard(when(provider){Provider.GMAIL->"Нужен отдельный пароль приложения Google. Обычный пароль аккаунта не подойдёт. Можно выбрать подключение через окно Google.";else->"Создайте отдельный пароль для почтового приложения в настройках безопасности ${provider.label}. Также разрешите доступ по IMAP."})
             } else InfoCard("Google попросит разрешить доступ к почте. Приложение не получает пароль аккаунта. Если разрешение будет отозвано, повторите подключение здесь.")
             TextButton(onClick={advanced=!advanced},enabled=!formBusy){Text(if(advanced)"Скрыть настройки серверов" else "Настройки серверов")}
@@ -1018,7 +1019,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                         }.addOnFailureListener{googleBusy=false;error=GoogleMailAuth.problem(it)}
                     }
                 }
-            },enabled=!formBusy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(formBusy)"Подождите…" else if(authKind==AuthKind.GOOGLE)"Подключить через Google" else if(initial==null)"Проверить и подключить" else "Проверить и сохранить")}
+            },enabled=!formBusy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(formBusy)"Подождите…" else if(authKind==AuthKind.GOOGLE)"Подключить через Google" else "Проверить и подключить")}
             Text("Проверим входящую и исходящую почту без отправки писем.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(18.dp))
         }
