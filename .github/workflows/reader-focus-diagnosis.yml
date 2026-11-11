@@ -1,0 +1,71 @@
+name: Reader focus comparison
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/reader-focus-diagnosis.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: before-history
+            ref: e8ca5eecdc4abdced0ac80ad2f14c7145c3da6ce
+          - label: current-history
+            ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Capture the actual focus owner on failure in both revisions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/androidTest/java/ru/liftzip/mail/MailScreensDeviceTest.kt')
+          s=p.read_text().replace('"dumpsys window windows"','"dumpsys window; dumpsys input; dumpsys activity activities"')
+          s=s.replace('"mTopFocusedDisplayId"','"mTopFocusedDisplayId","FocusedApplications","FocusedWindows","focusedApplication","focusedWindow","topResumedActivity","mResumedActivity"')
+          s=s.replace('it in line','line.contains(it,true)')
+          s=s.replace('android.util.Log.e("MailTestFocus",focus.ifBlank{"No focused window in dumpsys"})','''android.util.Log.e("MailTestFocus",focus.ifBlank{"No focused window in dumpsys"})
+                      ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("screencap -p /data/local/tmp/focus-"+System.nanoTime()+".png")).use{it.readBytes()}''')
+          p.write_text(s)
+          p=Path('app/src/androidTest/java/ru/liftzip/mail/ReaderDeviceTest.kt')
+          p.write_text(p.read_text().replace('rule.waitUntil(5_000){rule.onAllNodesWithContentDescription("Ответить на письмо")','waitForTestWindowFocus(rule,5_000){rule.onAllNodesWithContentDescription("Ответить на письмо")'))
+          PY
+          cat > /tmp/reader-focus-run.sh <<'SH'
+          focus_status=0
+          bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderDeviceTest#losingTheWebRendererShowsSavedTextAndLeavesReplyControlsWorking,ru.liftzip.mail.ReaderDeviceTest#collapsedHtmlHistoryRemainsReadableAfterRendererCrash,ru.liftzip.mail.ReaderDeviceTest#expandedHtmlHistoryRemainsReadableAfterRendererCrash,ru.liftzip.mail.ReaderDeviceTest#plainHistoryIsNotDuplicatedInTheFullFallback,ru.liftzip.mail.ReaderDeviceTest#longPressCopiesFullSubjectWithoutOpeningIt,ru.liftzip.mail.WindowBackgroundDeviceTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000 || focus_status=$?
+          mkdir -p focus-evidence
+          adb pull /data/local/tmp/ focus-evidence/ || true
+          exit "$focus_status"
+          SH
+      - name: Enable emulator acceleration
+        run: sudo chmod 666 /dev/kvm
+      - uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -no-metrics
+          script: bash /tmp/reader-focus-run.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: focus-${{ matrix.label }}
+          path: |
+            focus-evidence/
+            app/build/outputs/androidTest-results/
+            app/build/reports/androidTests/
+          retention-days: 7
