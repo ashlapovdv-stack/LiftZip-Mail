@@ -174,6 +174,15 @@ private val Paper=Color(0xFFF8F9F6)
         if(uri!=null && requested!=null)vm.download(requested.first,requested.second,uri)
         download=null
     }
+    var originalMessage by rememberSaveable(stateSaver=androidx.compose.runtime.saveable.listSaver<MailItem?,String>(
+        save={m->if(m==null)emptyList() else listOf(m.id,m.accountId,m.uid.toString(),m.validity.toString(),m.remoteFolder)},
+        restore={if(it.isEmpty())null else MailItem(id=it[0],accountId=it[1],uid=it[2].toLong(),validity=it[3].toLong(),remoteFolder=it[4],sender="",senderEmail="",recipients="",subject="",body="",date=0)}
+    )) { mutableStateOf<MailItem?>(null) }
+    val saveOriginal=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("message/rfc822")){uri->
+        val message=originalMessage
+        originalMessage=null
+        if(uri!=null && message!=null)vm.saveOriginal(message,uri)
+    }
     fun goInbox(){route="inbox";selected=null;notificationFallback=null}
     fun systemInbox(){folder=MailFolder.INBOX;serverPath=null;preview=null;editing=null;goInbox()}
     fun openExternal(file: OpenedAttachment) {
@@ -320,6 +329,7 @@ private val Paper=Color(0xFFF8F9F6)
                         onQueue={route="actions"},onAdd={route="add"},onSettings={route="settings"}) { ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly || !message.contentCached,ownAddresses=s.accounts.map{it.email},attachmentBusy=s.attachmentBusy,onBack={goInbox()},onStar={vm.star(message)},
                         onInline={file->vm.inlineImage(message,file)},onThumbnail={file->vm.thumbnailImage(message,file)},onLink={url->HtmlMail.link(url)?.let{safe->runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(safe)).addCategory(Intent.CATEGORY_BROWSABLE))}.onFailure{vm.notice("Не удалось открыть ссылку",error=true)}}},
                         onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
+                        onSaveOriginal={originalMessage=message;saveOriginal.launch(OriginalMessageFile.name(message.subject))},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
                         onSpam={vm.spamMessages(setOf(message.id),SpamRules.junk(message)){moved->if(message.id in moved && route=="reader" && selected==message.id)goInbox()}},
@@ -730,7 +740,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     if(!card)HorizontalDivider(Modifier.padding(start=75.dp),color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.45f))
 }
 
-@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null,onThumbnail: (suspend (Attachment)->OpenedAttachment)?=null,loadingError: String?=null,onRetryLoad: ()->Unit={}) {
+@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null,onThumbnail: (suspend (Attachment)->OpenedAttachment)?=null,loadingError: String?=null,onRetryLoad: ()->Unit={},onSaveOriginal: (() -> Unit)?=null) {
     val theme=MaterialTheme.colorScheme
     val style=LocalMailStyle.current
     val accent=if(isSystemInDarkTheme())if(style==MailStyle.STANDARD)Olive else style.accent else theme.primary
@@ -782,10 +792,14 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     // The toolbar is an overlay: hiding it never changes the native reading viewport.
     val toolbar: @Composable () -> Unit = {Box(Modifier.fillMaxWidth().onSizeChanged{scroll.toolbar.height=it.height}.readerChrome(scroll.toolbar.zoomProgress,if(scroll.zoomProgress>0f)scroll.chromeOffset else scroll.toolbar.hiddenPixels).testTag("reader-toolbar").onGloballyPositioned{MailZoomDiagnostics.record {"topBar hidden=${scroll.toolbar.hiddenPixels} pinch=$pinchActive top=${it.positionInWindow().y} height=${it.size.height}"}}) {TopAppBar(windowInsets=WindowInsets(0,0,0,0),colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
-        if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))Box {
+        if(onSaveOriginal!=null || (onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m))))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
             DropdownMenu(expanded=messageMenu,onDismissRequest={messageMenu=false}) {
-                DropdownMenuItem(text={Text(if(SpamRules.junk(m))"Не спам · во Входящие" else "В спам")},leadingIcon={Icon(if(SpamRules.junk(m))Icons.Outlined.MoveToInbox else Icons.Outlined.Report,null)},
+                if(onSaveOriginal!=null)DropdownMenuItem(
+                    text={Text("Сохранить оригинал (.eml)")},leadingIcon={Icon(Icons.Outlined.SaveAlt,null)},
+                    enabled=m.uid>0 && m.validity>0 && m.remoteFolder.isNotBlank(),
+                    onClick={messageMenu=false;onSaveOriginal()})
+                if(onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m)))DropdownMenuItem(text={Text(if(SpamRules.junk(m))"Не спам · во Входящие" else "В спам")},leadingIcon={Icon(if(SpamRules.junk(m))Icons.Outlined.MoveToInbox else Icons.Outlined.Report,null)},
                     onClick={messageMenu=false;onSpam()})
             }
         }
