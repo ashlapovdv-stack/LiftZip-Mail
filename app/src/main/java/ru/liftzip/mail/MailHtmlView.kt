@@ -189,7 +189,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         // Intrinsic measurement stays at base scale. Restore the reading anchor
         // only after the fixed native canvas is installed.
         pendingAnchor=if(waitForDocumentLayout)null else {
-            deferredAnchor?:if(old!=null && base!=null && base>0f && renderScale>0f)
+            deferredAnchor?:pendingAnchor?:if(old!=null && base!=null && base>0f && renderScale>0f)
                 ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale) else null
         }
         if(!waitForDocumentLayout)deferredAnchor=null
@@ -417,7 +417,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var intrinsicHeight by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(cachedGeometry?.height?:8)}
     var baseScale by remember(message.id,message.contentVersion,ready,geometryKey){mutableFloatStateOf(cachedGeometry?.scale?:1f)}
     var prepared by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(cachedGeometry!=null)}
-    var nativeComplete by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
+    var nativeCommit by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(0)}
     var rendered by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
     val latestMeasuring by rememberUpdatedState(!prepared)
     val latestMeasured by rememberUpdatedState<(Int)->Unit>({measured->
@@ -428,7 +428,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
         if(!prepared) {
             baseScale=web?.fittedScale()?:1f
             prepared=true
-        } else nativeComplete=true
+        } else nativeCommit++
     })
     // Keep the measured HTML extent separate from the Compose header. A late
     // measurement must never overwrite or double-add the header contribution.
@@ -436,13 +436,13 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val nativeDocument=remember(ready,prepared,viewport,bodyWidth,baseScale,headerHeight){ready?.let{doc->
         if(prepared)document?.withReaderInset(headerHeight,bodyWidth,baseScale)?.withReaderCanvas(viewport,bodyWidth,baseScale) else doc
     }}
-    LaunchedEffect(nativeComplete,web,ready,headerHeight,bodyWidth) {
-        if(nativeComplete)web?.afterVisualLayout{rendered=true}
+    LaunchedEffect(nativeCommit,web,ready,headerHeight,bodyWidth) {
+        if(nativeCommit>0)web?.afterVisualLayout{rendered=true}
     }
     LaunchedEffect(rendered,geometryKey,intrinsicHeight,baseScale) {
         if(rendered && prepared)geometryKey?.let{ReaderDocuments.geometry.put(it,ReaderGeometryCache.Geometry(intrinsicHeight,baseScale))}
     }
-    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared complete=$nativeComplete rendered=$rendered failed=$failed")}
+    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared commit=$nativeCommit rendered=$rendered failed=$failed")}
     Box(Modifier.fillMaxWidth().onSizeChanged{bodyWidth=it.width}) {
         if(failed)Column(Modifier.padding(top=with(density){headerHeight.toDp()})) {
             Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
@@ -470,7 +470,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                             scroll?.position(coordinates.positionInWindow().y.toInt())
                             MailZoomDiagnostics.record {"bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${coordinates.positionInWindow().y} layoutH=${coordinates.size.height} webH=${scroll?.view?.height}"}
                             val view=web
-                            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered complete=$nativeComplete normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")
+                            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered commit=$nativeCommit normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")
                         },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{interactionEnabled=rendered;measuringDocument(!prepared);viewport(viewport);show(nativeDocument?:ready,density.fontScale)}},
                         onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
                 }
