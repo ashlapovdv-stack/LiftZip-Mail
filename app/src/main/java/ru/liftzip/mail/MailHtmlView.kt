@@ -382,7 +382,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
 // resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
 internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,hasHistory: Boolean,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={}) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var failed by remember(message.id,message.contentVersion){mutableStateOf(false)}
@@ -390,9 +390,9 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
     val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
     val background=if(message.htmlBody.isNotBlank() && MaterialTheme.colorScheme.surface.luminance()<0.4f)"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
-    val document by produceState<MailHtmlDocument?>(null,message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,hasHistory,external,foreground,background) {
+    val document by produceState<MailHtmlDocument?>(null,message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,history,external,foreground,background) {
         try {
-            value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,hasHistory,external,foreground,background))}
+            value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,history,external,foreground,background))}
         }catch(e: CancellationException){throw e}catch(e: Exception){failed=true}
     }
     val latestInline by rememberUpdatedState(onInline)
