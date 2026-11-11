@@ -113,7 +113,7 @@ class ReaderDeviceTest {
         rule.runOnIdle{open=false};rule.waitForIdle();rule.runOnIdle{open=true}
         val second=loaded()
         rule.onNodeWithContentDescription("Предыдущие сообщения: 1").assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,"Свернуто"))
-        rule.runOnIdle{assertNotSame(first,second);assertTrue("Warm open must skip the intrinsic measurement document",second.documentGeneration()<cold)}
+        rule.runOnIdle{assertNotSame(first,second);assertTrue("Warm open must skip the intrinsic measurement document: cold=$cold warm=${second.documentGeneration()}",second.documentGeneration()<cold)}
         assertEquals(0,matches(second,"Старое письмо"))
         saveDeviceScreenshot(rule,"reader-warm-open")
     }

@@ -410,12 +410,13 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var headerHeight by remember(message.id){mutableIntStateOf(0)}
     var headerMeasured by remember(message.id){mutableStateOf(false)}
     var bodyWidth by remember(message.id){mutableIntStateOf(0)}
-    val ready=remember(document,bodyWidth){document?.let{doc->
-        if(bodyWidth<=0)null else doc.withReaderInset(0,bodyWidth)
+    val viewportMeasured=scroll==null || scroll.viewportHeight>0
+    val ready=remember(document,bodyWidth,viewportMeasured){document?.let{doc->
+        if(bodyWidth<=0 || !viewportMeasured)null else doc.withReaderInset(0,bodyWidth)
     }}
     val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
-    val geometryKey=remember(document,bodyWidth,density.density,density.fontScale,viewport){
-        document?.takeIf{bodyWidth>0}?.let{ReaderGeometryCache.Key(it,bodyWidth,density.density,density.fontScale,viewport)}
+    val geometryKey=remember(document,bodyWidth,density.density,density.fontScale,viewport,viewportMeasured){
+        document?.takeIf{bodyWidth>0 && viewportMeasured}?.let{ReaderGeometryCache.Key(it,bodyWidth,density.density,density.fontScale,viewport)}
     }
     val cachedGeometry=remember(geometryKey){geometryKey?.let{ReaderDocuments.geometry.peek(it)}}
     var intrinsicHeight by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(cachedGeometry?.height?:8)}
