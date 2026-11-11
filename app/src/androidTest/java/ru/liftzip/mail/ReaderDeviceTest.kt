@@ -78,6 +78,27 @@ class ReaderDeviceTest {
         rule.onNodeWithText("Сохранить оригинал (.eml)").assertIsNotEnabled()
         rule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
     }
+    @Test fun linkedMimeHistoryExpandsAndCollapsesWithoutLosingRichContent() {
+        val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
+            .open("mailru-linked-history.eml").use{input->
+                MimeReader().read(jakarta.mail.internet.MimeMessage(jakarta.mail.Session.getInstance(java.util.Properties()),input))
+            }
+        val conversation=ConversationText.parse(mime.text)
+        val cached=message.copy(body=mime.text,htmlBody=mime.html,contentCached=true,uid=42,validity=7)
+        rule.setContent{MailTheme{reader(cached)}}
+        val view=loaded()
+        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: ${conversation.messages.size}")
+        toggle.performScrollTo().assertIsDisplayed()
+        assertEquals(1,matches(view,"Текущий ответ"))
+        assertEquals(0,matches(view,"Первое старое письмо"))
+        changeHistory(view,toggle,true)
+        assertEquals(1,matches(view,"Первое старое письмо"))
+        assertEquals(1,matches(view,"Самое старое письмо"))
+        changeHistory(view,toggle,false)
+        assertEquals(0,matches(view,"Первое старое письмо"))
+        assertEquals(1,matches(view,"Текущий ответ"))
+        saveDeviceScreenshot(rule,"linked-mime-history")
+    }
     // Exercise the production reader, including its header and bounded WebView.
     @Test fun realReaderFitsAWideNestedTableAtInitialScale() {
         val html="""<table style='width:2200px'><tr><td>Первый столбец</td><td><table style='width:900px'><tr><td>Последний столбец</td></tr></table></td></tr></table>"""
@@ -392,6 +413,7 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Ответить или переслать").performClick()
         rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        rule.waitUntil(5_000){rule.onAllNodesWithContentDescription("Ответить на письмо").fetchSemanticsNodes().isEmpty()}
         rule.onAllNodesWithContentDescription("Ответить на письмо").assertCountEquals(0)
     }
     @Test fun collapsedHtmlHistoryRemainsReadableAfterRendererCrash() {
@@ -414,6 +436,7 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Ответить или переслать").performClick()
         rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        rule.waitUntil(5_000){rule.onAllNodesWithContentDescription("Ответить на письмо").fetchSemanticsNodes().isEmpty()}
         rule.onAllNodesWithContentDescription("Ответить на письмо").assertCountEquals(0)
         rule.runOnIdle{assertNull(webView())}
         saveDeviceScreenshot(rule,"html-fallback")

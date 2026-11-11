@@ -122,11 +122,12 @@ object HtmlMail {
         safe.select("a").forEach{a->val url=link(a.attr("href"));if(url==null)a.removeAttr("href")else a.attr("href",url)}
         return safe.body().html()
     }
-    fun text(source: String): String {
+    fun text(source: String)=text(source,true)
+    private fun text(source: String,includeLinkTargets: Boolean): String {
         val doc=Jsoup.parse(source)
         doc.select("head,style,$unsafe,[hidden]").remove()
         doc.select("[style]").filter{it.attr("style").contains(Regex("(?i)(display\\s*:\\s*none|visibility\\s*:\\s*hidden)"))}.forEach{it.remove()}
-        doc.select("a[href]").forEach{a->link(a.attr("href"))?.let{url->if(a.text().trim()!=url)a.appendText(" ($url)")}}
+        if(includeLinkTargets)doc.select("a[href]").forEach{a->link(a.attr("href"))?.let{url->if(a.text().trim()!=url)a.appendText(" ($url)")}}
         val out=StringBuilder()
         fun newline(){if(out.isNotEmpty() && out.last()!='\n')out.append('\n')}
         NodeTraversor.traverse(object: NodeVisitor {
@@ -171,6 +172,66 @@ object HtmlMail {
     fun noHistory(html: String)=HistoryAnalysis(html,false,HistoryReason.NO_PLAIN_HISTORY)
     private fun normalizedHistoryText(value: String)=value.replace('\u00a0',' ').replace("\uFFFC","")
         .replace(Regex("[\\s\\u200B\\uFEFF]+")," ").trim()
+    private fun normalizedAttribution(value: String)=normalizedHistoryText(value).replace(Regex("\\s+:$"),":")
+    // Link targets stay in the visible plain projection, but are not corroboration
+    // evidence: an independent MIME plain alternative need not repeat anchor URLs.
+    private fun historyText(source: String)=text(source,false)
+    private fun cssQuoteBoundary(element: Element): Boolean=element.attr("style").split(';').any{declaration->
+        val parts=declaration.split(':',limit=2)
+        parts.size==2 && parts[0].trim().lowercase() in setOf("border-left","border-inline-start") &&
+            parts[1].trim().isNotEmpty() && !parts[1].trim().equals("none",true)
+    }
+    private fun genericQuoteBoundary(element: Element): Boolean=element.normalName()=="blockquote" ||
+        element.attr("type").equals("cite",true) || cssQuoteBoundary(element)
+    private fun emptyFormattingSeparator(element: Element): Boolean {
+        if(element.normalName()=="br")return true
+        if(element.normalName() !in setOf("div","p","span"))return false
+        return normalizedHistoryText(historyText(element.outerHtml())).isEmpty() &&
+            element.select("img,table,hr,blockquote,iframe,object,video,audio").isEmpty() &&
+            !element.attr("style").contains("url(",true)
+    }
+    private data class AttributionNodes(val nodes: List<Node>) {
+        val html get()=nodes.joinToString(""){it.outerHtml()}
+        val singleElement get()=nodes.filterNot{it is TextNode && it.text().isBlank()}.singleOrNull() as? Element
+    }
+    private fun precedingAttribution(boundary: Element): AttributionNodes? {
+        var node=boundary.previousSibling();var separators=0
+        while(node!=null && separators<16 &&
+            (node is TextNode && node.text().isBlank() || node is Element && emptyFormattingSeparator(node))) {
+            node=node.previousSibling();separators++
+        }
+        if(node==null)return null
+        if(node is Element && node.isBlock)return AttributionNodes(listOf(node))
+        // Attribution is often a sibling run: date text + <a>sender</a> + ':' .
+        // Keep the whole run together; accepting only the anchor leaves a stale header.
+        val nodes=mutableListOf<Node>()
+        while(node!=null && nodes.size<32) {
+            if(node is Element && (node.isBlock || node.normalName()=="br"))break
+            nodes.add(0,node)
+            node=node.previousSibling()
+        }
+        if(node!=null && nodes.size==32)return null
+        return nodes.takeIf{it.isNotEmpty()}?.let{AttributionNodes(it)}
+    }
+    private fun nodePath(root: Node,node: Node): List<Int> {
+        val path=mutableListOf<Int>();var current=node
+        while(current!==root) {
+            path.add(0,current.siblingIndex())
+            current=current.parentNode()?:error("Attribution outside document")
+        }
+        return path
+    }
+    private fun resolveNode(root: Node,path: List<Int>): Node=path.fold(root){node,index->node.childNode(index)}
+    private val historyAddresses=Regex("[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+    private fun senderLinkAttribution(element: Element,message: QuotedMessage): Boolean {
+        if(element.normalName()!="a")return false
+        val url=link(element.attr("href"))?.takeIf{it.startsWith("mailto:",true)}?:return false
+        val address=url.substringAfter(':').substringBefore('?').trim()
+        if(!historyAddresses.matches(address))return false
+        if(historyAddresses.findAll(message.sender.orEmpty()).none{it.value.equals(address,true)})return false
+        val visible=normalizedHistoryText(historyText(element.outerHtml()))
+        return visible.equals(address,true) || visible==normalizedHistoryText(message.sender.orEmpty())
+    }
     private fun contentAfter(root: Element,boundary: Element): Boolean {
         var inside=false;var after=false;var found=false
         NodeTraversor.traverse(object: NodeVisitor {
@@ -204,39 +265,43 @@ object HtmlMail {
         val providerRoots=providers.filter{candidate->candidate.parents().none{it in providers}}
         if(providerRoots.size>1)return keep(HistoryReason.MULTIPLE_PROVIDER_BOUNDARIES)
         val candidates=if(providerRoots.isNotEmpty())providerRoots else
-            doc.select("blockquote,[type=cite]").toList().filter{candidate->
-                candidate.parents().none{it.normalName()=="blockquote" || it.attr("type").equals("cite",true)}
+            doc.select("blockquote,[type=cite],[style]").toList().filter{genericQuoteBoundary(it)}.filter{candidate->
+                candidate.parents().none{genericQuoteBoundary(it)}
             }
         for(boundary in candidates.asReversed()) {
             if(contentAfter(doc.body(),boundary))continue
-            var previous=boundary.previousSibling()
-            while(previous is TextNode && previous.text().isBlank())previous=previous.previousSibling()
-            val preceding=previous as? Element
-            val precedingText=preceding?.let{text(it.outerHtml())}.orEmpty()
-            val attribution=preceding?.takeIf{
-                boundary.hasClass("gmail_quote") && it.hasClass("gmail_attr") || attributionHeader(precedingText)
-            }
-            val body=normalizedHistoryText(text(boundary.outerHtml()))
-            val attributed=attribution?.let{normalizedHistoryText(text(it.outerHtml()))}
+            val preceding=precedingAttribution(boundary)
+            val precedingText=preceding?.let{historyText(it.html)}.orEmpty()
             val units=conversation.messages
-            val single=units.singleOrNull()?.let{message->normalizedHistoryText(message.body)==body &&
-                (attributed==null || normalizedHistoryText(message.attribution.orEmpty())==attributed)}==true
+            val attribution=preceding?.takeIf{
+                boundary.hasClass("gmail_quote") && it.singleElement?.hasClass("gmail_attr")==true || attributionHeader(precedingText) ||
+                    it.singleElement?.let{element->senderLinkAttribution(element,units.first())}==true
+            }
+            val bodies=setOf(normalizedHistoryText(historyText(boundary.outerHtml())),normalizedHistoryText(text(boundary.outerHtml())))
+            val attributed=attribution?.let{setOf(normalizedAttribution(historyText(it.html)),normalizedAttribution(text(it.html)))}
+            fun attributionMatches(message: QuotedMessage): Boolean {
+                val element=attribution?:return true
+                return normalizedAttribution(message.attribution.orEmpty()) in attributed.orEmpty() ||
+                    element.singleElement?.let{senderLinkAttribution(it,message)}==true
+            }
+            val single=units.singleOrNull()?.let{message->normalizedHistoryText(message.body) in bodies &&
+                attributionMatches(message)}==true
             val chain=normalizedHistoryText(units.joinToString("\n"){message->
                 listOfNotNull(message.attribution,message.body).joinToString("\n")})
             val chainWithoutFirstHeader=normalizedHistoryText(units.mapIndexed{index,message->
                 if(index==0)message.body else listOfNotNull(message.attribution,message.body).joinToString("\n")
             }.joinToString("\n"))
-            val completeChain=body.isNotEmpty() && (body==chain || body==chainWithoutFirstHeader) &&
-                (attributed==null || attributed==normalizedHistoryText(units.first().attribution.orEmpty()))
-            if(body.isEmpty() || !single && !completeChain)continue
+            val completeChain=bodies.any{it.isNotEmpty() && (it==chain || it==chainWithoutFirstHeader)} && attributionMatches(units.first())
+            if(bodies.all{it.isEmpty()} || !single && !completeChain)continue
             // Generic citations need an attribution, not merely identical quoted words.
             if(providers.isEmpty() && attribution==null &&
-                !attributionHeader(text(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue
+                !attributionHeader(historyText(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue
             val shortened=doc.clone()
             val path=doc.getAllElements().indexOf(boundary)
-            val attributionPath=attribution?.let{doc.getAllElements().indexOf(it)}
+            val attributionPaths=attribution?.nodes?.map{nodePath(doc,it)}.orEmpty()
             val nodes=shortened.getAllElements().toList()
-            attributionPath?.let{nodes[it].remove()};nodes[path].remove()
+            val attributionNodes=attributionPaths.map{path->resolveNode(shortened,path)}
+            attributionNodes.forEach{it.remove()};nodes[path].remove()
             if(text(shortened.outerHtml()).isBlank())return keep(HistoryReason.EMPTY_CURRENT)
             return HistoryAnalysis(shortened.outerHtml(),true,HistoryReason.SEPARATED)
         }
