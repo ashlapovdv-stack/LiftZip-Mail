@@ -376,7 +376,7 @@ class ReaderDeviceTest {
         rule.runOnIdle{assertNull(webView())}
         rule.onNodeWithContentDescription("Ответить или переслать").performClick()
         rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
-        androidx.test.espresso.Espresso.pressBack()
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         rule.onAllNodesWithContentDescription("Ответить на письмо").assertCountEquals(0)
     }
     @Test fun collapsedHtmlHistoryRemainsReadableAfterRendererCrash() {
@@ -398,7 +398,7 @@ class ReaderDeviceTest {
         rule.onNodeWithText("Текст после сбоя просмотрщика").assertIsDisplayed()
         rule.onNodeWithContentDescription("Ответить или переслать").performClick()
         rule.onNodeWithContentDescription("Ответить на письмо").assertIsDisplayed().assertHasClickAction()
-        androidx.test.espresso.Espresso.pressBack()
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         rule.onAllNodesWithContentDescription("Ответить на письмо").assertCountEquals(0)
         rule.runOnIdle{assertNull(webView())}
         saveDeviceScreenshot(rule,"html-fallback")
