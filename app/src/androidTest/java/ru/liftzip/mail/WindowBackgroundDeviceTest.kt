@@ -22,7 +22,28 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion=30)
 class WindowBackgroundDeviceTest {
-    @get:Rule val rule=createAndroidComposeRule<WindowTestActivity>()
+    // Navigation is a device precondition. Change it before Compose/Activity rules start,
+    // then restore it only after those rules have disposed their windows and recomposers.
+    @get:Rule(order=0) val navigationMode=org.junit.rules.TestRule { base,description->
+        object: org.junit.runners.model.Statement() {
+            override fun evaluate() {
+                val mode=when(description.methodName) {
+                    "backgroundReachesSystemBarsWithButtons"->"threebutton"
+                    "backgroundReachesSystemBarsWithGestures"->"gestural"
+                    else->null
+                }
+                if(mode==null){base.evaluate();return}
+                val original=currentOverlay()
+                try {
+                    val result=command("cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.$mode")
+                    assertFalse(result,result.contains("Error",true))
+                    assertTrue("Navigation overlay did not activate: $mode",currentOverlay()?.endsWith(".$mode")==true)
+                    base.evaluate()
+                }finally{if(original!=null)command("cmd overlay enable-exclusive --user 0 --category $original")}
+            }
+        }
+    }
+    @get:Rule(order=1) val rule=createAndroidComposeRule<WindowTestActivity>()
     private val style=mutableStateOf(MailStyle.COZY)
     private var canvas=0
     private var refreshed=0
@@ -60,84 +81,75 @@ class WindowBackgroundDeviceTest {
         .map{it.trim()}.firstOrNull{it.startsWith("[x] com.android.internal.systemui.navbar.")}?.substringAfter("[x] ")
     private fun close(a: Int,b: Int)=kotlin.math.abs(Color.red(a)-Color.red(b))<=4 &&
         kotlin.math.abs(Color.green(a)-Color.green(b))<=4 && kotlin.math.abs(Color.blue(a)-Color.blue(b))<=4
-    @Test fun backgroundReachesSystemBarsWithButtonsAndGestures() {
-        val original=currentOverlay();screen()
-        try {
-            for((mode,overlay) in listOf("buttons" to "threebutton","gestures" to "gestural")) {
-                val result=command("cmd overlay enable-exclusive --user 0 --category com.android.internal.systemui.navbar.$overlay")
-                assertFalse(result,result.contains("Error",true))
-                rule.waitUntil(15000){currentOverlay()?.endsWith(".$overlay")==true}
-                // The framework owns recreation after an overlay change. A simultaneous
-                // scenario.recreate() races its destroyed instance. The debug host restores
-                // its content and edge-to-edge configuration in every onCreate instead.
-                screen()
-                for(selected in MailStyle.entries) {
-                    rule.runOnIdle{style.value=selected};rule.waitForIdle()
-                    rule.onNodeWithContentDescription("Настройки").assertDoesNotExist()
-                    rule.onNodeWithContentDescription("Обновить почту").assertDoesNotExist()
-                    // Insets and SystemUI composition settle independently of the Compose clock.
-                    var top=0;var bottom=0;var contrast=true
-                    rule.runOnIdle {
-                        val insets=checkNotNull(WindowTestActivity.current).window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
-                        top=insets.top;bottom=insets.bottom
-                        contrast=checkNotNull(WindowTestActivity.current).window.isNavigationBarContrastEnforced
-                    }
-                    assertTrue(top>0);assertTrue(bottom>0)
-                    try {
-                    rule.waitUntil(15000) {
-                        val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
-                        if(shot==null)false else try{close(canvas,shot.getPixel(shot.width/8,shot.height-bottom/2))}finally{shot.recycle()}
-                    }
-                    } finally {
-                        val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
-                        if(shot!=null)try {
-                            saveDeviceBitmap(shot,"edge-${selected.key}-$mode")
-                            android.util.Log.i("MailWindowGeometry","mode=$mode style=$selected canvas=${Integer.toHexString(canvas)} pixel=${Integer.toHexString(shot.getPixel(shot.width/8,shot.height-bottom/2))} bottom=$bottom contrast=$contrast")
-                        }finally{shot.recycle()}
-                    }
-                    // The nav overlay and its insets can settle after the background pixel.
-                    // Wait for both the measured controls and current system insets to agree.
-                    rule.waitUntil(15000) {
-                        rule.runOnIdle {
-                            val bars=checkNotNull(WindowTestActivity.current).window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
-                            top=bars.top;bottom=bars.bottom
-                        }
-                        val upper=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
-                        val lower=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInWindow
-                        val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
-                        if(shot==null)false else try{upper.top>=top && lower.bottom<=shot.height-bottom}finally{shot.recycle()}
-                    }
-                    // Window insets and screenshots use window coordinates, which may differ
-                    // from the Compose root after an Android navigation-mode change.
-                    val menu=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
-                    val tabs=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInWindow
-                    val bitmap=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No full-window screenshot")
-                    try {
-                        saveDeviceBitmap(bitmap,"edge-${selected.key}-$mode")
-                        assertFalse("Navigation transparency lost in $mode/$selected",contrast)
-                        assertTrue("Menu must stay below system icons",menu.top>=top)
-                        assertTrue("Tabs must stay above system navigation",tabs.bottom<=bitmap.height-bottom)
-                        assertTrue("System navigation must reveal the app canvas",close(canvas,bitmap.getPixel(bitmap.width/8,bitmap.height-bottom/2)))
-                        val status=bitmap.getPixel((bitmap.width*0.42f).toInt(),top/2)
-                        if(selected==MailStyle.STANDARD)assertTrue(close(canvas,status))
-                        else {
-                            val samples=listOf(0.25f,0.3f,0.4f,0.6f).map{bitmap.getPixel((bitmap.width*it).toInt(),top/2)}
-                            assertTrue("Status area must show artwork, not a solid strip or camera cutout",samples.any{!close(canvas,it) && Color.blue(it)>60})
-                        }
-                    }finally{bitmap.recycle()}
-                    repeat(2){rule.onRoot().performTouchInput{swipe(Offset(center.x,height*0.8f),Offset(center.x,height*0.2f),400)};rule.waitForIdle()}
-                    rule.onNodeWithTag("inbox-header").assertIsNotDisplayed()
-                    rule.onNodeWithTag("inbox-bottom").assertIsNotDisplayed()
-                    val list=rule.onNodeWithTag("inbox-list").fetchSemanticsNode().boundsInRoot
-                    val full=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No hidden window screenshot")
-                    try {
-                        saveDeviceBitmap(full,"edge-hidden-${selected.key}-$mode")
-                        assertEquals("List must reach the top physical edge",0f,list.top,1f)
-                        assertEquals("List must reach the bottom physical edge",full.height.toFloat(),list.bottom,1f)
-                    }finally{full.recycle()}
-                }
+    @Test fun backgroundReachesSystemBarsWithButtons()=assertBackgroundReachesSystemBars("buttons")
+    @Test fun backgroundReachesSystemBarsWithGestures()=assertBackgroundReachesSystemBars("gestures")
+    private fun assertBackgroundReachesSystemBars(mode: String) {
+        screen()
+        for(selected in MailStyle.entries) {
+            rule.runOnIdle{style.value=selected};rule.waitForIdle()
+            rule.onNodeWithContentDescription("Настройки").assertDoesNotExist()
+            rule.onNodeWithContentDescription("Обновить почту").assertDoesNotExist()
+            // Insets and SystemUI composition settle independently of the Compose clock.
+            var top=0;var bottom=0;var contrast=true
+            rule.runOnIdle {
+                val insets=checkNotNull(WindowTestActivity.current).window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
+                top=insets.top;bottom=insets.bottom
+                contrast=checkNotNull(WindowTestActivity.current).window.isNavigationBarContrastEnforced
             }
-        }finally{if(original!=null)command("cmd overlay enable-exclusive --user 0 --category $original")}
+            assertTrue(top>0);assertTrue(bottom>0)
+            try {
+            rule.waitUntil(15000) {
+                val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                if(shot==null)false else try{close(canvas,shot.getPixel(shot.width/8,shot.height-bottom/2))}finally{shot.recycle()}
+            }
+            } finally {
+                val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                if(shot!=null)try {
+                    saveDeviceBitmap(shot,"edge-${selected.key}-$mode")
+                    android.util.Log.i("MailWindowGeometry","mode=$mode style=$selected canvas=${Integer.toHexString(canvas)} pixel=${Integer.toHexString(shot.getPixel(shot.width/8,shot.height-bottom/2))} bottom=$bottom contrast=$contrast")
+                }finally{shot.recycle()}
+            }
+            // The nav overlay and its insets can settle after the background pixel.
+            // Wait for both the measured controls and current system insets to agree.
+            rule.waitUntil(15000) {
+                rule.runOnIdle {
+                    val bars=checkNotNull(WindowTestActivity.current).window.decorView.rootWindowInsets.getInsets(WindowInsets.Type.systemBars())
+                    top=bars.top;bottom=bars.bottom
+                }
+                val upper=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
+                val lower=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInWindow
+                val shot=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                if(shot==null)false else try{upper.top>=top && lower.bottom<=shot.height-bottom}finally{shot.recycle()}
+            }
+            // Window insets and screenshots use window coordinates, which may differ
+            // from the Compose root after an Android navigation-mode change.
+            val menu=rule.onNodeWithContentDescription("Выбрать ящик").fetchSemanticsNode().boundsInWindow
+            val tabs=rule.onNodeWithContentDescription("Черновики").fetchSemanticsNode().boundsInWindow
+            val bitmap=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No full-window screenshot")
+            try {
+                saveDeviceBitmap(bitmap,"edge-${selected.key}-$mode")
+                assertFalse("Navigation transparency lost in $mode/$selected",contrast)
+                assertTrue("Menu must stay below system icons",menu.top>=top)
+                assertTrue("Tabs must stay above system navigation",tabs.bottom<=bitmap.height-bottom)
+                assertTrue("System navigation must reveal the app canvas",close(canvas,bitmap.getPixel(bitmap.width/8,bitmap.height-bottom/2)))
+                val status=bitmap.getPixel((bitmap.width*0.42f).toInt(),top/2)
+                if(selected==MailStyle.STANDARD)assertTrue(close(canvas,status))
+                else {
+                    val samples=listOf(0.25f,0.3f,0.4f,0.6f).map{bitmap.getPixel((bitmap.width*it).toInt(),top/2)}
+                    assertTrue("Status area must show artwork, not a solid strip or camera cutout",samples.any{!close(canvas,it) && Color.blue(it)>60})
+                }
+            }finally{bitmap.recycle()}
+            repeat(2){rule.onRoot().performTouchInput{swipe(Offset(center.x,height*0.8f),Offset(center.x,height*0.2f),400)};rule.waitForIdle()}
+            rule.onNodeWithTag("inbox-header").assertIsNotDisplayed()
+            rule.onNodeWithTag("inbox-bottom").assertIsNotDisplayed()
+            val list=rule.onNodeWithTag("inbox-list").fetchSemanticsNode().boundsInRoot
+            val full=InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?:error("No hidden window screenshot")
+            try {
+                saveDeviceBitmap(full,"edge-hidden-${selected.key}-$mode")
+                assertEquals("List must reach the top physical edge",0f,list.top,1f)
+                assertEquals("List must reach the bottom physical edge",full.height.toFloat(),list.bottom,1f)
+            }finally{full.recycle()}
+        }
     }
     @Test fun toolbarButtonsAreGoneWhileDrawerSettingsAndPullRefreshStillWork() {
         screen()
