@@ -58,7 +58,7 @@ class ReaderDeviceTest {
     @Test fun historyBlocksKeepSourceHiddenUntilRequested() {
         val source="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
         val conversation=ConversationText.parse(source)
-        rule.setContent{MailTheme{ConversationHistory("blocks",conversation,emptyList())}}
+        rule.setContent{MailTheme{androidx.compose.foundation.layout.Column {ConversationHistory("blocks",conversation,emptyList())}}}
         val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         rule.onNodeWithText("Старое письмо").assertDoesNotExist()
         toggle.performClick()
