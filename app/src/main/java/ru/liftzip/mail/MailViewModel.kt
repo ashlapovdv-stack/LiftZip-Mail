@@ -299,6 +299,14 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             finally{mutable.update{it.copy(attachmentBusy=it.attachmentBusy-key)}}
         }
     }
+    fun saveOriginal(m: MailItem,uri: Uri) {
+        viewModelScope.launch {
+            notice("Сохраняем оригинал письма…")
+            try{repo.saveOriginal(m,uri);notice("Оригинал письма сохранён")}
+            catch(e: CancellationException){throw e}
+            catch(e: Exception){notice(friendlyError(e),error=true)}
+        }
+    }
     fun download(m: MailItem,file: Attachment,uri: Uri)=attachmentWork(m,file){repo.download(m,file,uri);notice("Вложение сохранено")}
     fun openAttachment(m: MailItem,file: Attachment,onOpen: (OpenedAttachment)->Unit)=attachmentWork(m,file){onOpen(repo.openAttachment(m,file))}
 }

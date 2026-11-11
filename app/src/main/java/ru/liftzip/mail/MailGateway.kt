@@ -294,6 +294,17 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             }
         } finally { folder.close(false) }
     }
+    fun original(a: MailAccount,password: String,m: MailItem,out: OutputStream) = store(a,password).use { connection->
+        val folder=connection.getFolder(m.remoteFolder) as IMAPFolder
+        folder.open(Folder.READ_ONLY)
+        try {
+            require(folder.uidValidity==m.validity){"Папка изменилась. Обновите список писем."}
+            val remote=folder.getMessageByUID(m.uid) as? IMAPMessage
+                ?:error("Письмо перемещено или удалено на сервере.")
+            remote.setPeek(true)
+            remote.mimeStream.use { input->input.copyTo(out,64*1024) }
+        } finally { folder.close(false) }
+    }
     fun folders(a: MailAccount,password: String): List<ServerFolder> = store(a,password,fast=true).use{connection->
         connection.defaultFolder.list("*").mapNotNull { folder->
             val f=folder as? IMAPFolder?:return@mapNotNull null

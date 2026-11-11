@@ -1061,6 +1061,27 @@ class MailRepository(private val context: Context) {
             })?:error("Ящик не найден.")
         }
     }
+    suspend fun saveOriginal(message: MailItem,uri: Uri)=withContext(Dispatchers.IO){
+        val temporary=java.io.File.createTempFile("original-",".eml",context.cacheDir)
+        try {
+            require(message.uid>0 && message.validity>0 && message.remoteFolder.isNotBlank()){"У письма нет оригинала на сервере."}
+            coordinator.request(prepare={
+                db.accounts().find{it.id==message.accountId}?.let{AttachmentRequest(it,coordinator.version(it.id))}
+            },fetch={request->runInterruptible {
+                val a=request.account
+                require(a.enabled){"Включите ящик для сохранения оригинала."}
+                temporary.outputStream().use{gateway.original(a,vault.open(a.id,a.secret),message,it)}
+            }},commit={request,_->
+                require(coordinator.version(request.account.id)==request.version){"Ящик изменён. Повторите сохранение."}
+            })?:error("Ящик не найден.")
+            currentCoroutineContext().ensureActive()
+            context.contentResolver.openOutputStream(uri,"wt")?.use{output->temporary.inputStream().use{it.copyTo(output,64*1024)}}
+                ?:error("Не удалось создать файл.")
+        } catch(e: Exception) {
+            runCatching{android.provider.DocumentsContract.deleteDocument(context.contentResolver,uri)}
+            throw e
+        } finally { temporary.delete() }
+    }
     suspend fun download(message: MailItem,file: Attachment,uri: Uri)=withContext(Dispatchers.IO){
         try{
             val cached=cachedAttachment(message,file)
