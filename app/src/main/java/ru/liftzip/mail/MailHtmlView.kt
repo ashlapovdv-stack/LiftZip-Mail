@@ -189,7 +189,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         // Intrinsic measurement stays at base scale. Restore the reading anchor
         // only after the fixed native canvas is installed.
         pendingAnchor=if(waitForDocumentLayout)null else {
-            deferredAnchor?:if(old!=null && old.externalAllowed!=next.externalAllowed && base!=null && base>0f && renderScale>0f)
+            deferredAnchor?:if(old!=null && base!=null && base>0f && renderScale>0f)
                 ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale) else null
         }
         if(!waitForDocumentLayout)deferredAnchor=null
