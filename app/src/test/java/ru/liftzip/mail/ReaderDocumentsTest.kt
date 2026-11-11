@@ -3,9 +3,13 @@ package ru.liftzip.mail
 import org.junit.Assert.*
 import org.junit.Test
 import androidx.compose.ui.unit.Constraints
+import org.jsoup.Jsoup
 
 class ReaderDocumentsTest {
-    private fun key()=ReaderDocumentCache.Key("a:m:1","<p>Cached content</p><img src='https://images.example/p.png'>","Cached content",emptyList(),false,false,"#20241f","#f8f9f6")
+    private fun key(): ReaderDocumentCache.Key {
+        val html="<p>Cached content</p><img src='https://images.example/p.png'>"
+        return ReaderDocumentCache.Key("a:m:1",html,"Cached content",emptyList(),HtmlMail.noHistory(html),false,"#20241f","#f8f9f6")
+    }
     @Test fun reopeningAnUnchangedMessageReusesThePreparedDocument() {
         val cache=ReaderDocumentCache();val first=cache.prepare(key())
         assertSame(first,cache.prepare(key().copy()))
@@ -20,7 +24,7 @@ class ReaderDocumentsTest {
     }
     @Test fun changedBodyAttachmentsHistoryOrColorsInvalidateThePreparedContent() {
         val cache=ReaderDocumentCache();val original=cache.prepare(key())
-        for(changed in listOf(key().copy(html="<p>Changed</p>"),key().copy(plain="Changed"),key().copy(history=true),
+        for(changed in listOf(key().copy(html="<p>Changed</p>"),key().copy(plain="Changed"),key().copy(history=HtmlMail.HistoryAnalysis("<p>Changed current HTML</p>",true,HtmlMail.HistoryReason.SEPARATED)),
             key().copy(attachments=listOf(Attachment("1","x.png","image/png",1,"x"))),key().copy(background="#000000"))) {
             assertNotSame(original,cache.prepare(changed))
         }
@@ -33,6 +37,19 @@ class ReaderDocumentsTest {
         assertSame(first,cache.prepare(key()));assertNotSame(second,cache.prepare(key().copy(identity="second")))
         val tiny=ReaderDocumentCache(budget=8)
         assertNotSame(tiny.prepare(key()),tiny.prepare(key()))
+    }
+    @Test fun fallbackAndConfirmedHistorySplitsCannotReuseEachOthersDocument() {
+        val html="<p>Ответ</p><div class='gmail_quote'>Старое письмо</div>"
+        val matching=QuotedConversation("Ответ",listOf(QuotedMessage(null,null,"Старое письмо")),"Ответ\n\nСтарое письмо")
+        val mismatch=matching.copy(messages=listOf(QuotedMessage(null,null,"Другой plain-текст")))
+        val split=HtmlMail.analyzeHistory(html,matching);val fallback=HtmlMail.analyzeHistory(html,mismatch)
+        assertTrue(split.separateHistory);assertFalse(fallback.separateHistory)
+        val cache=ReaderDocumentCache()
+        fun prepare(history: HtmlMail.HistoryAnalysis)=cache.prepare(ReaderDocumentCache.Key("a:m:1",html,"Ответ",emptyList(),history,false,"#20241f","#f8f9f6"))
+        val splitDocument=prepare(split);val fallbackDocument=prepare(fallback)
+        assertFalse(Jsoup.parse(splitDocument.html).text().contains("Старое письмо"))
+        assertTrue(Jsoup.parse(fallbackDocument.html).text().contains("Старое письмо"))
+        assertSame(fallbackDocument,prepare(fallback));assertSame(splitDocument,prepare(split))
     }
     @Test fun clearingTheCacheReleasesPreparedDocuments() {
         val cache=ReaderDocumentCache();val first=cache.prepare(key());cache.clear()

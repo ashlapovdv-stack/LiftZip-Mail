@@ -163,18 +163,57 @@ object HtmlMail {
         return (content.toDouble()*factor).toInt().coerceIn(1,viewport.coerceIn(1,MAX_VIEWPORT_PIXELS))
     }
     private fun escape(value: String)=value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;")
-    private fun currentSource(html: String,hasHistory: Boolean): String? {
-        if(!hasHistory)return html
-        val doc=Jsoup.parse(html)
-        val quotes=doc.select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]")
-        if(quotes.isEmpty())return html
-        quotes.remove()
-        doc.select(".gmail_attr").remove()
-        return doc.outerHtml()
+    enum class HistoryReason {
+        NO_HTML,NO_PLAIN_HISTORY,NO_PROVIDER_BOUNDARY,MULTIPLE_PROVIDER_BOUNDARIES,
+        TRAILING_CONTENT,EMPTY_CURRENT,PLAIN_HISTORY_MISMATCH,SEPARATED
     }
-    /** Plain-text quote parsing alone cannot identify a safe boundary inside HTML. */
-    fun canSeparateHtmlHistory(html: String): Boolean = html.isBlank() ||
-        Jsoup.parse(html).select("blockquote,.gmail_quote,.yahoo_quoted,.protonmail_quote,[type=cite]").isNotEmpty()
+    data class HistoryAnalysis(val currentHtml: String,val separateHistory: Boolean,val reason: HistoryReason)
+    fun noHistory(html: String)=HistoryAnalysis(html,false,HistoryReason.NO_PLAIN_HISTORY)
+    private fun normalizedHistoryText(value: String)=value.replace('\u00a0',' ').replace("\uFFFC","")
+        .replace(Regex("[\\s\\u200B\\uFEFF]+")," ").trim()
+    private fun contentAfter(root: Element,boundary: Element): Boolean {
+        var boundaryDepth=-1;var after=false;var found=false
+        NodeTraversor.traverse(object: NodeVisitor {
+            override fun head(node: Node,depth: Int) {
+                if(node==boundary){boundaryDepth=depth;return}
+                if(boundaryDepth>=0) {
+                    if(depth>boundaryDepth)return
+                    boundaryDepth=-1;after=true
+                }
+                if(!after)return
+                when(node) {
+                    is TextNode->if(node.text().isNotBlank())found=true
+                    is Element->if(node.normalName() in setOf("img","table","hr"))found=true
+                }
+            }
+            override fun tail(node: Node,depth: Int) {}
+        },root)
+        return found
+    }
+    /** One conservative result controls both rich HTML and the separately rendered plain history. */
+    fun analyzeHistory(html: String,conversation: QuotedConversation): HistoryAnalysis {
+        fun keep(reason: HistoryReason)=HistoryAnalysis(html,false,reason)
+        if(html.isBlank())return HistoryAnalysis(html,conversation.messages.isNotEmpty(),HistoryReason.NO_HTML)
+        if(conversation.messages.isEmpty())return keep(HistoryReason.NO_PLAIN_HISTORY)
+        val doc=Jsoup.parse(html)
+        val matches=doc.select(".gmail_quote,.yahoo_quoted,.protonmail_quote").toList()
+        val boundaries=matches.filter{candidate->candidate.parents().none{it in matches}}
+        if(boundaries.isEmpty())return keep(HistoryReason.NO_PROVIDER_BOUNDARY)
+        if(boundaries.size!=1)return keep(HistoryReason.MULTIPLE_PROVIDER_BOUNDARIES)
+        val boundary=boundaries.single()
+        if(contentAfter(doc.body(),boundary))return keep(HistoryReason.TRAILING_CONTENT)
+        var previous=boundary.previousSibling()
+        while(previous is TextNode && previous.text().isBlank())previous=previous.previousSibling()
+        val attribution=(previous as? Element)?.takeIf{boundary.hasClass("gmail_quote") && it.hasClass("gmail_attr")}
+        val removed=normalizedHistoryText(text(listOfNotNull(attribution,boundary).joinToString("\n"){it.outerHtml()}))
+        val available=normalizedHistoryText(conversation.messages.joinToString("\n"){message->
+            listOfNotNull(message.attribution,message.body).joinToString("\n")
+        })
+        if(removed.isEmpty() || !available.contains(removed))return keep(HistoryReason.PLAIN_HISTORY_MISMATCH)
+        attribution?.remove();boundary.remove()
+        if(text(doc.outerHtml()).isBlank())return keep(HistoryReason.EMPTY_CURRENT)
+        return HistoryAnalysis(doc.outerHtml(),true,HistoryReason.SEPARATED)
+    }
     private fun horizontalInsets(style: String): Pair<Boolean,Boolean> {
         val sides=mutableMapOf("padding-left" to false,"padding-right" to false,"margin-left" to false,"margin-right" to false)
         fun nonzero(value: String): Boolean {
@@ -197,9 +236,9 @@ object HtmlMail {
         return (sides["padding-left"]==true || sides["margin-left"]==true) to
             (sides["padding-right"]==true || sides["margin-right"]==true)
     }
-    fun document(html: String,plain: String,attachments: List<Attachment>,hasHistory: Boolean=false,external: Boolean=false,
+    fun document(html: String,plain: String,attachments: List<Attachment>,history: HistoryAnalysis=noHistory(html),external: Boolean=false,
         foreground: String="#20241f",background: String="#f8f9f6",identity: String=""): MailHtmlDocument {
-        val currentHtml=html.takeIf{it.isNotBlank()}?.let{currentSource(it,hasHistory)}
+        val currentHtml=html.takeIf{it.isNotBlank()}?.let{history.currentHtml}
         val source=currentHtml?:this.plain(plain)
         val namespace=MailImageLimits.hash(identity+source+external+attachments.joinToString{it.path+it.contentId})
         val doc=Jsoup.parseBodyFragment(cleanSource(source))

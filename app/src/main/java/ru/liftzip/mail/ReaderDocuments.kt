@@ -3,7 +3,7 @@ package ru.liftzip.mail
 /** Process-only LRU: no WebViews, Activities, credentials or downloaded images are retained. */
 class ReaderDocumentCache(private val budget: Long=4L*1024*1024,private val limit: Int=8) {
     data class Key(val identity: String,val html: String,val plain: String,val attachments: List<Attachment>,
-        val history: Boolean,val external: Boolean,val foreground: String,val background: String)
+        val history: HtmlMail.HistoryAnalysis,val external: Boolean,val foreground: String,val background: String)
     private data class Entry(val document: MailHtmlDocument,val bytes: Long)
     private val entries=LinkedHashMap<Key,Entry>(8,0.75f,true)
     private var bytes=0L
