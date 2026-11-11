@@ -388,6 +388,15 @@ class HtmlMailTest {
         val full=HtmlMail.document(source,"",emptyList(),HtmlMail.noHistory(source))
         assertTrue(Jsoup.parse(full.html).text().contains("Второе письмо"))
     }
+    @Test fun oneMessageCannotConfirmRemovalOfAPartialChain() {
+        val conversation=QuotedConversation("Новый ответ",listOf(
+            QuotedMessage(null,null,"Первое письмо",historyHeader),
+            QuotedMessage(null,null,"Второе письмо","Older attribution")),"original")
+        val source="<p>Новый ответ</p><div class='gmail_quote'>Второе письмо</div>"
+        val analysis=HtmlMail.analyzeHistory(source,conversation)
+        assertFalse(analysis.separateHistory)
+        assertEquals(source,analysis.currentHtml)
+    }
     @Test fun aMatchingSemanticQuotationWithoutAttributionCannotBeCollapsed() {
         val source="<p>Новый ответ</p><blockquote>Старое письмо</blockquote>"
         assertFalse(HtmlMail.analyzeHistory(source,historyConversation()).separateHistory)

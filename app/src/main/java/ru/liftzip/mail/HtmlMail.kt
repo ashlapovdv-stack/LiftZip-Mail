@@ -219,8 +219,8 @@ object HtmlMail {
             val body=normalizedHistoryText(text(boundary.outerHtml()))
             val attributed=attribution?.let{normalizedHistoryText(text(it.outerHtml()))}
             val units=conversation.messages
-            val single=units.any{message->normalizedHistoryText(message.body)==body &&
-                (attributed==null || normalizedHistoryText(message.attribution.orEmpty())==attributed)}
+            val single=units.singleOrNull()?.let{message->normalizedHistoryText(message.body)==body &&
+                (attributed==null || normalizedHistoryText(message.attribution.orEmpty())==attributed)}==true
             val chain=normalizedHistoryText(units.joinToString("\n"){message->
                 listOfNotNull(message.attribution,message.body).joinToString("\n")})
             val chainWithoutFirstHeader=normalizedHistoryText(units.mapIndexed{index,message->
