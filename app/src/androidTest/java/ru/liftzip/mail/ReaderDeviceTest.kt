@@ -10,6 +10,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -32,6 +33,13 @@ class ReaderDeviceTest {
         rule.waitForIdle()
         rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.interactionEnabled && it.contentHeight>0 && it.height>20}?:false};ready}
         var view: MailHtmlWebView?=null;rule.runOnIdle{view=webView()};return view!!
+    }
+    private fun matches(view: MailHtmlWebView,text: String): Int {
+        val count=AtomicInteger(-1)
+        rule.runOnIdle{view.setFindListener{_,total,done->if(done)count.set(total)};view.findAllAsync(text)}
+        rule.waitUntil(10_000){count.get()>=0};val found=count.get()
+        rule.runOnIdle{view.setFindListener(null);view.clearMatches()}
+        return found
     }
     @Test fun unavailableBodyShowsErrorWithoutPresentingThePreviewAsMail() {
         val m=message.copy(body="Текст из списка",htmlBody="",contentCached=false,previewOnly=false)
@@ -90,6 +98,33 @@ class ReaderDeviceTest {
             rule.runOnIdle{android.util.Log.i("MailReaderGeometry","cycle=$cycle viewHeight=${view.height} documentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY} historyTop=$top")}
             assertEquals("History must not drift after pinch",original,top,8f*view.resources.displayMetrics.density)
         }
+    }
+    @Test fun currentBlockquoteSurvivesAndConfirmedHistoryExpandsWithoutDuplication() {
+        val header="On Wed, 28 Oct 2026, Person <a@example.com> wrote:"
+        val htmlHeader=header.replace("<","&lt;").replace(">","&gt;")
+        val body="Новый ответ\nЦитата текущего ответа\n\n$header\n> Старое письмо"
+        val html="<p>Новый ответ</p><blockquote><p>Цитата текущего ответа</p></blockquote><div class='gmail_attr'>$htmlHeader</div><div class='gmail_quote'><p>Старое письмо</p></div>"
+        rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        assertEquals(1,matches(view,"Цитата текущего ответа"));assertEquals(0,matches(view,"Старое письмо"))
+        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        history.assertIsDisplayed();history.performClick()
+        rule.onNodeWithText("Старое письмо").assertIsDisplayed()
+        rule.onAllNodesWithText("Старое письмо").assertCountEquals(1)
+        history.performClick();rule.onAllNodesWithText("Старое письмо").assertCountEquals(0)
+        assertEquals(1,matches(view,"Цитата текущего ответа"))
+    }
+    @Test fun ambiguousHistoryBoundaryShowsFullHtmlWithoutADuplicatingPanel() {
+        val header="On Wed, 28 Oct 2026, Person <a@example.com> wrote:"
+        val body="Новый ответ\nОтвет после контейнера\n\n$header\n> Старое письмо"
+        val html="<p>Новый ответ</p><div class='gmail_quote'><p>Старое письмо</p></div><p>Ответ после контейнера</p>"
+        rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
+        val view=loaded()
+        rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        assertEquals(1,matches(view,"Новый ответ"));assertEquals(1,matches(view,"Старое письмо"))
+        assertEquals(1,matches(view,"Ответ после контейнера"))
+        rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").assertCountEquals(0)
     }
     // 0.5.19 regression: a small pinch that stays below the zoom-chrome threshold must
     // not move the history element or the window after the fingers are released.
