@@ -884,6 +884,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     TextButton(onClick=onRetryLoad){Text("Повторить")}
                 } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            else if(scroll.toolbar.height<=0) {
+                // Native document insets depend on the measured toolbar. Starting
+                // before it is known would reload a warm document with a second inset.
+                messageHeader()
+            }
             else {
                 val (parsed,history)=parsed
                 MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},if(historyExpanded && m.htmlBody.isNotBlank())HtmlMail.noHistory(m.htmlBody)else history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
