@@ -763,6 +763,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
     var historyExpanded by rememberSaveable(m.id,m.htmlBody){mutableStateOf(false)}
+    val rendererFailed=remember(m.id,m.contentVersion){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var pinchActive by remember(m.id){mutableStateOf(false)}
     val readerContext=LocalContext.current
@@ -884,10 +885,10 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
-                },onPinchChanged=updatePinch)
+                },onPinchChanged=updatePinch,rendererFailed=rendererFailed)
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
-                if(parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
+                if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
                     if(m.htmlBody.isBlank())ConversationHistory(m.id,parsed,ownAddresses)
                     else TextButton(onClick={historyExpanded=!historyExpanded},modifier=Modifier.semantics{
                         contentDescription="Предыдущие сообщения: ${parsed.messages.size}"
