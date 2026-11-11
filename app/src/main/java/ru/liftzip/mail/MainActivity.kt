@@ -174,9 +174,9 @@ private val Paper=Color(0xFFF8F9F6)
         if(uri!=null && requested!=null)vm.download(requested.first,requested.second,uri)
         download=null
     }
-    var originalMessage by rememberSaveable(stateSaver=androidx.compose.runtime.saveable.listSaver<MailItem,String>(
-        save={listOf(it.id,it.accountId,it.uid.toString(),it.validity.toString(),it.remoteFolder)},
-        restore={MailItem(id=it[0],accountId=it[1],uid=it[2].toLong(),validity=it[3].toLong(),remoteFolder=it[4],sender="",senderEmail="",recipients="",subject="",body="",date=0)}
+    var originalMessage by rememberSaveable(stateSaver=androidx.compose.runtime.saveable.listSaver<MailItem?,String>(
+        save={m->if(m==null)emptyList() else listOf(m.id,m.accountId,m.uid.toString(),m.validity.toString(),m.remoteFolder)},
+        restore={if(it.isEmpty())null else MailItem(id=it[0],accountId=it[1],uid=it[2].toLong(),validity=it[3].toLong(),remoteFolder=it[4],sender="",senderEmail="",recipients="",subject="",body="",date=0)}
     )) { mutableStateOf<MailItem?>(null) }
     val saveOriginal=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("message/rfc822")){uri->
         val message=originalMessage

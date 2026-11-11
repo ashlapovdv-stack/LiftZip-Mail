@@ -63,6 +63,21 @@ class ReaderDeviceTest {
         rule.onNodeWithText("Повторить").performClick()
         rule.runOnIdle{assertEquals(1,retries)}
     }
+    @Test fun originalExportIsAvailableForServerMailWithoutSpamAction() {
+        var exported=0
+        val remote=message.copy(uid=42,validity=7)
+        rule.setContent{MailTheme{ReaderScreen(remote,null,false,emptyList(),emptySet(),{},{},{error("unused")},{},{},{},{},{},{},onSaveOriginal={exported++})}}
+        rule.onNodeWithContentDescription("Действия с письмом").performClick()
+        rule.onNodeWithText("Сохранить оригинал (.eml)").assertIsEnabled().performClick()
+        rule.runOnIdle{assertEquals(1,exported)}
+        rule.onNodeWithText("Сохранить оригинал (.eml)").assertDoesNotExist()
+    }
+    @Test fun originalExportIsDisabledForLocalMail() {
+        rule.setContent{MailTheme{ReaderScreen(message,null,false,emptyList(),emptySet(),{},{},{error("unused")},{},{},{},{},{},{},onSaveOriginal={fail("Local mail has no server original")})}}
+        rule.onNodeWithContentDescription("Действия с письмом").performClick()
+        rule.onNodeWithText("Сохранить оригинал (.eml)").assertIsNotEnabled()
+        rule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    }
     // Exercise the production reader, including its header and bounded WebView.
     @Test fun realReaderFitsAWideNestedTableAtInitialScale() {
         val html="""<table style='width:2200px'><tr><td>Первый столбец</td><td><table style='width:900px'><tr><td>Последний столбец</td></tr></table></td></tr></table>"""
