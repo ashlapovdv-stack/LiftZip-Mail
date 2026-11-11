@@ -28,6 +28,26 @@ class MailStoreDeviceTest {
     }
     private fun account()=MailAccount(id="a",name="Test",email="a@example.com",provider=Provider.CUSTOM,imapHost="imap.example.com",smtpHost="smtp.example.com",enabled=false)
     private fun message(account: String="a")=MailItem("m",account,sender="S",senderEmail="s@example.com",recipients="r@example.com",subject="Test",body="Keep this complete body",date=1,localFolder="drafts")
+    @Test fun storedMimeHistoryIsReanalyzedAfterReopeningWithoutChangingItsSource() {
+        val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
+            .open("mailru-linked-history.eml").use{input->
+                MimeReader().read(jakarta.mail.internet.MimeMessage(jakarta.mail.Session.getInstance(java.util.Properties()),input))
+            }
+        val c=context()
+        val original=message().copy(body=mime.text,htmlBody=mime.html,localFolder="inbox",uid=42,validity=7,
+            contentCached=true,contentVersion=MailContent.FORMAT_VERSION)
+        LocalStore(c).use{db->db.putAccount(account());db.putMessage(original)}
+        try {
+            LocalStore(c).use{db->
+                val stored=requireNotNull(db.message(original.id))
+                assertEquals(original.body,stored.body);assertEquals(original.htmlBody,stored.htmlBody)
+                val analysis=HtmlMail.analyzeHistory(stored.htmlBody,ConversationText.parse(stored.body))
+                assertTrue(analysis.reason.toString(),analysis.separateHistory)
+                assertEquals("Текущий ответ",org.jsoup.Jsoup.parse(analysis.currentHtml).text().trim())
+                assertEquals(original.htmlBody,db.message(original.id)?.htmlBody)
+            }
+        }finally{c.deleteDatabase("mail-v1.db")}
+    }
     @Test fun migrationAddsSyncTablesWithoutDeletingExistingMail() {
         val c=context();val db=c.openOrCreateDatabase("legacy",0,null)
         try {
