@@ -762,6 +762,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
+    var historyExpanded by rememberSaveable(m.id,m.htmlBody){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var pinchActive by remember(m.id){mutableStateOf(false)}
     val readerContext=LocalContext.current
@@ -878,7 +879,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
             else {
                 val (parsed,history)=parsed
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},if(historyExpanded && m.htmlBody.isNotBlank())HtmlMail.noHistory(m.htmlBody)else history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
@@ -886,7 +887,13 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 },onPinchChanged=updatePinch)
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
-                if(parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)){ConversationHistory(m.id,parsed,ownAddresses)}
+                if(parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
+                    if(m.htmlBody.isBlank())ConversationHistory(m.id,parsed,ownAddresses)
+                    else TextButton(onClick={historyExpanded=!historyExpanded},modifier=Modifier.semantics{
+                        contentDescription="Предыдущие сообщения: ${parsed.messages.size}"
+                        stateDescription=if(historyExpanded)"Развернуто" else "Свернуто"
+                    }) {Text(if(historyExpanded)"Скрыть переписку" else "Показать переписку (${parsed.messages.size})")}
+                }
             }
             Spacer(Modifier.height(100.dp))
         }

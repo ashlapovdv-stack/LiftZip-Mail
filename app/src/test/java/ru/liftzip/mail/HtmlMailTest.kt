@@ -285,7 +285,7 @@ class HtmlMailTest {
         assertFalse(withoutHistory.separateHistory);assertEquals(source,withoutHistory.currentHtml)
     }
 
-    @Test fun imagesInsideTextuallyMatchingHistoryRequireFullHtmlFallback() {
+    @Test fun imagesInConfirmedHistorySurviveRichExpansion() {
         val attachment=Attachment("1","history.png","image/png",100,"history-image")
         val sources=listOf(
             "<img src='cid:history-image' alt='Схема, которой нет в plain'>",
@@ -296,15 +296,15 @@ class HtmlMailTest {
             val source="<p>Новый ответ</p><div class='gmail_quote'><p>Старое письмо</p>$image</div>"
             val (doc,analysis)=renderHistory(source,attachments=listOf(attachment))
             val body=Jsoup.parse(doc.html).body()
-            assertFalse("An image absent from plain history must prevent split",analysis.separateHistory)
-            assertEquals(HtmlMail.HistoryReason.PLAIN_HISTORY_MISMATCH,analysis.reason)
-            assertTrue(body.text().contains("Старое письмо"))
-            assertTrue("The fallback must retain the image or its consent placeholder",
-                body.select("img[alt='Схема, которой нет в plain'],.mail-image-placeholder").isNotEmpty())
+            assertTrue(analysis.separateHistory)
+            assertFalse(body.text().contains("Старое письмо"))
+            val expanded=Jsoup.parse(HtmlMail.document(source,"Новый ответ",listOf(attachment),HtmlMail.noHistory(source)).html)
+            assertTrue("The original rich history must retain the image or consent placeholder",
+                expanded.select("img[alt='Схема, которой нет в plain'],.mail-image-placeholder").isNotEmpty())
         }
     }
 
-    @Test fun cssImagesInsideHistoryRequireFullHtmlFallback() {
+    @Test fun cssImagesInConfirmedHistorySurviveRichExpansion() {
         val attachment=Attachment("1","history-bg.png","image/png",100,"history-bg")
         val sources=listOf(
             "<div class='gmail_quote' style=\"background-image:url('cid:history-bg')\"><p>Старое письмо</p></div>",
@@ -313,10 +313,11 @@ class HtmlMailTest {
         for(history in sources) {
             val source="<p>Новый ответ</p>$history"
             val (doc,analysis)=renderHistory(source,attachments=listOf(attachment))
-            assertFalse(analysis.separateHistory)
-            assertEquals(HtmlMail.HistoryReason.PLAIN_HISTORY_MISMATCH,analysis.reason)
-            assertTrue(Jsoup.parse(doc.html).body().text().contains("Старое письмо"))
-            assertEquals(MailImageSource.Inline(attachment),doc.images.values.single())
+            assertTrue(analysis.separateHistory)
+            assertFalse(Jsoup.parse(doc.html).body().text().contains("Старое письмо"))
+            val expanded=HtmlMail.document(source,"Новый ответ",listOf(attachment),HtmlMail.noHistory(source))
+            assertTrue(Jsoup.parse(expanded.html).text().contains("Старое письмо"))
+            assertEquals(MailImageSource.Inline(attachment),expanded.images.values.single())
         }
     }
 
@@ -361,6 +362,44 @@ class HtmlMailTest {
         assertTrue("The current reply's own blockquote must remain",text.contains("Цитата внутри нового ответа"))
         assertFalse("The confirmed history tail must be collapsed",text.contains("Старое письмо"))
         assertEquals("Старое письмо",conversation.messages.single().body)
+    }
+
+    @Test fun attributedGenericQuoteKeepsTheCurrentSemanticQuote() {
+        val source="<p>Новый ответ</p><blockquote>Моя смысловая цитата</blockquote>"+
+            "<div>$htmlHistoryHeader</div><blockquote type='cite'>Старое письмо</blockquote>"
+        val (collapsed,analysis)=renderHistory(source)
+        assertTrue(analysis.separateHistory)
+        val current=Jsoup.parse(collapsed.html).text()
+        assertTrue(current.contains("Моя смысловая цитата"));assertFalse(current.contains("Старое письмо"))
+        val expanded=Jsoup.parse(HtmlMail.document(source,"",emptyList(),HtmlMail.noHistory(source)).html)
+        assertTrue(expanded.text().contains("Старое письмо"))
+        assertEquals(2,expanded.select("blockquote").size)
+    }
+    @Test fun aNestedChainIsComparedAsAChainNotOneOldMessage() {
+        val olderHeader="On Tue, 27 Oct 2026, Other <b@example.com> wrote:"
+        val conversation=QuotedConversation("Новый ответ",listOf(
+            QuotedMessage(null,null,"Первое письмо",historyHeader),
+            QuotedMessage(null,null,"Второе письмо",olderHeader)),"original")
+        val source="<p>Новый ответ</p><div>$htmlHistoryHeader</div><blockquote>Первое письмо"+
+            "<div>"+olderHeader.replace("<","&lt;").replace(">","&gt;")+"</div><blockquote>Второе письмо</blockquote></blockquote>"
+        val analysis=HtmlMail.analyzeHistory(source,conversation)
+        assertTrue(analysis.reason.toString(),analysis.separateHistory)
+        assertFalse(Jsoup.parse(analysis.currentHtml).text().contains("Первое письмо"))
+        val full=HtmlMail.document(source,"",emptyList(),HtmlMail.noHistory(source))
+        assertTrue(Jsoup.parse(full.html).text().contains("Второе письмо"))
+    }
+    @Test fun oneMessageCannotConfirmRemovalOfAPartialChain() {
+        val conversation=QuotedConversation("Новый ответ",listOf(
+            QuotedMessage(null,null,"Первое письмо",historyHeader),
+            QuotedMessage(null,null,"Второе письмо","Older attribution")),"original")
+        val source="<p>Новый ответ</p><div class='gmail_quote'>Второе письмо</div>"
+        val analysis=HtmlMail.analyzeHistory(source,conversation)
+        assertFalse(analysis.separateHistory)
+        assertEquals(source,analysis.currentHtml)
+    }
+    @Test fun aMatchingSemanticQuotationWithoutAttributionCannotBeCollapsed() {
+        val source="<p>Новый ответ</p><blockquote>Старое письмо</blockquote>"
+        assertFalse(HtmlMail.analyzeHistory(source,historyConversation()).separateHistory)
     }
 
 }

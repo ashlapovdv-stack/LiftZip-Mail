@@ -171,67 +171,78 @@ object HtmlMail {
     fun noHistory(html: String)=HistoryAnalysis(html,false,HistoryReason.NO_PLAIN_HISTORY)
     private fun normalizedHistoryText(value: String)=value.replace('\u00a0',' ').replace("\uFFFC","")
         .replace(Regex("[\\s\\u200B\\uFEFF]+")," ").trim()
-    private fun hasCssImage(value: String)=value.contains("url(",ignoreCase=true)
-    private fun hasUnrepresentedVisual(node: Node): Boolean=node is Element &&
-        (node.normalName()=="img" || hasCssImage(node.attr("style")) ||
-            node.normalName()=="style" && hasCssImage(node.data()))
-    private fun containsUnrepresentedVisual(root: Element): Boolean {
-        var found=false
-        NodeTraversor.traverse(object: NodeVisitor {
-            override fun head(node: Node,depth: Int) {if(hasUnrepresentedVisual(node))found=true}
-            override fun tail(node: Node,depth: Int) {}
-        },root)
-        return found
-    }
     private fun contentAfter(root: Element,boundary: Element): Boolean {
-        var boundaryDepth=-1;var after=false;var found=false
+        var inside=false;var after=false;var found=false
         NodeTraversor.traverse(object: NodeVisitor {
             override fun head(node: Node,depth: Int) {
-                if(node==boundary){boundaryDepth=depth;return}
-                if(boundaryDepth>=0) {
-                    if(depth>boundaryDepth)return
-                    boundaryDepth=-1;after=true
-                }
-                if(!after)return
+                if(node===boundary){inside=true;return}
+                if(!after || inside)return
                 when(node) {
                     is TextNode->if(node.text().isNotBlank())found=true
-                    is Element->if(node.normalName() in setOf("table","hr") || hasUnrepresentedVisual(node))found=true
+                    is Element->if(node.normalName() in setOf("img","table","hr") ||
+                        node.attr("style").contains("url(",true))found=true
                 }
             }
-            override fun tail(node: Node,depth: Int) {}
+            override fun tail(node: Node,depth: Int) {if(node===boundary){inside=false;after=true}}
         },root)
         return found
     }
-    /** One conservative result controls both rich HTML and the separately rendered plain history. */
+    private fun attributionHeader(value: String): Boolean {
+        val parsed=ConversationText.parse("Current reply\n\n$value\n> Quoted message")
+        return parsed.messages.firstOrNull()?.attribution?.let{
+            normalizedHistoryText(it)==normalizedHistoryText(value)
+        }==true
+    }
+    /** Recognition only: retain the original HTML as the expanded representation.
+     *  A plain projection corroborates a boundary but never replaces the rich history. */
     fun analyzeHistory(html: String,conversation: QuotedConversation): HistoryAnalysis {
         fun keep(reason: HistoryReason)=HistoryAnalysis(html,false,reason)
         if(html.isBlank())return HistoryAnalysis(html,conversation.messages.isNotEmpty(),HistoryReason.NO_HTML)
         if(conversation.messages.isEmpty())return keep(HistoryReason.NO_PLAIN_HISTORY)
         val doc=Jsoup.parse(html)
-        val matches=doc.select(".gmail_quote,.yahoo_quoted,.protonmail_quote").toList()
-        val boundaries=matches.filter{candidate->candidate.parents().none{it in matches}}
-        if(boundaries.isEmpty())return keep(HistoryReason.NO_PROVIDER_BOUNDARY)
-        if(boundaries.size!=1)return keep(HistoryReason.MULTIPLE_PROVIDER_BOUNDARIES)
-        val boundary=boundaries.single()
-        if(contentAfter(doc.body(),boundary))return keep(HistoryReason.TRAILING_CONTENT)
-        var previous=boundary.previousSibling()
-        while(previous is TextNode && previous.text().isBlank())previous=previous.previousSibling()
-        val attribution=(previous as? Element)?.takeIf{boundary.hasClass("gmail_quote") && it.hasClass("gmail_attr")}
-        val removedNodes=listOfNotNull(attribution,boundary)
-        // Plain history cannot represent rich resources. A stylesheet selector cannot be
-        // scoped reliably without a CSS engine, so any CSS image makes the split conservative.
-        if(removedNodes.any(::containsUnrepresentedVisual) || doc.select("style").any{hasCssImage(it.data())})
-            return keep(HistoryReason.PLAIN_HISTORY_MISMATCH)
-        val removedBody=normalizedHistoryText(text(boundary.outerHtml()))
-        val removedAttribution=attribution?.let{normalizedHistoryText(text(it.outerHtml()))}
-        val historyMatches=removedBody.isNotEmpty() && conversation.messages.any{message->
-            normalizedHistoryText(message.body)==removedBody &&
-                (removedAttribution==null || normalizedHistoryText(message.attribution.orEmpty())==removedAttribution)
+        val providers=doc.select(".gmail_quote,.yahoo_quoted,.protonmail_quote").toList()
+        val providerRoots=providers.filter{candidate->candidate.parents().none{it in providers}}
+        if(providerRoots.size>1)return keep(HistoryReason.MULTIPLE_PROVIDER_BOUNDARIES)
+        val candidates=if(providerRoots.isNotEmpty())providerRoots else
+            doc.select("blockquote,[type=cite]").toList().filter{candidate->
+                candidate.parents().none{it.normalName()=="blockquote" || it.attr("type").equals("cite",true)}
+            }
+        for(boundary in candidates.asReversed()) {
+            if(contentAfter(doc.body(),boundary))continue
+            var previous=boundary.previousSibling()
+            while(previous is TextNode && previous.text().isBlank())previous=previous.previousSibling()
+            val preceding=previous as? Element
+            val precedingText=preceding?.let{text(it.outerHtml())}.orEmpty()
+            val attribution=preceding?.takeIf{
+                boundary.hasClass("gmail_quote") && it.hasClass("gmail_attr") || attributionHeader(precedingText)
+            }
+            val body=normalizedHistoryText(text(boundary.outerHtml()))
+            val attributed=attribution?.let{normalizedHistoryText(text(it.outerHtml()))}
+            val units=conversation.messages
+            val single=units.singleOrNull()?.let{message->normalizedHistoryText(message.body)==body &&
+                (attributed==null || normalizedHistoryText(message.attribution.orEmpty())==attributed)}==true
+            val chain=normalizedHistoryText(units.joinToString("\n"){message->
+                listOfNotNull(message.attribution,message.body).joinToString("\n")})
+            val chainWithoutFirstHeader=normalizedHistoryText(units.mapIndexed{index,message->
+                if(index==0)message.body else listOfNotNull(message.attribution,message.body).joinToString("\n")
+            }.joinToString("\n"))
+            val completeChain=body.isNotEmpty() && (body==chain || body==chainWithoutFirstHeader) &&
+                (attributed==null || attributed==normalizedHistoryText(units.first().attribution.orEmpty()))
+            if(body.isEmpty() || !single && !completeChain)continue
+            // Generic citations need an attribution, not merely identical quoted words.
+            if(providers.isEmpty() && attribution==null &&
+                !attributionHeader(text(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue
+            val shortened=doc.clone()
+            val path=doc.getAllElements().indexOf(boundary)
+            val attributionPath=attribution?.let{doc.getAllElements().indexOf(it)}
+            val nodes=shortened.getAllElements().toList()
+            attributionPath?.let{nodes[it].remove()};nodes[path].remove()
+            if(text(shortened.outerHtml()).isBlank())return keep(HistoryReason.EMPTY_CURRENT)
+            return HistoryAnalysis(shortened.outerHtml(),true,HistoryReason.SEPARATED)
         }
-        if(!historyMatches)return keep(HistoryReason.PLAIN_HISTORY_MISMATCH)
-        attribution?.remove();boundary.remove()
-        if(text(doc.outerHtml()).isBlank())return keep(HistoryReason.EMPTY_CURRENT)
-        return HistoryAnalysis(doc.outerHtml(),true,HistoryReason.SEPARATED)
+        if(providers.isEmpty())return keep(HistoryReason.NO_PROVIDER_BOUNDARY)
+        if(candidates.any{contentAfter(doc.body(),it)})return keep(HistoryReason.TRAILING_CONTENT)
+        return keep(if(candidates.isEmpty())HistoryReason.NO_PROVIDER_BOUNDARY else HistoryReason.PLAIN_HISTORY_MISMATCH)
     }
     private fun horizontalInsets(style: String): Pair<Boolean,Boolean> {
         val sides=mutableMapOf("padding-left" to false,"padding-right" to false,"margin-left" to false,"margin-right" to false)
