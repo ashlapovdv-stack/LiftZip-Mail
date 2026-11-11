@@ -101,6 +101,8 @@ class ReaderDeviceTest {
         saveDeviceScreenshot(rule,"linked-mime-history")
     }
     @Test fun reopeningUsesWarmGeometryAndStartsWithCollapsedHistory() {
+        rule.runOnIdle{MailZoomDiagnostics.setEnabled(true)}
+        try {
         ReaderDocuments.clear()
         var open by mutableStateOf(true)
         val body="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
@@ -112,10 +114,17 @@ class ReaderDeviceTest {
         changeHistory(first,toggle,true)
         rule.runOnIdle{open=false};rule.waitForIdle();rule.runOnIdle{open=true}
         val second=loaded()
+        rule.runOnIdle{
+            val field=ReaderGeometryCache::class.java.getDeclaredField("entries").apply{isAccessible=true}
+            val entries=field.get(ReaderDocuments.geometry) as Map<*,*>
+            val dimensions=entries.keys.mapNotNull{it as? ReaderGeometryCache.Key}.map{"${it.width}x${it.viewport} density=${it.density} font=${it.fontScale} source=${it.document.html.hashCode()}"}
+            android.util.Log.i("MailReaderReady","warm performance cold=$cold warm=${second.documentGeneration()} cache=$dimensions")
+        }
         rule.onNodeWithContentDescription("Предыдущие сообщения: 1").assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,"Свернуто"))
         rule.runOnIdle{assertNotSame(first,second);assertTrue("Warm open must skip the intrinsic measurement document: cold=$cold warm=${second.documentGeneration()}",second.documentGeneration()<cold)}
         assertEquals(0,matches(second,"Старое письмо"))
         saveDeviceScreenshot(rule,"reader-warm-open")
+        } finally {rule.runOnIdle{MailZoomDiagnostics.setEnabled(false)}}
     }
     @Test fun plainAndHtmlReadersUseTheSameUnpaintedHistoryControl() {
         var html by mutableStateOf(false)
