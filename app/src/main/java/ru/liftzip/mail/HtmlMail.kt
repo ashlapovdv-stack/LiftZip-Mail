@@ -291,7 +291,11 @@ object HtmlMail {
             val chainWithoutFirstHeader=normalizedHistoryText(units.mapIndexed{index,message->
                 if(index==0)message.body else listOfNotNull(message.attribution,message.body).joinToString("\n")
             }.joinToString("\n"))
-            val completeChain=bodies.any{it.isNotEmpty() && (it==chain || it==chainWithoutFirstHeader)} && attributionMatches(units.first())
+            // Reconstructing parsed messages omits divider lines consumed as headers.
+            // The parser also retains its complete history body for corroboration.
+            val originalBody=conversation.quotedBody?.let(::normalizedHistoryText)
+            val originalWithHeader=conversation.quotedBody?.let{normalizedHistoryText(listOfNotNull(units.first().attribution,it).joinToString("\n"))}
+            val completeChain=bodies.any{it.isNotEmpty() && (it==chain || it==chainWithoutFirstHeader || it==originalBody || it==originalWithHeader)} && attributionMatches(units.first())
             if(bodies.all{it.isEmpty()} || !single && !completeChain)continue
             // Generic citations need an attribution, not merely identical quoted words.
             if(providers.isEmpty() && attribution==null &&
