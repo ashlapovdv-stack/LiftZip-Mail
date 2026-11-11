@@ -404,6 +404,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     var headerHeight by remember(message.id){mutableIntStateOf(0)}
+    var headerMeasured by remember(message.id){mutableStateOf(false)}
     var bodyWidth by remember(message.id){mutableIntStateOf(0)}
     val ready=remember(document,bodyWidth){document?.let{doc->
         if(bodyWidth<=0)null else doc.withReaderInset(0,bodyWidth)
@@ -447,7 +448,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
             Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
             // Rendering input may be a current-reply projection; fallback always owns the complete letter.
             message.body.ifBlank{"В письме нет доступного текстового содержимого."}.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
-        } else if(ready!=null && headerHeight>0) {
+        } else if(ready!=null && headerMeasured) {
             val windowHeight=if(prepared)viewport else height.coerceAtMost(viewport)
             val contentTop=(headerHeight-(scroll?.headerOffset?:0f)).coerceIn(0f,viewport.toFloat()).roundToInt()
             val contentHeight=((if(zoomed)viewport else height.coerceAtMost(viewport))-contentTop).coerceAtLeast(0)
@@ -487,7 +488,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 }
             }
         }
-        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height;scroll?.headerHeight=it.height}
+        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height;headerMeasured=true;scroll?.headerHeight=it.height}
             .readerChrome(scroll?.toolbar?.zoomProgress?:0f,scroll?.headerOffset?:0f).testTag("reader-message-header")
             .background(androidx.compose.ui.graphics.Color.White)) {
             header()
