@@ -738,15 +738,16 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         onSurface=Color(0xFF191919),onBackground=Color(0xFF191919),onSurfaceVariant=Color(0xFF4A4A4A),
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
-    val conversation by produceState<QuotedConversation?>(null,m.id,m.body,m.htmlBody) {
+    val conversation by produceState<Pair<QuotedConversation,HtmlMail.HistoryAnalysis>?>(null,m.id,m.body,m.htmlBody) {
         if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation start body=${m.body.length} html=${m.htmlBody.length}")
         val result=withContext(kotlinx.coroutines.Dispatchers.Default){
             if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation worker start")
             val parsed=ReaderDocuments.conversation(m.body)
             if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation text parsed")
-            val separate=HtmlMail.canSeparateHtmlHistory(m.htmlBody)
+            val history=HtmlMail.analyzeHistory(m.htmlBody,parsed)
             if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation HTML parsed")
-            if(separate)parsed else parsed.copy(messages=emptyList())
+            val visible=if(history.separateHistory)parsed else parsed.copy(messages=emptyList())
+            visible to history
         }
         value=result
         if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation complete")
@@ -876,7 +877,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             else {
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},parsed.messages.isNotEmpty(),onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                val (parsed,history)=parsed
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f

@@ -3,9 +3,13 @@ package ru.liftzip.mail
 import org.junit.Assert.*
 import org.junit.Test
 import androidx.compose.ui.unit.Constraints
+import org.jsoup.Jsoup
 
 class ReaderDocumentsTest {
-    private fun key()=ReaderDocumentCache.Key("a:m:1","<p>Cached content</p><img src='https://images.example/p.png'>","Cached content",emptyList(),false,false,"#20241f","#f8f9f6")
+    private fun key(): ReaderDocumentCache.Key {
+        val html="<p>Cached content</p><img src='https://images.example/p.png'>"
+        return ReaderDocumentCache.Key("a:m:1",html,"Cached content",emptyList(),HtmlMail.noHistory(html),false,"#20241f","#f8f9f6")
+    }
     @Test fun reopeningAnUnchangedMessageReusesThePreparedDocument() {
         val cache=ReaderDocumentCache();val first=cache.prepare(key())
         assertSame(first,cache.prepare(key().copy()))
@@ -20,7 +24,7 @@ class ReaderDocumentsTest {
     }
     @Test fun changedBodyAttachmentsHistoryOrColorsInvalidateThePreparedContent() {
         val cache=ReaderDocumentCache();val original=cache.prepare(key())
-        for(changed in listOf(key().copy(html="<p>Changed</p>"),key().copy(plain="Changed"),key().copy(history=true),
+        for(changed in listOf(key().copy(html="<p>Changed</p>"),key().copy(plain="Changed"),key().copy(history=HtmlMail.HistoryAnalysis("<p>Changed current HTML</p>",true,HtmlMail.HistoryReason.SEPARATED)),
             key().copy(attachments=listOf(Attachment("1","x.png","image/png",1,"x"))),key().copy(background="#000000"))) {
             assertNotSame(original,cache.prepare(changed))
         }
@@ -34,6 +38,35 @@ class ReaderDocumentsTest {
         val tiny=ReaderDocumentCache(budget=8)
         assertNotSame(tiny.prepare(key()),tiny.prepare(key()))
     }
+    @Test fun fallbackAndConfirmedHistorySplitsCannotReuseEachOthersDocument() {
+        val html="<p>Ответ</p><div class='gmail_quote'>Старое письмо</div>"
+        val matching=QuotedConversation("Ответ",listOf(QuotedMessage(null,null,"Старое письмо")),"Ответ\n\nСтарое письмо")
+        val mismatch=matching.copy(messages=listOf(QuotedMessage(null,null,"Другой plain-текст")))
+        val split=HtmlMail.analyzeHistory(html,matching);val fallback=HtmlMail.analyzeHistory(html,mismatch)
+        assertTrue(split.separateHistory);assertFalse(fallback.separateHistory)
+        val cache=ReaderDocumentCache()
+        fun prepare(history: HtmlMail.HistoryAnalysis)=cache.prepare(ReaderDocumentCache.Key("a:m:1",html,"Ответ",emptyList(),history,false,"#20241f","#f8f9f6"))
+        val splitDocument=prepare(split);val fallbackDocument=prepare(fallback)
+        assertFalse(Jsoup.parse(splitDocument.html).text().contains("Старое письмо"))
+        assertTrue(Jsoup.parse(fallbackDocument.html).text().contains("Старое письмо"))
+        assertSame(fallbackDocument,prepare(fallback));assertSame(splitDocument,prepare(split))
+    }
+    @Test fun historyHtmlBudgetSkipsSharedSourceAndChargesAnIndependentSplitString() {
+        val shared=key()
+        val document=ReaderDocumentCache().prepare(shared)
+        val baseSize=2L*(shared.identity.length+shared.html.length+shared.plain.length+document.html.length)
+        val sharedCache=ReaderDocumentCache(budget=baseSize)
+        assertSame(sharedCache.prepare(shared),sharedCache.prepare(shared.copy()))
+
+        val independentHtml=String(shared.html.toCharArray())
+        val independent=shared.copy(history=HtmlMail.HistoryAnalysis(independentHtml,false,HtmlMail.HistoryReason.NO_PLAIN_HISTORY))
+        assertNotSame(independent.html,independent.history.currentHtml)
+        val exactOldBudget=ReaderDocumentCache(budget=baseSize)
+        assertNotSame(exactOldBudget.prepare(independent),exactOldBudget.prepare(independent.copy()))
+        val adjustedBudget=ReaderDocumentCache(budget=baseSize+2L*independentHtml.length)
+        assertSame(adjustedBudget.prepare(independent),adjustedBudget.prepare(independent.copy()))
+    }
+
     @Test fun clearingTheCacheReleasesPreparedDocuments() {
         val cache=ReaderDocumentCache();val first=cache.prepare(key());cache.clear()
         assertNotSame(first,cache.prepare(key()))
