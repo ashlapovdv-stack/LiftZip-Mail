@@ -7,6 +7,7 @@ import androidx.compose.runtime.*
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -98,6 +99,56 @@ class ReaderDeviceTest {
         assertEquals(0,matches(view,"Первое старое письмо"))
         assertEquals(1,matches(view,"Текущий ответ"))
         saveDeviceScreenshot(rule,"linked-mime-history")
+    }
+    @Test fun reopeningUsesWarmGeometryAndStartsWithCollapsedHistory() {
+        rule.runOnIdle{MailZoomDiagnostics.setEnabled(true)}
+        try {
+        ReaderDocuments.clear()
+        var open by mutableStateOf(true)
+        val body="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
+        val mail=message.copy(body=body,htmlBody="<p>Ответ</p><div>On 7 Nov 2026, sender@example.com wrote:</div><blockquote>Старое письмо</blockquote>")
+        rule.setContent{MailTheme{if(open)reader(mail)}}
+        val first=loaded();var cold=0L
+        rule.runOnIdle{cold=first.documentGeneration()}
+        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        changeHistory(first,toggle,true)
+        rule.runOnIdle{open=false};rule.waitForIdle();rule.runOnIdle{open=true}
+        val second=loaded()
+        rule.runOnIdle{
+            val field=ReaderGeometryCache::class.java.getDeclaredField("entries").apply{isAccessible=true}
+            val entries=field.get(ReaderDocuments.geometry) as Map<*,*>
+            val dimensions=entries.keys.mapNotNull{it as? ReaderGeometryCache.Key}.map{"${it.width}x${it.viewport} density=${it.density} font=${it.fontScale} source=${it.document.html.hashCode()}"}
+            android.util.Log.i("MailReaderReady","warm performance cold=$cold warm=${second.documentGeneration()} cache=$dimensions")
+        }
+        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,"Свернуто"))
+        rule.runOnIdle{assertNotSame(first,second);assertTrue("Warm open must skip the intrinsic measurement document: cold=$cold warm=${second.documentGeneration()}",second.documentGeneration()<cold)}
+        assertEquals(0,matches(second,"Старое письмо"))
+        saveDeviceScreenshot(rule,"reader-warm-open")
+        } finally {rule.runOnIdle{MailZoomDiagnostics.setEnabled(false)}}
+    }
+    @Test fun plainAndHtmlReadersUseTheSameUnpaintedHistoryControl() {
+        var html by mutableStateOf(false)
+        val body="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
+        rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=if(html)"<p>Ответ</p><div>On 7 Nov 2026, sender@example.com wrote:</div><blockquote>Старое письмо</blockquote>" else ""))}}
+        loaded()
+        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
+        rule.onAllNodesWithText("Показать переписку (1)").assertCountEquals(0)
+        rule.runOnIdle{html=true};loaded()
+        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
+        rule.onAllNodesWithText("Показать переписку (1)").assertCountEquals(0)
+        val control=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        fun assertNoContainer() {
+            val pixels=control.captureToImage().toPixelMap()
+            val sample=pixels[3,pixels.height/2]
+            assertTrue("History control must not paint a container",sample.red>0.97f && sample.green>0.97f && sample.blue>0.97f)
+        }
+        assertNoContainer()
+        control.performTouchInput{down(center)}
+        rule.mainClock.advanceTimeBy(180)
+        assertNoContainer()
+        control.performTouchInput{up()}
+        loaded()
+        saveDeviceScreenshot(rule,"history-unified-control")
     }
     // Exercise the production reader, including its header and bounded WebView.
     @Test fun realReaderFitsAWideNestedTableAtInitialScale() {

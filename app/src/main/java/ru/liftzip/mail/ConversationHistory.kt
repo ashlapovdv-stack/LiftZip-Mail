@@ -1,40 +1,41 @@
 package ru.liftzip.mail
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** Show the quoted chain in its original order: nearest message first, then older ones. */
-@Composable fun ConversationHistory(id: String,conversation: QuotedConversation,ownAddresses: List<String>) {
-    var expanded by rememberSaveable(id){mutableStateOf(false)}
-    var original by rememberSaveable(id){mutableStateOf(false)}
-    if(conversation.messages.isNotEmpty())Box(Modifier.sizeIn(minWidth=64.dp,minHeight=48.dp).clip(RoundedCornerShape(24.dp)).clickable{expanded=!expanded}.semantics{
-        contentDescription="Предыдущие сообщения: ${conversation.messages.size}"
-        stateDescription=if(expanded)"Развернуто" else "Свернуто"
-    },contentAlignment=Alignment.CenterStart) {
-        Surface(shape=RoundedCornerShape(19.dp),color=MaterialTheme.colorScheme.surfaceContainerHigh) {
-            Row(Modifier.height(38.dp).padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
-                Icon(Icons.Outlined.MoreHoriz,null,Modifier.size(22.dp));Spacer(Modifier.width(5.dp));Text(conversation.messages.size.toString())
-            }
-        }
+/** One history control for every source format. No container or pressed-state paint. */
+@Composable internal fun HistoryToggle(count: Int,expanded: Boolean,onClick: ()->Unit,modifier: Modifier=Modifier) {
+    val interaction=remember{MutableInteractionSource()}
+    Row(modifier.sizeIn(minWidth=64.dp,minHeight=48.dp)
+        .clickable(interactionSource=interaction,indication=null,role=Role.Button,onClick=onClick)
+        .semantics{contentDescription="Предыдущие сообщения: $count";stateDescription=if(expanded)"Развернуто" else "Свернуто"}
+        .padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
+        Icon(Icons.Outlined.MoreHoriz,null,Modifier.size(22.dp),tint=MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(5.dp))
+        Text(count.toString(),color=MaterialTheme.colorScheme.primary)
     }
-    if(expanded) {
+}
+
+@Composable fun ConversationHistory(id: String,conversation: QuotedConversation,ownAddresses: List<String>) {
+    var expanded by remember(id,conversation.original){mutableStateOf(false)}
+    if(conversation.messages.isNotEmpty())HistoryToggle(conversation.messages.size,expanded,{expanded=!expanded})
+    if(expanded)QuotedHistoryContent(conversation)
+}
+
+@Composable internal fun QuotedHistoryContent(conversation: QuotedConversation) {
+
         SelectionContainer {
             Column(Modifier.fillMaxWidth()) {
                 conversation.messages.forEachIndexed { index,message->
@@ -56,7 +57,4 @@ import androidx.compose.ui.unit.sp
                 }
             }
         }
-        TextButton(onClick={original=!original}){Text(if(original)"Скрыть исходный текст" else "Показать полный исходный текст")}
-        if(original)SelectionContainer{Text(conversation.original,style=MaterialTheme.typography.bodyMedium,modifier=Modifier.fillMaxWidth().padding(vertical=12.dp))}
-    }
 }

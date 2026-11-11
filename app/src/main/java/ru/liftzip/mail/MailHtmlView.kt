@@ -189,7 +189,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         // Intrinsic measurement stays at base scale. Restore the reading anchor
         // only after the fixed native canvas is installed.
         pendingAnchor=if(waitForDocumentLayout)null else {
-            deferredAnchor?:if(old!=null && old.externalAllowed!=next.externalAllowed && base!=null && base>0f && renderScale>0f)
+            deferredAnchor?:pendingAnchor?:if(old!=null && base!=null && base>0f && renderScale>0f)
                 ReadingAnchor(renderScale/base,scrollX/renderScale,scrollY/renderScale) else null
         }
         if(!waitForDocumentLayout)deferredAnchor=null
@@ -390,11 +390,17 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
     val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
     val background=if(message.htmlBody.isNotBlank() && MaterialTheme.colorScheme.surface.luminance()<0.4f)"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
-    val document by produceState<MailHtmlDocument?>(null,message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,history,external,foreground,background) {
-        try {
-            value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,history,external,foreground,background))}
-        }catch(e: CancellationException){throw e}catch(e: Exception){failed=true}
+    val documentKey=remember(message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,history,external,foreground,background){
+        ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,history,external,foreground,background)
     }
+    val cachedDocument=remember(documentKey){ReaderDocuments.html.peek(documentKey)}
+    // Keep the current native host while the next document is prepared. A null
+    // transition would dispose the WebView and discard its reading/zoom anchor.
+    val preparedDocument by key(message.id,message.contentVersion){produceState(cachedDocument,documentKey) {
+        try {value=withContext(Dispatchers.Default){ReaderDocuments.html.prepare(documentKey)}}
+        catch(e: CancellationException){throw e}catch(e: Exception){failed=true}
+    }}
+    val document=cachedDocument?:preparedDocument
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
     val latestZoom by rememberUpdatedState(onZoomChanged)
@@ -402,15 +408,22 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     val loader=remember(message.id,message.contentVersion){MailImageLoader(context.applicationContext,message.accountId){latestInline(it)}}
     DisposableEffect(loader){onDispose{loader.close()}}
     var headerHeight by remember(message.id){mutableIntStateOf(0)}
+    var headerMeasured by remember(message.id){mutableStateOf(false)}
     var bodyWidth by remember(message.id){mutableIntStateOf(0)}
-    val ready=remember(document,headerHeight,bodyWidth){document?.let{doc->
-        if(bodyWidth<=0)null else doc.withReaderInset(0,bodyWidth)
+    val viewportMeasured=scroll==null || scroll.viewportHeight>0
+    val ready=remember(document,bodyWidth,viewportMeasured){document?.let{doc->
+        if(bodyWidth<=0 || !viewportMeasured)null else doc.withReaderInset(0,bodyWidth)
     }}
-    var intrinsicHeight by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableIntStateOf(8)}
-    var baseScale by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableFloatStateOf(1f)}
-    var prepared by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
-    var nativeComplete by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
-    var rendered by remember(message.id,message.contentVersion,ready,headerHeight,bodyWidth){mutableStateOf(false)}
+    val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+    val geometryKey=remember(document,bodyWidth,density.density,density.fontScale,viewport,viewportMeasured){
+        document?.takeIf{bodyWidth>0 && viewportMeasured}?.let{ReaderGeometryCache.Key(it,bodyWidth,density.density,density.fontScale,viewport)}
+    }
+    val cachedGeometry=remember(geometryKey){geometryKey?.let{ReaderDocuments.geometry.peek(it)}}
+    var intrinsicHeight by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(cachedGeometry?.height?:8)}
+    var baseScale by remember(message.id,message.contentVersion,ready,geometryKey){mutableFloatStateOf(cachedGeometry?.scale?:1f)}
+    var prepared by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(cachedGeometry!=null)}
+    var nativeCommit by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(0)}
+    var rendered by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
     val latestMeasuring by rememberUpdatedState(!prepared)
     val latestMeasured by rememberUpdatedState<(Int)->Unit>({measured->
         if(latestMeasuring && scroll?.pinchActive!=true && web!=null)intrinsicHeight=measured
@@ -420,25 +433,27 @@ internal fun readerBodyHeight(normal: Int): Int=normal
         if(!prepared) {
             baseScale=web?.fittedScale()?:1f
             prepared=true
-        } else nativeComplete=true
+        } else nativeCommit++
     })
     // Keep the measured HTML extent separate from the Compose header. A late
     // measurement must never overwrite or double-add the header contribution.
     val height=intrinsicHeight+if(prepared)headerHeight else 0
-    val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     val nativeDocument=remember(ready,prepared,viewport,bodyWidth,baseScale,headerHeight){ready?.let{doc->
         if(prepared)document?.withReaderInset(headerHeight,bodyWidth,baseScale)?.withReaderCanvas(viewport,bodyWidth,baseScale) else doc
     }}
-    LaunchedEffect(nativeComplete,web,ready,headerHeight,bodyWidth) {
-        if(nativeComplete)web?.afterVisualLayout{rendered=true}
+    LaunchedEffect(nativeCommit,web,ready,headerHeight,bodyWidth) {
+        if(nativeCommit>0)web?.afterVisualLayout{rendered=true}
     }
-    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared complete=$nativeComplete rendered=$rendered failed=$failed")}
+    LaunchedEffect(rendered,geometryKey,intrinsicHeight,baseScale) {
+        if(rendered && prepared)geometryKey?.let{ReaderDocuments.geometry.put(it,ReaderGeometryCache.Geometry(intrinsicHeight,baseScale))}
+    }
+    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared commit=$nativeCommit rendered=$rendered failed=$failed")}
     Box(Modifier.fillMaxWidth().onSizeChanged{bodyWidth=it.width}) {
         if(failed)Column(Modifier.padding(top=with(density){headerHeight.toDp()})) {
             Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
             // Rendering input may be a current-reply projection; fallback always owns the complete letter.
             message.body.ifBlank{"В письме нет доступного текстового содержимого."}.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
-        } else if(ready!=null) {
+        } else if(ready!=null && headerMeasured) {
             val windowHeight=if(prepared)viewport else height.coerceAtMost(viewport)
             val contentTop=(headerHeight-(scroll?.headerOffset?:0f)).coerceIn(0f,viewport.toFloat()).roundToInt()
             val contentHeight=((if(zoomed)viewport else height.coerceAtMost(viewport))-contentTop).coerceAtLeast(0)
@@ -460,7 +475,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                             scroll?.position(coordinates.positionInWindow().y.toInt())
                             MailZoomDiagnostics.record {"bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${coordinates.positionInWindow().y} layoutH=${coordinates.size.height} webH=${scroll?.view?.height}"}
                             val view=web
-                            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered complete=$nativeComplete normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")
+                            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered commit=$nativeCommit normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")
                         },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{interactionEnabled=rendered;measuringDocument(!prepared);viewport(viewport);show(nativeDocument?:ready,density.fontScale)}},
                         onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
                 }
@@ -478,7 +493,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 }
             }
         }
-        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height;scroll?.headerHeight=it.height}
+        Column(Modifier.fillMaxWidth().onSizeChanged{headerHeight=it.height;headerMeasured=true;scroll?.headerHeight=it.height}
             .readerChrome(scroll?.toolbar?.zoomProgress?:0f,scroll?.headerOffset?:0f).testTag("reader-message-header")
             .background(androidx.compose.ui.graphics.Color.White)) {
             header()
@@ -486,6 +501,14 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
             }
         }
-        if(!failed && !rendered)Text("Подготавливаем письмо…",Modifier.padding(top=with(density){headerHeight.toDp()},bottom=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+        // Announce real slow work only. Cached analysis, document and geometry avoid
+        // repeated preparation; the native visual commit still owns interaction readiness.
+        var slowPreparation by remember(documentKey){mutableStateOf(false)}
+        LaunchedEffect(rendered,failed,documentKey) {
+            slowPreparation=false
+            if(!rendered && !failed){kotlinx.coroutines.delay(300);slowPreparation=true}
+        }
+        if(slowPreparation && !failed && !rendered)CircularProgressIndicator(
+            Modifier.padding(top=with(density){headerHeight.toDp()},start=16.dp).size(20.dp).testTag("reader-preparation-progress"),strokeWidth=2.dp)
     }
 }

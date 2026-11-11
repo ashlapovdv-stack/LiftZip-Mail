@@ -748,20 +748,12 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         onSurface=Color(0xFF191919),onBackground=Color(0xFF191919),onSurfaceVariant=Color(0xFF4A4A4A),
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
-    val conversation by produceState<Pair<QuotedConversation,HtmlMail.HistoryAnalysis>?>(null,m.id,m.body,m.htmlBody) {
-        if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation start body=${m.body.length} html=${m.htmlBody.length}")
-        val result=withContext(kotlinx.coroutines.Dispatchers.Default){
-            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation worker start")
-            val parsed=ReaderDocuments.conversation(m.body)
-            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation text parsed")
-            val history=HtmlMail.analyzeHistory(m.htmlBody,parsed)
-            if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation HTML parsed")
-            val visible=if(history.separateHistory)parsed else parsed.copy(messages=emptyList())
-            visible to history
-        }
-        value=result
-        if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","conversation complete")
+    val analysisKey=remember(m.id,m.accountId,m.validity,m.contentVersion,m.body,m.htmlBody){
+        ReaderAnalysisCache.Key("${m.accountId}:${m.id}:${m.validity}",m.body,m.htmlBody,m.contentVersion)
     }
+    val conversation by key(analysisKey){produceState(ReaderDocuments.analysis.peek(analysisKey),analysisKey) {
+        value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.analysis.prepare(analysisKey)}
+    }}
     // Observe the async result in the screen composition, before passing it to Scaffold subcomposition.
     val currentConversation=conversation
     SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","reader state parsed=${currentConversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
@@ -772,7 +764,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
-    var historyExpanded by rememberSaveable(m.id,m.htmlBody){mutableStateOf(false)}
+    var historyExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
     val rendererFailed=remember(m.id,m.contentVersion){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var pinchActive by remember(m.id){mutableStateOf(false)}
@@ -892,6 +884,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     TextButton(onClick=onRetryLoad){Text("Повторить")}
                 } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            else if(scroll.toolbar.height<=0) {
+                // Native document insets depend on the measured toolbar. Starting
+                // before it is known would reload a warm document with a second inset.
+                messageHeader()
+            }
             else {
                 val (parsed,history)=parsed
                 MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},if(historyExpanded && m.htmlBody.isNotBlank())HtmlMail.noHistory(m.htmlBody)else history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
@@ -903,11 +900,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
                 if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
-                    if(m.htmlBody.isBlank())ConversationHistory(m.id,parsed,ownAddresses)
-                    else TextButton(onClick={historyExpanded=!historyExpanded},modifier=Modifier.semantics{
-                        contentDescription="Предыдущие сообщения: ${parsed.messages.size}"
-                        stateDescription=if(historyExpanded)"Развернуто" else "Свернуто"
-                    }) {Text(if(historyExpanded)"Скрыть переписку" else "Показать переписку (${parsed.messages.size})")}
+                    HistoryToggle(parsed.messages.size,historyExpanded,{historyExpanded=!historyExpanded})
+                    if(m.htmlBody.isBlank() && historyExpanded)QuotedHistoryContent(parsed)
                 }
             }
             Spacer(Modifier.height(100.dp))

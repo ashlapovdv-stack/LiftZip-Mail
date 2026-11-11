@@ -29,24 +29,6 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
-      - name: Confirm real MIME regression fails before the fix
-        shell: bash
-        run: |
-          source=app/src/main/java/ru/liftzip/mail/HtmlMail.kt
-          cp "$source" /tmp/HtmlMail.fixed.kt
-          trap 'cp /tmp/HtmlMail.fixed.kt "$source"' EXIT
-          git show 22e50312c2ebf814be61322e4c0379e1da052cd5:"$source" > "$source"
-          if bash ./gradlew --no-daemon :app:testDebugUnitTest --tests 'ru.liftzip.mail.LinkedMimeHistoryTest.realAlternativeStructureCollapsesTheWholeHeaderAndPreservesRichExpansion'; then
-            echo "Expected the unpatched parser to fail on the real MIME structure" >&2
-            exit 1
-          fi
-          python - <<'PYTEST'
-          import xml.etree.ElementTree as ET
-          report=ET.parse('app/build/test-results/testDebugUnitTest/TEST-ru.liftzip.mail.LinkedMimeHistoryTest.xml').getroot()
-          assert int(report.attrib['tests']) == 1
-          assert int(report.attrib['failures']) == 1
-          assert int(report.attrib.get('errors',0)) == 0
-          PYTEST
       - name: Build APK and run unit tests
         run: bash ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
       - name: Save APK
@@ -153,7 +135,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -no-metrics
           script: |
-            bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderZoomDeviceTest#nativePinchHidesMenuSubjectAndImagesThenResetRestoresThem -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
+            bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderDeviceTest#reopeningUsesWarmGeometryAndStartsWithCollapsedHistory -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
             bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderZoomDeviceTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
             mkdir -p ui-checks
             for image in reader-initial reader-zoom-hidden reader-reset reader-partial-no-overlap reader-fitted-base; do adb exec-out cat /data/local/tmp/liftzip-ui-checks/$image.png > ui-checks/$image.png; done
