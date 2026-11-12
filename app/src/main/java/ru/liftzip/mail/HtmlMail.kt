@@ -368,6 +368,9 @@ object HtmlMail {
         val source=currentHtml?:this.plain(plain)
         val namespace=MailImageLimits.hash(identity+source+external+attachments.joinToString{it.path+it.contentId})
         val doc=Jsoup.parseBodyFragment(cleanSource(source))
+        // Serialization must preserve text nodes: .mail-plain renders their line
+        // breaks and spaces with pre-wrap, and sender HTML can also preserve them.
+        doc.outputSettings().prettyPrint(false)
         // White/grey page and text backgrounds blend into the selected reading theme.
         // Keep colour highlights, dark areas, gradients and background images unchanged.
         doc.select("[bgcolor]").forEach{element->if(neutralFill(element.attr("bgcolor")))element.removeAttr("bgcolor")}

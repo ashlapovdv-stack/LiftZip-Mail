@@ -67,6 +67,30 @@ class ReaderDeviceTest {
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
     }
+    @Test fun plainOrderKeepsSeparateLinesAndTheFinalComment() {
+        val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
+            .open("plain-order.eml").use{input->
+                MimeReader().read(jakarta.mail.internet.MimeMessage(jakarta.mail.Session.getInstance(java.util.Properties()),input))
+            }
+        assertTrue(mime.html.isBlank())
+        rule.setContent{MailTheme{reader(message.copy(body=mime.text,htmlBody=""))}}
+        val view=loaded()
+        rule.waitUntil(15_000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
+        assertEquals(1,matches(view,"Комментарий к Вашему заказу"))
+        assertEquals(1,matches(view,"Позвонить перед приездом."))
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").assertDoesNotExist()
+        rule.runOnIdle{
+            // The reader uses 16px / 1.55 line height. Count explicit source lines,
+            // so a single wrapped paragraph cannot pass as a correctly laid out order.
+            val lines=mime.text.trimEnd().lineSequence().count()
+            assertTrue("Explicit plain-text lines must survive layout",view.contentHeight>=lines*24)
+            assertFalse("Plain text must wrap within the reader",view.canScrollHorizontally(1))
+        }
+        saveDeviceScreenshot(rule,"plain-order")
+        rule.runOnIdle{view.scrollContent(Int.MAX_VALUE)}
+        rule.waitForIdle()
+        saveDeviceScreenshot(rule,"plain-order-comment")
+    }
     @Test fun historyBlocksKeepSourceHiddenUntilRequested() {
         val source="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
         val conversation=ConversationText.parse(source)
