@@ -29,7 +29,7 @@ class StorageDeviceTest {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val root=File(c.cacheDir,"editor-state-test-"+UUID.randomUUID())
         val source=MailItem("source","a",sender="Sender",senderEmail="sender@example.com",recipients="a@example.com",subject="Large",body="Text ".repeat(100_000),htmlBody="<p>"+"HTML ".repeat(160_000)+"</p>",date=1)
-        val draft=ComposeDraft(accountId="a",to="client@example.com",subject="Ответ",body="Не потерять новый текст",quote=ComposeContent.quote(source,"reply"),quoteIncluded=false,cc="copy@example.com")
+        val draft=ComposerHtml.replace(ComposeDraft(accountId="a",to="client@example.com",subject="Ответ",body="Не потерять новый текст",quote=ComposeContent.quote(source,"reply"),quoteIncluded=false,cc="copy@example.com"),"<b>Не потерять новый текст</b><table><tr><td>Ячейка</td></tr></table>")
         try {
             val first=DraftSessionCache(root)
             val token=first.save(draft)!!

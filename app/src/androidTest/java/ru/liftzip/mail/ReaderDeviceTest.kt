@@ -534,4 +534,27 @@ class ReaderDeviceTest {
         rule.runOnIdle{assertNull(webView())}
         saveDeviceScreenshot(rule,"html-fallback")
     }
+    @Test fun pastedHtmlReplyFoldsTheOuterQuoteWithItsNestedTables() {
+        val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
+            .open("html-paste-reply.eml").use{MimeReader().read(jakarta.mail.internet.MimeMessage(jakarta.mail.Session.getInstance(java.util.Properties()),it))}
+        val conversation=ConversationText.parse(mime.text)
+        val m=message.copy(id="html-paste",body=mime.text,htmlBody=mime.html)
+        rule.setContent{MailTheme{reader(m)}}
+        val view=loaded()
+        rule.onNodeWithContentDescription("Предыдущие сообщения: ${conversation.messages.size}").performScrollTo().assertIsDisplayed()
+        assertEquals(1,matches(view,"Пришло на нашу html"))
+        assertEquals(0,matches(view,"Тест HTML-письма"))
+        saveDeviceScreenshot(rule,"html-paste-folded")
+    }
+    @Test fun wideTableAndNowrapParagraphDoNotShrinkTheWholeHtmlPage() {
+        val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
+            .open("html-paste-reply.eml").use{MimeReader().read(jakarta.mail.internet.MimeMessage(jakarta.mail.Session.getInstance(java.util.Properties()),it))}
+        val m=message.copy(id="html-paste-full",body=mime.text,htmlBody=mime.html)
+        rule.setContent{MailTheme{MailHtmlBody(m,m.body,HtmlMail.noHistory(m.htmlBody),{error("No resources")},{})}}
+        val view=loaded()
+        rule.runOnIdle{assertTrue("Whole page was shrunk",view.scale>=view.resources.displayMetrics.density*0.9f)}
+        assertEquals(1,matches(view,"Широкая строка"))
+        saveDeviceScreenshot(rule,"html-paste-responsive")
+    }
+
 }

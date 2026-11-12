@@ -8,11 +8,11 @@ class MailLayoutTest {
         assertEquals(MailStyle.STANDARD,MailStyle.fromKey(null));assertEquals(MailStyle.STANDARD,MailStyle.fromKey("missing"))
         MailStyle.entries.forEach{assertEquals(it,MailStyle.fromKey(it.key))}
     }
-    @Test fun fixedDesktopTablesRetainTheirWidthAndAllowAutomaticOverview() {
+    @Test fun fixedTablesKeepTheirSourceWidthInsideAnIndependentScrollRegion() {
         val doc=HtmlMail.document("<table width='720'><tr><td>Backend checks</td><td>All jobs have passed</td></tr></table>","",emptyList())
-        assertEquals(720,doc.layoutWidth);assertEquals("width=720",org.jsoup.Jsoup.parse(doc.html).selectFirst("meta[name=viewport]")!!.attr("content").substringBefore(","))
-        assertFalse(doc.html.contains("initial-scale=1"));assertFalse(doc.html.contains("overflow-wrap:anywhere"))
-        assertFalse(doc.html.contains("table{max-width:100%"));assertTrue(doc.html.contains("width=\"720\""))
+        assertEquals(0,doc.layoutWidth);assertEquals("width=device-width",org.jsoup.Jsoup.parse(doc.html).selectFirst("meta[name=viewport]")!!.attr("content").substringBefore(","))
+        assertFalse(doc.html.contains("initial-scale=1"));assertTrue(doc.html.contains("overflow-wrap:anywhere"))
+        assertTrue(doc.html.contains(".mail-table-scroll{max-width:100%;overflow-x:auto}"));assertTrue(doc.html.contains("width=\"720\""))
     }
     @Test fun adaptiveTablesDoNotShrinkJustBecauseTheyHaveManyColumns() {
         // 0.5.19: the column count alone must not force a 640px desktop viewport.

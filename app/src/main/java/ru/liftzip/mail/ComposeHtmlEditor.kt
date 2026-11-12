@@ -29,9 +29,11 @@ import java.util.concurrent.atomic.AtomicReference
 internal class ComposeEditorSession {
     private data class Value(val id: String,val html: String)
     private val value=AtomicReference<Value?>(null)
-    private var view: ComposeEditorWebView?=null
+    @Volatile private var view: ComposeEditorWebView?=null
+    fun input(editor: ComposeEditorWebView,html: String){if(view===editor)accept(editor.draftId,html)}
     fun accept(id: String,html: String){value.set(Value(id,html))}
     fun snapshot(draft: ComposeDraft): ComposeDraft = value.get()?.takeIf{it.id==draft.id}?.let{ComposerHtml.replace(draft,it.html)}?:draft
+    fun focus(){view?.let{it.requestFocus();it.evaluateJavascript("document.getElementById('editor').focus()",null)}}
     fun insertText(text: String){view?.insertHtml(ComposeContent.escaped(text).replace("\n","<br>"))}
     fun attach(editor: ComposeEditorWebView){view=editor}
     fun detach(editor: ComposeEditorWebView){if(view===editor)view=null}
@@ -48,11 +50,12 @@ internal class ComposeEditorSession {
 
 @SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
 internal class ComposeEditorWebView(context: Context,val draftId: String,initial: String,
-    private val session: ComposeEditorSession,private val changed: (String)->Unit,private val resized: (Int)->Unit): WebView(context) {
+    private val session: ComposeEditorSession,private val changed: (String,String)->Unit,private val resized: (Int)->Unit): WebView(context) {
     private var editingEnabled=true
     var ready=false;private set
-    private var alive=true
+    @Volatile private var alive=true
     init {
+        session.accept(draftId,initial)
         setBackgroundColor(Color.WHITE)
         settings.javaScriptEnabled=true
         settings.allowFileAccess=false;settings.allowContentAccess=false
@@ -65,8 +68,9 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
             @JavascriptInterface fun input(html: String) {
                 if(!alive)return
                 val safe=ComposerHtml.clean(html)
-                session.accept(draftId,safe)
-                post{if(alive)changed(safe)}
+                val plain=HtmlMail.text(safe)
+                session.input(this@ComposeEditorWebView,safe)
+                post{if(alive)changed(safe,plain)}
             }
             @JavascriptInterface fun height(pixels: Int){post{if(alive)resized(pixels.coerceAtLeast(280))}}
             @JavascriptInterface fun paste(html: String,text: String){post{if(alive)insertHtml(if(html.isNotEmpty())ComposerHtml.clean(html)else ComposeContent.escaped(text).replace("\n","<br>"))}}
@@ -142,13 +146,14 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
     val change by rememberUpdatedState(onChange)
     var height by remember(draft.id){mutableIntStateOf(280)}
     key(draft.id) {
-        AndroidView(factory={context->ComposeEditorWebView(context,draft.id,ComposerHtml.initial(draft),session,{html->
-            if(current.id==draft.id)change(ComposerHtml.replace(current,html))
+        AndroidView(factory={context->ComposeEditorWebView(context,draft.id,ComposerHtml.initial(draft),session,{html,plain->
+            if(current.id==draft.id)change(current.copy(bodyHtml=html,body=plain))
         },{height=it}).also(session::attach)},
             update={view->view.setEditable(enabled)},
             onRelease={it.close()},
             modifier=Modifier.fillMaxWidth().height(height.coerceIn(280,4000).dp).testTag("compose-body").semantics {
                 editableText=AnnotatedString(draft.body)
+                requestFocus{session.focus();true}
                 // Accessibility/test input uses the same DOM editing path as native IME input.
                 insertTextAtCursor{value->session.insertText(value.text);true}
             })

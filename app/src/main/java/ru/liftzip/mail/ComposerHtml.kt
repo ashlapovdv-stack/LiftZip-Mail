@@ -54,7 +54,13 @@ object ComposerHtml {
         return cleaned.body().html()
     }
     fun plain(html: String)=HtmlMail.text(clean(html))
+    fun hasContent(draft: ComposeDraft)=draft.bodyHtml?.let{html->plain(html).isNotBlank() || Jsoup.parse(clean(html)).select("img[src]").isNotEmpty()}?:draft.body.isNotBlank()
     fun initial(draft: ComposeDraft)=draft.bodyHtml?.let(::clean)?:ComposeContent.escaped(draft.body).replace("\n","<br>")
+    fun forEditing(draft: ComposeDraft): ComposeDraft {
+        val legacy=draft.quote?.takeIf{it.kind=="draft" && draft.quoteIncluded && draft.bodyHtml==null}?:return draft
+        val author=listOf(initial(draft),legacy.html.ifBlank{ComposeContent.escaped(legacy.plain).replace("\n","<br>")}).filter{it.isNotBlank()}.joinToString("<br><br>")
+        return replace(draft.copy(quote=legacy.copy(plain="",html="")),author)
+    }
     fun replace(draft: ComposeDraft,html: String): ComposeDraft {
         val safe=clean(html)
         return draft.copy(bodyHtml=safe,body=HtmlMail.text(safe))

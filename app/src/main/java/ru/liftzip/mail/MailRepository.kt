@@ -871,10 +871,10 @@ class MailRepository(private val context: Context) {
     }
     suspend fun draftForEditing(id: String): ComposeDraft=withContext(Dispatchers.IO) {
         val m=message(id)?:error("Черновик не найден.")
-        if(m.localFolder=="drafts")return@withContext m.draft()
+        if(m.localFolder=="drafts")return@withContext ComposerHtml.forEditing(m.draft())
         require(m.localFolder=="remote-drafts"){"Это письмо не является черновиком."}
         coordinator.data {
-            db.messages().firstOrNull{it.localFolder=="drafts" && it.sourceDraftId==m.id}?.let{return@data (db.message(it.id)?:it).draft()}
+            db.messages().firstOrNull{it.localFolder=="drafts" && it.sourceDraftId==m.id}?.let{return@data ComposerHtml.forEditing((db.message(it.id)?:it).draft())}
             val account=db.accounts().find{it.id==m.accountId}?:error("Ящик не найден.")
             val draft=ComposeDraft(accountId=m.accountId,to=m.composer?.to?:HeaderText.editableRecipients(m.recipients),subject=m.composer?.subject?:m.subject,body=m.composer?.text?:m.body,bodyHtml=m.composer?.bodyHtml?:m.htmlBody.takeIf{m.composer==null && it.isNotBlank()}?.let(ComposerHtml::clean),forwarding=ForwardRules.plan(m,account,restoreDraft=true),quote=m.composer?.quote?:m.takeIf{m.composer==null && it.htmlBody.isNotBlank()}?.let{ComposeContent.quote(it,"draft").copy(plain="",html="")},quoteIncluded=m.composer?.quoteIncluded?:true,responseTo=m.composer?.responseTo?:m.composer?.quote?.messageId,responseKind=m.composer?.responseKind?.takeIf{it.isNotBlank()}?:m.composer?.quote?.kind.orEmpty(),cc=m.composer?.cc?:HeaderText.editableRecipients(m.cc),bcc=m.composer?.bcc?:HeaderText.editableRecipients(m.bcc),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
             db.putMessage(draft.toMessage(account,"drafts"));refresh()

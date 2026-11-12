@@ -69,7 +69,7 @@ object MailRules {
         (recipients(draft.to)+recipients(draft.cc)+recipients(draft.bcc)).isEmpty() || (recipients(draft.to)+recipients(draft.cc)+recipients(draft.bcc)).any { !validEmail(it) } -> "Проверьте адреса получателей. Разделяйте их запятой."
         draft.subject.isBlank() -> "Добавьте тему письма."
         draft.subject.any { it == '\r' || it == '\n' } -> "Тема письма должна быть одной строкой."
-        draft.body.isBlank() && (draft.quote==null || !draft.quoteIncluded) -> "Добавьте текст письма."
+        !ComposerHtml.hasContent(draft) && (draft.quote==null || !draft.quoteIncluded) -> "Добавьте текст письма."
         draft.filesToSend().any { it.size > 20 * 1024 * 1024 } -> "Максимальный размер файла — 20 МБ."
         draft.filesToSend().sumOf { it.size.coerceAtLeast(0) } > 25 * 1024 * 1024 -> "Суммарный размер вложений — не более 25 МБ."
         else -> null

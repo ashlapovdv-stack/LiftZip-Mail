@@ -134,7 +134,7 @@ object HtmlMail {
             override fun head(node: Node,depth: Int) {
                 when(node) {
                     is TextNode->out.append(node.text())
-                    is Element->if(node.normalName() in setOf("br","p","div","tr","li","blockquote","h1","h2","h3","h4","h5","h6","hr"))newline()
+                    is Element->if(node.normalName() in setOf("td","th"))out.append(' ')else if(node.normalName() in setOf("br","p","div","tr","li","blockquote","h1","h2","h3","h4","h5","h6","hr"))newline()
                 }
             }
             override fun tail(node: Node,depth: Int) {if(node is Element && node.isBlock)newline()}
@@ -306,7 +306,21 @@ object HtmlMail {
                     },targets)==expected
                 }
             }==true && attributionMatches(units.first())
-            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured)continue
+            // Some providers flatten nested HTML citations and use *emphasis* in the
+            // independent plain alternative. Accept only the complete matching text,
+            // with a recognized outer provider boundary and matching attribution.
+            fun presentationText(source: String): String {
+                val lines=source.lineSequence().map{it.trim()}.filterNot{it.matches(Regex("[-_─━]{3,}"))}.joinToString(" ")
+                val emphasis=Regex("(?<![\\p{L}\\p{N}])([*_]{1,2})(\\S(?:.*?\\S)?)\\1(?![\\p{L}\\p{N}])")
+                return normalizedHistoryText(emphasis.replace(lines){it.groupValues[2]})
+            }
+            val flattenedProvider=boundary in providerRoots && attribution!=null && attributionMatches(units.first()) &&
+                conversation.quotedBody?.let{plain->
+                    val runs=QuoteStructure.plain(plain,::attributionHeader)
+                    runs.isNotEmpty() && runs.all{it.depth==0} &&
+                        presentationText(plain)==presentationText(historyText(boundary.outerHtml()))
+                }==true
+            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured && !flattenedProvider)continue
             // Generic citations need an attribution, not merely identical quoted words.
             if(providers.isEmpty() && attribution==null &&
                 !attributionHeader(historyText(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue
@@ -381,20 +395,30 @@ object HtmlMail {
         doc.select("style").forEach{it.html(css(it.data()))}
         doc.select("a").forEach{it.removeAttr("target");it.attr("rel","noreferrer noopener")}
         val csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src $ORIGIN; font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'"
-        val layout=if(html.isNotBlank())layoutWidth(doc)else 0
+        // Data tables are independent horizontal regions. Their explicit width must
+        // not reduce every surrounding paragraph to a desktop overview.
+        doc.select("table").filter{table->table.parents().none{it.normalName()=="table"}}.forEach { table->
+            table.wrap("<div class='mail-table-scroll'></div>")
+        }
+        val page=doc.clone().apply{select("table").remove()}
+        val layout=if(html.isNotBlank())layoutWidth(page)else 0
         val viewport=if(layout>0)layout.toString()else "device-width"
         // Only the outer wrapper's own horizontal spacing replaces our inset; inner
         // element styles such as p { margin: 0 } do not provide page margins.
         val outer=doc.body().children().singleOrNull()
         val outerStyle=outer?.attr("style").orEmpty()
         val (hasLeftInset,hasRightInset)=horizontalInsets(outerStyle)
-        val leftInset=if(currentHtml==null || layout==0 && !hasLeftInset)"16px" else "0"
-        val rightInset=if(currentHtml==null || layout==0 && !hasRightInset)"16px" else "0"
+        val leftInset=if(currentHtml==null || !hasLeftInset)"16px" else "0"
+        val rightInset=if(currentHtml==null || !hasRightInset)"16px" else "0"
         val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport, minimum-scale=0.01, maximum-scale=10"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
-            html,body{margin:0;padding:0;max-width:100%;overflow-wrap:break-word;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
+            html,body{margin:0;padding:0;max-width:100%;overflow-wrap:anywhere;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
             body{box-sizing:border-box;padding-left:$leftInset;padding-right:$rightInset}
+            p,div,span,a,td,th{overflow-wrap:anywhere;white-space:normal!important}
+            pre,pre *{white-space:pre-wrap!important;overflow-wrap:anywhere}
+            .mail-table-scroll{max-width:100%;overflow-x:auto}
+            .mail-table-scroll>table{max-width:100%!important}
             img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
-            .mail-plain{white-space:pre-wrap}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
+            .mail-plain,.mail-plain *{white-space:pre-wrap!important}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
         return MailHtmlDocument(wrapped,resources,hasExternal,layout,external)
     }

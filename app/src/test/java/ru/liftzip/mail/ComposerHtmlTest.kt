@@ -63,4 +63,14 @@ class ComposerHtmlTest {
         assertEquals(1,d.filesToSend().size)
         ComposeContent.requireResources(d)
     }
+    @Test fun existingForeignHtmlDraftBecomesEditableWithoutAddingAQuotationLevel() {
+        val source=MailItem("old","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="HTML",body="Старый текст",date=1,htmlBody=rich)
+        val legacy=ComposeDraft(accountId="a",body="Добавлено",quote=ComposeContent.quote(source,"draft"))
+        val migrated=ComposerHtml.forEditing(legacy)
+        assertTrue(migrated.bodyHtml!!.contains("<table"));assertTrue(migrated.body.contains("Добавлено"))
+        assertEquals("draft",migrated.quote!!.kind);assertEquals("",migrated.quote!!.html)
+        assertEquals(1,Jsoup.parse(ComposeContent.render(migrated).html).select("blockquote").size)
+        assertEquals(migrated,ComposerHtml.forEditing(migrated))
+    }
+
 }

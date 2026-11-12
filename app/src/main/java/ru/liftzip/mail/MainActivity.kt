@@ -231,7 +231,7 @@ private val Paper=Color(0xFFF8F9F6)
     RouteBackHandler(route,onPreview={preview=null;route="reader"},onMessage={goInbox()},onCompose={
         val d=draft?.let(editorSession::snapshot)
         if(d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))
-            vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}
+            editorSession.flush(d){latest->vm.saveDraft(latest){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}}
         else {draft=null;goInbox()}
     },onHome={systemInbox()})
     if(route!="inbox" || !s.loaded || s.accounts.isEmpty())SystemBarIcons(forceLightSurface=route=="compose")
@@ -319,7 +319,7 @@ private val Paper=Color(0xFFF8F9F6)
                     val editor=draft!!
                     val stored=s.messages.find{it.id==editor.id}
                     val active=editor.copy(forwarding=s.forwarding[editor.id]?:stored?.forwarding?:editor.forwarding)
-                    ComposeScreen(active,s,editorSession=editorSession,onChange={draft=it},onBack={value->vm.saveDraft(value){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
+                    ComposeScreen(active,s,editorSession=editorSession,onChange={if(route=="compose" && draft?.id==it.id)draft=it},onBack={value->vm.saveDraft(value){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
                         onDelete={vm.deleteDraft(active.id){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},onSend={value->vm.send(value){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
                         onNoticeAnchor={anchor("compose",it)},onDefaultAccount=vm::setDefaultAccount,
                         onRetryForward={vm.retryForward(active.id)},onRemoveForward={vm.removeForwardFile(active.id,it)})

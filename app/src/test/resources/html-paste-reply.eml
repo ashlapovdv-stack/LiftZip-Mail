@@ -1,0 +1,45 @@
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary=fixture
+
+--fixture
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Пришло на нашу html
+
+On Thu, 12 Nov 2026 11:04:22 +0900, Тестовый клиент <client@example.com> wrote:
+
+> Тест HTML-письма · Почта 0.5.20
+> 
+> Это *жирный*, *курсивный* и цветной текст. Проверяем переносы,
+> масштабирование и отображение HTML.
+> 
+> Русский текст: Ёжик, № 15, ₽ 1 250,50. Emoji: ✉️ 🔧 🌲.
+> Позиция Количество Цена
+> Контактор 2 4 500 ₽
+> Датчик 1 1 200 ₽
+> 
+> Широкая строка для проверки горизонтального масштаба:
+> ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+> ------------------------------
+> 
+> *Новый ответ:* Проверяю сохранение истории переписки после ответа на ответ.
+> 
+> 11 ноября 2026 г., 18:20, Иван Петров <ivan@example.com>:
+> 
+> Первый ответ. Здесь есть *HTML-разметка* и таблица:
+> Тест OK
+> 
+> 10 ноября 2026 г., 09:10, Тестовый отправитель <tester@example.com>:
+> 
+> Исходное сообщение. Проверяем вложенную историю и кнопку ••• N.
+> 
+> Конец тестового письма.
+> 
+--fixture
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+<html><head></head><body><div data-liftzip-author="1">Пришло на нашу html</div><div class="gmail_attr">On Thu, 12 Nov 2026 11:04:22 +0900, Тестовый клиент &lt;client@example.com&gt; wrote:</div><blockquote class="gmail_quote" type="cite" style="border-left:2px solid #a58ac7;margin:8px 0 8px 8px;padding-left:10px"><div dir="auto"><div dir="auto"><h2 style="font-family:arial,sans-serif;color:rgb(57,73,171)">Тест HTML-письма · Почта 0.5.20</h2><p style="color:rgb(38,50,56);font-family:arial,sans-serif;font-size:medium">Это <b>жирный</b>, <i>курсивный</i> и <span style="color:rgb(198,40,40)">цветной текст</span>. Проверяем переносы, масштабирование и отображение HTML.</p><p style="color:rgb(38,50,56);font-family:arial,sans-serif;font-size:medium">Русский текст: Ёжик, № 15, ₽ 1 250,50. Emoji: ✉️ 🔧 🌲.</p><table cellpadding="9" cellspacing="0" border="1" style="color:rgb(38,50,56);font-family:arial,sans-serif;font-size:medium;border-collapse:collapse;width:680px;border-color:rgb(207,216,220)"><tbody><tr style="background:rgb(232,234,246)"><th>Позиция</th><th>Количество</th><th>Цена</th></tr><tr><td>Контактор</td><td>2</td><td>4 500 ₽</td></tr><tr><td>Датчик</td><td>1</td><td>1 200 ₽</td></tr></tbody></table><p style="color:rgb(38,50,56);font-family:arial,sans-serif;font-size:medium;white-space:nowrap">Широкая строка для проверки горизонтального масштаба: ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ</p><hr style="font-family:arial,sans-serif;font-size:medium"><p style="color:rgb(38,50,56);font-family:arial,sans-serif;font-size:medium"><b>Новый ответ:</b> Проверяю сохранение истории переписки после ответа на ответ.</p><blockquote style="color:rgb(38,50,56);font-family:arial,sans-serif;font-size:medium;margin:16px 0px 0px 10px;padding-left:14px;border-left:3px solid rgb(128,98,189)"><p style="color:rgb(96,125,139);font-size:13px">11 ноября 2026 г., 18:20, Иван Петров &lt;<a href="mailto:ivan@example.com">ivan@example.com</a>&gt;:</p><p>Первый ответ. Здесь есть <b>HTML-разметка</b> и таблица:</p><table border="1" cellpadding="5" style="border-collapse:collapse"><tbody><tr><td>Тест</td><td>OK</td></tr></tbody></table><blockquote style="margin:14px 0px 0px 10px;padding-left:14px;border-left:3px solid rgb(128,98,189)"><p style="color:rgb(96,125,139);font-size:13px">10 ноября 2026 г., 09:10, Тестовый отправитель &lt;<a href="mailto:tester@example.com">tester@example.com</a>&gt;:</p><p>Исходное сообщение. Проверяем вложенную историю и кнопку ••• N.</p></blockquote></blockquote><p style="font-family:arial,sans-serif;font-size:12px;color:rgb(120,144,156)">Конец тестового письма.</p></div><div dir="auto"><br></div></div>
+</blockquote></body></html>
+--fixture--
