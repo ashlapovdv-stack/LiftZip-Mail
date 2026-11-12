@@ -39,6 +39,11 @@ class CollapsedReplyBoundaryTest {
         assertEquals("margin-bottom:19px",doc.getElementById("earlier")!!.attr("style"))
         assertEquals("First Reply Last line",doc.body().text())
     }
+    @Test fun anInteriorSizedSpacerBeforeTheLastTextIsNotATrailingBlank() {
+        val doc=Jsoup.parse(render("<div id='interior' style='height:1000px'></div><p>Reply</p><br><br>"))
+        assertEquals("height:1000px",doc.getElementById("interior")!!.attr("style"))
+        assertTrue(doc.body().select("br").isEmpty())
+    }
     @Test fun imagesRulesTablesAndDecoratedFootersRemainVisible() {
         for(tail in listOf("<img src='cid:photo' width='80' height='30'>","<hr>","<table width='300'><tr><td>Signature</td></tr></table>","<div id='panel' style='background:#225588;padding:20px'>Signature<br></div>")) {
             val doc=Jsoup.parse(render("<div>Reply</div>"+tail+"<div><br></div>"))
