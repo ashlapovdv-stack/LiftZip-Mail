@@ -1,0 +1,4 @@
+interface:
+  display_name: "Выпуск результата"
+  short_description: "Проверенная методика: Выпуск результата"
+  default_prompt: "Применить $release-manager к текущей задаче проекта."

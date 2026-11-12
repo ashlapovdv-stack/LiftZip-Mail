@@ -1,0 +1,4 @@
+interface:
+  display_name: "SQLite и миграции"
+  short_description: "Проверенная методика: SQLite и миграции"
+  default_prompt: "Применить $sqlite-migrations к текущей задаче проекта."

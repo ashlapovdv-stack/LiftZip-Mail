@@ -1,0 +1,4 @@
+interface:
+  display_name: "Проверка результата"
+  short_description: "Проверенная методика: Проверка результата"
+  default_prompt: "Применить $verification-before-completion к текущей задаче проекта."

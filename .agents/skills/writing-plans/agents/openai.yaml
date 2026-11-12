@@ -1,0 +1,4 @@
+interface:
+  display_name: "План реализации"
+  short_description: "Проверенная методика: План реализации"
+  default_prompt: "Применить $writing-plans к текущей задаче проекта."

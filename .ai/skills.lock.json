@@ -1,0 +1,88 @@
+{
+  "version": "2026.11.12.1",
+  "canonical": {
+    "repository": "ashlapovdv-stack/Lift-zip",
+    "path": ".ai/skill-library",
+    "manifest_sha256": "9cc27af9f247dd30a4249c6458efa1dd88be63a4a14a0b9661e91028b8055185"
+  },
+  "installed_skills": [
+    "systematic-debugging",
+    "test-driven-development",
+    "verification-before-completion",
+    "requesting-code-review",
+    "writing-plans",
+    "executing-plans",
+    "using-git-worktrees",
+    "brainstorming",
+    "architecture-guardian",
+    "regression-control",
+    "release-manager",
+    "android-compose",
+    "sqlite-migrations",
+    "mail-protocol-rendering"
+  ],
+  "sources": {
+    "superpowers": {
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "license": "MIT",
+      "adaptations": [
+        "systematic-debugging",
+        "test-driven-development",
+        "verification-before-completion",
+        "requesting-code-review",
+        "writing-plans",
+        "executing-plans",
+        "using-git-worktrees",
+        "brainstorming"
+      ]
+    },
+    "vercel-agent-skills": {
+      "repository": "https://github.com/vercel-labs/agent-skills",
+      "commit": "1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62",
+      "usage": "reviewed concepts; original concise guides"
+    },
+    "vercel-web-interface-guidelines": {
+      "repository": "https://github.com/vercel-labs/web-interface-guidelines",
+      "commit": "434b7f91364665f2f733b310ec54809bf8f37937",
+      "usage": "reviewed concepts; no live downloads"
+    }
+  },
+  "files": {
+    "AGENTS.md": "0311457d18bd3950e0f327eacfa0c5a6d4c66fb8e43570f9eb4baf73abbd8884",
+    ".ai/PROJECT.md": "1a8884996520f15984b636e806ffa45d095bcc7c1fe35812f8089ab8e14dd73a",
+    ".ai/README.md": "51caf9f6fa033b80c1bf0e6ccc4bd383c7977b6c7a96e8059904493750a099bd",
+    ".ai/validate_skills.py": "92df4a679a2026f2fcc082721acc22b6ccd08e10f6fdacf06e3277792e1c0f9e",
+    ".github/copilot-instructions.md": "c590f90077066bfea958757037c21791d599fc8f12af44fcb0c84a73b72ec96c",
+    ".agents/skills/INDEX.md": "03df0c20f419bece360f196ac26c34f8f64ee412f4420371788605bc82272fbc",
+    ".agents/skills/systematic-debugging/SKILL.md": "5a5e63344b2a392e78adc44a6a8fb1f1a4a8b00cef195d3f6f4039d136fcd354",
+    ".agents/skills/release-manager/SKILL.md": "2d7071490e81b562f272ac1d1f5fbb78bd440c198ab7c37e5d95d21a59a5fc17",
+    ".agents/skills/mail-protocol-rendering/SKILL.md": "308585121c407d58299619a32c00aae5bd52c418f6662a1b26a73a89210144e8",
+    ".agents/skills/sqlite-migrations/SKILL.md": "f7a3f1f7b5d64cd1700233cbe8f94c991970fc09c75bb96362bd63a7bea28822",
+    ".agents/skills/writing-plans/SKILL.md": "5ce332b6de1e1a4c532bfe4d90c6f3ca9ac32d55268255bce7780b15e54e333e",
+    ".agents/skills/executing-plans/SKILL.md": "5241ac902fc05db418bc6074686f662c96696c842a188a54be0f1a2584e70ec4",
+    ".agents/skills/brainstorming/SKILL.md": "37a7c84c78068909561ebca078c965e5bf49e84495bd8aecb30e1695a19b6ec8",
+    ".agents/skills/requesting-code-review/SKILL.md": "49db66ea9c8a64246c0e27420bc695ce43cca6ebbeabbabdec57a877db69add1",
+    ".agents/skills/using-git-worktrees/SKILL.md": "a569a0d8636636f8d30b4416baf5aed26161337f6784aaa7e6a3c3609809fe45",
+    ".agents/skills/verification-before-completion/SKILL.md": "8e4f206d6cd672ca411998920f756e10b8812cf71d1cf60cec24f2540ef15ee3",
+    ".agents/skills/android-compose/SKILL.md": "2e7f9e517c4f4dc9ce19671635f7ef9dbd64f17df4160d867363ecf0a3dd019d",
+    ".agents/skills/architecture-guardian/SKILL.md": "5638a1ddf1a7ff1cd2d09e3f21f7d01008cf641b43a5365fdcd61815c867e61e",
+    ".agents/skills/test-driven-development/SKILL.md": "e0d9c1dd8f3a42334b69d3dbbfeb3327b046e919bab59de18df66127fe0160f2",
+    ".agents/skills/regression-control/SKILL.md": "d8bb8a6c40dbf9318cac91110635158420adbe783f13ad3a2b110f1bb896b21d",
+    ".agents/skills/systematic-debugging/agents/openai.yaml": "24e8597c8be233ef2b32c61e326a7abc9fd3b32fe4c69e7ba98c775cc132d31d",
+    ".agents/skills/release-manager/agents/openai.yaml": "6e03a376ac8bb0e0e09f1effef123b6b25b817f7e8ad03f187b8215c39ff06be",
+    ".agents/skills/mail-protocol-rendering/agents/openai.yaml": "2dbad5556527653dc12dc6c212999739266b3335e8f6614cf5ac8da6a6a9f1ca",
+    ".agents/skills/sqlite-migrations/agents/openai.yaml": "7f42a44cb32e9004ca4a82e1bd0ac808da0f88c63d261cac66992f5d1518cb0a",
+    ".agents/skills/writing-plans/agents/openai.yaml": "87f5f5e08727feea8e765206cc756f9e53f0a4de4e585367bbafe5a148bad1ac",
+    ".agents/skills/executing-plans/agents/openai.yaml": "f6820580247b20f45f9414fd4e8e9ee17c682f6bf93b5bd8af86aae7369b92f2",
+    ".agents/skills/brainstorming/agents/openai.yaml": "397a227529f9e0cdc0767ef069a46a95a47f4e02fcdef2aaf9c6f6e743e7fc07",
+    ".agents/skills/requesting-code-review/agents/openai.yaml": "7d1de278ecd9eeb3267b72a082de9ff6699bb93776b3d3030d4b0a348acf6381",
+    ".agents/skills/using-git-worktrees/agents/openai.yaml": "f423f48b7b721f49ad7175b1227b30d8e68ef9d4a600b1cea672e25738cc8275",
+    ".agents/skills/verification-before-completion/agents/openai.yaml": "e90bc3f3d8b2aea19bbaa529e3f45dc17b82fe4de7f2aadbc1c7b555843000b2",
+    ".agents/skills/android-compose/agents/openai.yaml": "4f0db353ad677cf2f4aaf0a9c3b8badc46ff1e5ffb6bf949cfa7089ac3c5dec2",
+    ".agents/skills/architecture-guardian/agents/openai.yaml": "d26635f1dcef672be62e9facb72e6cb7b44236edc7379a4e413c4f20bd273624",
+    ".agents/skills/test-driven-development/agents/openai.yaml": "727f7216f24bddfc0572774498b89039ce2b2282c65d26b2ee1eded510d009e5",
+    ".agents/skills/regression-control/agents/openai.yaml": "44bbb9c58fe60599a8371833d395ad68b9f36cd383bd2dde218c1e110cf69645",
+    ".ai/third-party/superpowers-MIT.txt": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
+  }
+}

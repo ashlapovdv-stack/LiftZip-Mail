@@ -1,0 +1,4 @@
+interface:
+  display_name: "Поведенческие тесты"
+  short_description: "Проверенная методика: Поведенческие тесты"
+  default_prompt: "Применить $test-driven-development к текущей задаче проекта."

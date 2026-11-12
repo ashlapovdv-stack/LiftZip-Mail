@@ -1,0 +1,4 @@
+interface:
+  display_name: "Проверка изменений"
+  short_description: "Проверенная методика: Проверка изменений"
+  default_prompt: "Применить $requesting-code-review к текущей задаче проекта."

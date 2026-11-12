@@ -1,0 +1,4 @@
+interface:
+  display_name: "Письма, MIME и WebView"
+  short_description: "Проверенная методика: Письма, MIME и WebView"
+  default_prompt: "Применить $mail-protocol-rendering к текущей задаче проекта."

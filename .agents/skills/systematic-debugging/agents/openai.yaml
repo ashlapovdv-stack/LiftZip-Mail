@@ -1,0 +1,4 @@
+interface:
+  display_name: "Поиск первопричины"
+  short_description: "Проверенная методика: Поиск первопричины"
+  default_prompt: "Применить $systematic-debugging к текущей задаче проекта."
