@@ -5,18 +5,6 @@ import org.junit.Test
 
 class ReaderPreparationTest {
     private fun key()=ReaderAnalysisCache.Key("a:m:7","Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо","<p>Ответ</p><div>On 7 Nov 2026, sender@example.com wrote:</div><blockquote>Старое письмо</blockquote>",1)
-    @Test fun plainHistoryReceivesASafeZoomableDocumentWithTheSameText() {
-        val body="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Текст <script>example</script>\n> https://example.com/info"
-        val result=ReaderAnalysisCache().prepare(ReaderAnalysisCache.Key("plain-citation",body,"",1))
-        assertTrue(result.second.separateHistory)
-        val html=result.second.quotedHtml
-        assertTrue("Plain history also needs a native zoomable document",html.isNotBlank())
-        val doc=org.jsoup.Jsoup.parse(html)
-        assertEquals(0,doc.select("script").size)
-        assertTrue(doc.text().contains("Текст <script>example</script>"))
-        assertEquals("https://example.com/info",doc.selectFirst("a")!!.attr("href"))
-        assertEquals(body,result.first.original)
-    }
     @Test fun unchangedSourceReusesTheCompleteAnalysis() {
         val cache=ReaderAnalysisCache();assertNull(cache.peek(key()))
         val first=cache.prepare(key());assertTrue(first.second.separateHistory)

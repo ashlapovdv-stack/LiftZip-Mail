@@ -863,7 +863,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             modifier=Modifier.semantics{contentDescription=if(originalHtmlScale)"Подогнать HTML по ширине"else "Оригинальный масштаб HTML";stateDescription=if(originalHtmlScale)"100%"else "По ширине"}) {
             Icon(if(originalHtmlScale)Icons.Outlined.FitScreen else Icons.Outlined.AspectRatio,null)
         }
-        if(htmlZoomed || scroll.citationZoomTarget!=null)SmallFloatingActionButton(onClick={scroll.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
+        if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
         }
