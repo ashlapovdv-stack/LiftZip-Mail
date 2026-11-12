@@ -213,7 +213,7 @@ class HtmlMailTest {
         val source="<p>Ответ</p><blockquote type='cite'><p>Важная цитата</p></blockquote><p>Текст после цитаты</p>"
         val withPlainHistory=renderHistory(source)
         assertFalse(withPlainHistory.second.separateHistory)
-        assertEquals(HtmlMail.HistoryReason.NO_PROVIDER_BOUNDARY,withPlainHistory.second.reason)
+        assertEquals(HtmlMail.HistoryReason.TRAILING_CONTENT,withPlainHistory.second.reason)
         val noPlainHistory=HtmlMail.analyzeHistory(source,QuotedConversation("Ответ",emptyList(),"Ответ"))
         assertFalse(noPlainHistory.separateHistory)
         for(analysis in listOf(withPlainHistory.second,noPlainHistory)) {

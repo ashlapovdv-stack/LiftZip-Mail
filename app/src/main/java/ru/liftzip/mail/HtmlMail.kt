@@ -320,7 +320,11 @@ object HtmlMail {
                     runs.isNotEmpty() && runs.all{it.depth==0} &&
                         presentationText(plain)==presentationText(historyText(boundary.outerHtml()))
                 }==true
-            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured && !flattenedProvider)continue
+            val presentation=attribution!=null && attributionMatches(units.first()) &&
+                conversation.quotedBody?.let{plain->QuotePresentation.matches(plain,boundary,::attributionHeader){element->
+                    genericQuoteBoundary(element) || element.hasClass("gmail_quote") || element.hasClass("yahoo_quoted") || element.hasClass("protonmail_quote")
+                }}==true
+            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured && !flattenedProvider && !presentation)continue
             // Generic citations need an attribution, not merely identical quoted words.
             if(providers.isEmpty() && attribution==null &&
                 !attributionHeader(historyText(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue
@@ -336,7 +340,7 @@ object HtmlMail {
             val styles=doc.select("style").joinToString(""){it.outerHtml()}
             return HistoryAnalysis(shortened.outerHtml(),true,HistoryReason.SEPARATED,styles+richHistory)
         }
-        if(providers.isEmpty())return keep(HistoryReason.NO_PROVIDER_BOUNDARY)
+        if(candidates.isEmpty())return keep(HistoryReason.NO_PROVIDER_BOUNDARY)
         if(candidates.any{contentAfter(doc.body(),it)})return keep(HistoryReason.TRAILING_CONTENT)
         return keep(if(candidates.isEmpty())HistoryReason.NO_PROVIDER_BOUNDARY else HistoryReason.PLAIN_HISTORY_MISMATCH)
     }
