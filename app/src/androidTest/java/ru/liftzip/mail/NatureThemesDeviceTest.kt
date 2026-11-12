@@ -57,7 +57,7 @@ class NatureThemesDeviceTest {
 
     @Test fun natureThemesStayLightWithDarkSystemAndPreserveTextScale() {
         val style=mutableStateOf(MailStyle.FOREST)
-        var surface=0f;var ink=1f;var fontScale=0f;var originalFontScale=0f
+        var surface=0f;var ink=1f;var accent=1f;var fontScale=0f;var originalFontScale=0f
         rule.setContent {
             val configuration=Configuration(LocalConfiguration.current).apply {
                 uiMode=(uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or Configuration.UI_MODE_NIGHT_YES
@@ -67,6 +67,7 @@ class NatureThemesDeviceTest {
                 MailTheme(style.value) {
                     surface=MaterialTheme.colorScheme.surface.luminance()
                     ink=MaterialTheme.colorScheme.onSurface.luminance()
+                    accent=MaterialTheme.colorScheme.primary.luminance()
                     fontScale=LocalDensity.current.fontScale
                     DecorativeHeader("Входящие","Тестовый ящик",{})
                 }
@@ -77,6 +78,7 @@ class NatureThemesDeviceTest {
             rule.runOnIdle {
                 assertTrue("Nature theme must remain light: $selected",surface>0.9f)
                 assertTrue("Text must stay readable: $selected",ink<0.1f)
+                assertTrue("Small accent labels need 4.5:1 contrast: $selected",(surface+0.05f)/(accent+0.05f)>=4.5f)
                 assertEquals(originalFontScale,fontScale,0f)
             }
         }
