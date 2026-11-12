@@ -31,6 +31,10 @@ class ComposeDeviceTest {
         rule.onNodeWithTag("compose-body").performTextInput("Новый текст")
         val pixel=rule.onNodeWithTag("compose-screen").captureToImage().toPixelMap()[3,3]
         assertTrue(pixel.red>0.99 && pixel.green>0.99 && pixel.blue>0.99)
+        rule.runOnIdle {
+            val bars=androidx.core.view.WindowCompat.getInsetsController(rule.activity.window,rule.activity.window.decorView)
+            assertTrue(bars.isAppearanceLightStatusBars);assertTrue(bars.isAppearanceLightNavigationBars)
+        }
         saveDeviceScreenshot(rule,"compose-new")
         rule.onNodeWithContentDescription("Отправить письмо").performClick()
         rule.runOnIdle{assertEquals(1,sent);assertEquals("Новый текст",draft.body)}

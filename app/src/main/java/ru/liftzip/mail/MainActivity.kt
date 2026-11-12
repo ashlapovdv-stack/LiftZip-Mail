@@ -229,7 +229,7 @@ private val Paper=Color(0xFFF8F9F6)
             vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}
         else {draft=null;goInbox()}
     },onHome={systemInbox()})
-    if(route!="inbox" || !s.loaded || s.accounts.isEmpty())SystemBarIcons()
+    if(route!="inbox" || !s.loaded || s.accounts.isEmpty())SystemBarIcons(forceLightSurface=route=="compose")
     Scaffold(modifier=Modifier.onSizeChanged{rootHeight=it.height},snackbarHost={
         SnackbarHost(snack,Modifier.fillMaxWidth().padding(start=16.dp,end=16.dp,bottom=noticeBottom)){ServiceSnackbar(it)}
     },contentWindowInsets=WindowInsets(0,0,0,0)) { outer->

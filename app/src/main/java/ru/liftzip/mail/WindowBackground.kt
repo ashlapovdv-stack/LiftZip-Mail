@@ -48,9 +48,9 @@ fun ComponentActivity.edgeMailWindow() {
 }
 
 /** The visible screen owns bar appearance, including when the drawer covers the header. */
-@Composable fun SystemBarIcons(decorativeStatus: Boolean=false) {
+@Composable fun SystemBarIcons(decorativeStatus: Boolean=false,forceLightSurface: Boolean=false) {
     val activity=LocalContext.current.activity()?:return
-    val lightNavigation=!isSystemInDarkTheme()
+    val lightNavigation=forceLightSurface || !isSystemInDarkTheme()
     val lightStatus=decorativeStatus || lightNavigation
     val controller=remember(activity){WindowCompat.getInsetsController(activity.window,activity.window.decorView)}
     SideEffect {

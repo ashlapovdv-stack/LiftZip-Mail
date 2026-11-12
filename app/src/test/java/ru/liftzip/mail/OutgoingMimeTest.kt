@@ -113,6 +113,7 @@ class OutgoingMimeTest {
             val outgoing=wire(builder.build(session,account,d).message)
             val decoded=MimeReader().read(outgoing)
             assertEquals(index+1,Jsoup.parse(decoded.html).select("blockquote").size)
+            assertTrue(HtmlMail.analyzeHistory(decoded.html,ConversationText.parse(decoded.text)).separateHistory)
             assertEquals(m.headers!!.messageId,outgoing.getHeader("In-Reply-To",null))
             m=m.copy(id="received-$index",body=decoded.text,htmlBody=decoded.html,headers=ReplyHeaders.read(outgoing))
         }
@@ -125,6 +126,37 @@ class OutgoingMimeTest {
         assertEquals("from@example.com",ReplyHeaders.recipient(source().copy(headers=MessageHeaders())))
         assertNull(MessageThread.id("<x@example.com>\r\nBcc: attacker@example.com"))
         assertEquals(listOf("<a@example.com>","<b@example.com>"),MessageThread.chain(MessageHeaders("<b@example.com>",references=listOf("<a@example.com>","<a@example.com>"))))
+    }
+    @Test fun outgoingQuoteKeepsTablesAndExternalImagesWithoutReaderUrlsOrActiveContent() {
+        val html="<style>.x{background:url(content://private)}</style><table class='x'><tr><td>Ячейка</td></tr></table>"+
+            "<img src='https://example.com/image.png'><img src='file:///private/photo'><script>alert(1)</script><a href='javascript:alert(1)'>Ссылка</a>"
+        val d=draft(source(html))
+        var requests=0
+        val message=OutgoingMime{requests++;error("No resources should be fetched")}.build(session,account,d).message
+        val result=MimeReader().read(wire(message)).html
+        assertEquals(0,requests);assertTrue(result.contains("<table"));assertTrue(result.contains("https://example.com/image.png"))
+        assertFalse(result.contains("file:"));assertFalse(result.contains("content:"));assertFalse(result.contains("javascript:"));assertFalse(result.contains("<script"))
+    }
+    @Test fun nestedAlternativeStructureRequiresMatchingTextAndDepth() {
+        val header="Клиент пишет:"
+        val source=source("<p>Предыдущий ответ</p><div>──────────</div><div>$header</div><blockquote>Самое старое письмо</blockquote>").copy(
+            body="Предыдущий ответ\n\n──────────\n$header\n> Самое старое письмо")
+        val decoded=MimeReader().read(wire(builder.build(session,account,draft(source)).message))
+        val conversation=ConversationText.parse(decoded.text)
+        assertTrue(HtmlMail.analyzeHistory(decoded.html,conversation).separateHistory)
+        // Identical words at a different quotation depth are not corroboration.
+        val wrongDepth=decoded.html.replace("<blockquote>Самое старое письмо</blockquote>","<div>Самое старое письмо</div>")
+        assertFalse(HtmlMail.analyzeHistory(wrongDepth,conversation).separateHistory)
+        assertFalse(HtmlMail.analyzeHistory(decoded.html.replace("Самое старое письмо","Другой текст"),conversation).separateHistory)
+    }
+    @Test fun incompleteAddressesAreRestoredInDraftsAndRejectedForDelivery() {
+        val d=draft().copy(to="unfinished@",cc="copy@example.com, still-typing",bcc="hidden@")
+        val m=wire(builder.build(session,account,d,MimePurpose.DRAFT,1).message)
+        val editor=MimeReader().read(m).composer!!
+        assertEquals(d.to,editor.to);assertEquals(d.cc,editor.cc);assertEquals(d.bcc,editor.bcc)
+        assertThrows(IllegalArgumentException::class.java){builder.build(session,account,d)}
+        m.setRecipients(Message.RecipientType.TO,"another@example.com");m.saveChanges()
+        assertNull(MimeReader().read(wire(m)).composer)
     }
     @Test fun anotherClientsDraftEditWinsOverStalePrivateMetadata() {
         val m=builder.build(session,account,draft(),MimePurpose.DRAFT,1).message

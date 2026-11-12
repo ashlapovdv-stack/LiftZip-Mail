@@ -40,10 +40,10 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
             val pieces=(0 until multi.count.coerceAtMost(100)).map { index->read(multi.getBodyPart(index),if(path=="root")"$index" else "$path.$index",depth+1,expectedDraftId) }
             if(part.isMimeType("multipart/alternative")) {
                 val preferred=(0 until multi.count.coerceAtMost(100)).indexOfFirst { multi.getBodyPart(it).isMimeType("text/plain") }
-                return checked(DecodedMail((pieces.getOrNull(preferred)?.takeIf{it.text.isNotBlank()}?:pieces.firstOrNull { it.text.isNotBlank() })?.text.orEmpty(),pieces.flatMap { it.attachments },pieces.firstOrNull{it.html.isNotBlank()}?.html.orEmpty(),pieces.firstNotNullOfOrNull{it.composer}),depth)
+                return checked(DecodedMail((pieces.getOrNull(preferred)?.takeIf{it.text.isNotBlank()}?:pieces.firstOrNull { it.text.isNotBlank() })?.text.orEmpty(),pieces.flatMap { it.attachments },pieces.firstOrNull{it.html.isNotBlank()}?.html.orEmpty(),pieces.firstNotNullOfOrNull{it.composer}),depth,part)
             }
             val html=if(pieces.any{it.html.isNotBlank()})limitHtml(pieces.filter{it.html.isNotBlank() || it.text.isNotBlank()}.joinToString("<hr>"){it.html.ifBlank{HtmlMail.plain(it.text)}})else ""
-            return checked(DecodedMail(limitText(pieces.map { it.text }.filter(String::isNotBlank).joinToString("\n\n")),pieces.flatMap { it.attachments },html,pieces.firstNotNullOfOrNull{it.composer}),depth)
+            return checked(DecodedMail(limitText(pieces.map { it.text }.filter(String::isNotBlank).joinToString("\n\n")),pieces.flatMap { it.attachments },html,pieces.firstNotNullOfOrNull{it.composer}),depth,part)
         }
         if(part.isMimeType("text/plain")||part.isMimeType("text/html")) {
             checkCancelled()
@@ -69,14 +69,20 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
         }
         return DecodedMail("",emptyList())
     }
-    private fun checked(decoded: DecodedMail,depth: Int): DecodedMail {
+    private fun checked(decoded: DecodedMail,depth: Int,part: Part): DecodedMail {
         if(depth!=0 || decoded.composer==null)return decoded
         val editor=decoded.composer
         val projection=ComposeContent.plain(ComposeDraft(accountId="",body=editor.text,quote=editor.quote,quoteIncluded=editor.quoteIncluded))
         fun normalized(text: String)=text.replace("\r\n","\n").replace('\r','\n').trimEnd('\n')
         // A different client may edit the visible draft without updating our metadata.
         // Keep that complete visible body instead of resurrecting a stale editor snapshot.
-        return if(normalized(projection)==normalized(decoded.text))decoded else decoded.copy(composer=null)
+        fun actual(name: String)=part.getHeader(name)?.joinToString(" ").orEmpty()
+        fun addresses(raw: String)=ReplyHeaders.recipientList(raw,true).map{it.address.lowercase()}.sorted()
+        val recipientsMatch=(editor.to==null || addresses(editor.to)==addresses(actual("To"))) &&
+            addresses(editor.cc)==addresses(actual("Cc")) && addresses(editor.bcc)==addresses(actual("Bcc"))
+        val subject=runCatching{MimeUtility.decodeText(actual("Subject"))}.getOrDefault(actual("Subject")).replace(Regex("\\r?\\n[ \\t]+")," ")
+        val subjectMatches=editor.subject==null || editor.subject==subject
+        return if(normalized(projection)==normalized(decoded.text) && recipientsMatch && subjectMatches)decoded else decoded.copy(composer=null)
     }
 
 }

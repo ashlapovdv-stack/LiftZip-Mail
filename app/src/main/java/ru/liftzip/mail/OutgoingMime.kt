@@ -19,7 +19,7 @@ class OutgoingMime(private val resources: OutgoingResources) {
         val body=ComposeContent.render(draft)
         val files=draft.filesToSend()
         val inline=files.filter{it.contentId.isNotBlank()}.groupBy{HtmlMail.cid(it.contentId)}
-        body.inlineIds.keys.forEach{cid->require(inline[cid]?.size==1){"Недоступно встроенное изображение цитаты: $cid"}}
+        ComposeContent.requireResources(draft,body)
         val selected=files.filter{it.contentId.isBlank() || HtmlMail.cid(it.contentId) in body.inlineIds}
         var total=body.plain.toByteArray().size.toLong()+body.html.toByteArray().size
         selected.forEach{file->var length=0L;resources.open(file).use{input->val bytes=ByteArray(8192);while(true){val count=input.read(bytes);if(count<0)break;length+=count;total+=count
@@ -32,10 +32,7 @@ class OutgoingMime(private val resources: OutgoingResources) {
         }
         require(MailRules.validEmail(account.email) && account.senderName.none{it=='\r'||it=='\n'}){"Некорректный отправитель."}
         message.setFrom(InternetAddress(account.email,account.senderName,"UTF-8"))
-        fun addresses(value: String): Array<Address> {
-            require(!value.contains('\r')){"Некорректный адрес получателя."}
-            return MailRules.recipients(value).map{InternetAddress(it,true).apply{validate()}}.toTypedArray()
-        }
+        fun addresses(value: String): Array<Address> = ReplyHeaders.recipientList(value,purpose==MimePurpose.DRAFT).map{it as Address}.toTypedArray()
         message.setRecipients(Message.RecipientType.TO,addresses(draft.to))
         message.setRecipients(Message.RecipientType.CC,addresses(draft.cc))
         message.setRecipients(Message.RecipientType.BCC,addresses(draft.bcc))

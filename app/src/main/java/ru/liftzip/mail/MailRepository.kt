@@ -670,7 +670,7 @@ class MailRepository(private val context: Context) {
             val prefix=if(kind=="reply")"Re:" else "Fwd:"
             val draft=ComposeDraft(accountId=sender.id,to=if(kind=="reply")ReplyHeaders.recipient(source)else "",
                 subject=if(source.subject.startsWith(prefix,true))source.subject else "$prefix ${source.subject}",
-                quote=ComposeContent.quote(source,kind),forwarding=ForwardRules.plan(source,accounts.find{it.id==source.accountId},includeOrdinary=kind=="forward"),
+                quote=ComposeContent.quote(source,kind).copy(serverKey=accounts.find{it.id==source.accountId}?.let(AuthRules::serverKey).orEmpty()),forwarding=ForwardRules.plan(source,accounts.find{it.id==source.accountId},includeOrdinary=kind=="forward"),
                 responseTo=source.id,responseKind=kind)
             db.putMessage(draft.toMessage(sender,"drafts"));refresh()
             if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
@@ -679,6 +679,10 @@ class MailRepository(private val context: Context) {
     }
     private suspend fun resolveReply(draft: ComposeDraft): ComposeDraft {
         val quote=draft.quote?.takeIf{it.kind=="reply" && it.headers==null}?:return draft
+        if(quote.serverKey.isNotBlank())coordinator.data {
+            val account=db.accounts().find{it.id==quote.accountId}?:error("Исходный ящик удалён. Не удалось подготовить заголовки ответа.")
+            require(AuthRules.serverKey(account)==quote.serverKey){"Параметры исходного сервера изменились. Откройте исходное письмо заново."}
+        }
         val headers=sourceHeaders(quote.sourceMessage())
         // Respect an explicitly edited recipient; only complete our original default.
         val to=if(draft.to==quote.senderEmail && headers.replyTo.isNotBlank())headers.replyTo else draft.to
@@ -771,6 +775,7 @@ class MailRepository(private val context: Context) {
         val resolved=resolveReply(draft)
         MailRules.validateDraft(resolved)?.let{error(it)}
         val flattened=ForwardRules.sending(resolved).copy(timestamp=System.currentTimeMillis())
+        ComposeContent.requireResources(flattened)
         val frozen=queueFiles.freeze(flattened)
         var queued=false
         try {coordinator.data {
@@ -870,7 +875,7 @@ class MailRepository(private val context: Context) {
         coordinator.data {
             db.messages().firstOrNull{it.localFolder=="drafts" && it.sourceDraftId==m.id}?.let{return@data (db.message(it.id)?:it).draft()}
             val account=db.accounts().find{it.id==m.accountId}?:error("Ящик не найден.")
-            val draft=ComposeDraft(accountId=m.accountId,to=HeaderText.editableRecipients(m.recipients),subject=m.subject,body=m.composer?.text?:m.body,forwarding=ForwardRules.plan(m,account,restoreDraft=true),quote=m.composer?.quote,quoteIncluded=m.composer?.quoteIncluded?:true,cc=m.composer?.cc?:HeaderText.editableRecipients(m.cc),bcc=m.composer?.bcc?:HeaderText.editableRecipients(m.bcc),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
+            val draft=ComposeDraft(accountId=m.accountId,to=m.composer?.to?:HeaderText.editableRecipients(m.recipients),subject=m.composer?.subject?:m.subject,body=m.composer?.text?:m.body,forwarding=ForwardRules.plan(m,account,restoreDraft=true),quote=m.composer?.quote,quoteIncluded=m.composer?.quoteIncluded?:true,responseTo=m.composer?.responseTo?:m.composer?.quote?.messageId,responseKind=m.composer?.responseKind?.takeIf{it.isNotBlank()}?:m.composer?.quote?.kind.orEmpty(),cc=m.composer?.cc?:HeaderText.editableRecipients(m.cc),bcc=m.composer?.bcc?:HeaderText.editableRecipients(m.bcc),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
             db.putMessage(draft.toMessage(account,"drafts"));refresh()
             if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
             draft
@@ -879,7 +884,7 @@ class MailRepository(private val context: Context) {
     private fun sameActionServer(a: MailAction)=db.accounts().any{it.id==a.accountId && AuthRules.serverKey(it)==a.serverKey}
     private fun actionMessage(a: MailAction)=db.decodeMessage(JSONObject(a.payload))
     private fun actionOrigin(a: MailAction)=JSONObject(a.payload).optJSONObject("_origin")?.let{db.decodeMessage(it)}
-    private fun MailItem.draft()=ComposeDraft(id,accountId,recipients,subject,composer?.text?:body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date,responseTo,responseKind,
+    private fun MailItem.draft()=ComposeDraft(id,accountId,composer?.to?:recipients,composer?.subject?:subject,composer?.text?:body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date,composer?.responseTo?:responseTo,composer?.responseKind?.takeIf{it.isNotBlank()}?:responseKind,
         cc=composer?.cc?:cc,bcc=composer?.bcc?:bcc,quote=composer?.quote,quoteIncluded=composer?.quoteIncluded?:true)
     suspend fun networkAvailable() {
         coordinator.data{refresh(messages=state.value.messages)}

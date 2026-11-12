@@ -12,7 +12,7 @@ data class MessageHeaders(val messageId: String="",val replyTo: String="",val in
 data class QuotedSource(
     val accountId: String,val messageId: String,val uid: Long,val validity: Long,val folder: String,
     val sender: String,val recipients: String,val subject: String,val date: Long,
-    val plain: String,val html: String,val headers: MessageHeaders?,val kind: String="reply",val senderEmail: String=""
+    val plain: String,val html: String,val headers: MessageHeaders?,val kind: String="reply",val senderEmail: String="",val serverKey: String=""
 ): Serializable {
     fun sourceMessage()=MailItem(messageId,accountId,uid,validity,folder,sender=sender,senderEmail=senderEmail,recipients=recipients,subject=subject,body=plain,date=date,htmlBody=html,headers=headers)
     fun attribution(): String {
@@ -23,7 +23,7 @@ data class QuotedSource(
 }
 
 /** Persisted editor state, distinct from the complete plain/HTML display projections. */
-data class ComposerSnapshot(val text: String,val quote: QuotedSource?=null,val quoteIncluded: Boolean=true,val cc: String="",val bcc: String="",val resourceAliases: Map<String,String> = emptyMap()): Serializable
+data class ComposerSnapshot(val text: String,val quote: QuotedSource?=null,val quoteIncluded: Boolean=true,val cc: String="",val bcc: String="",val resourceAliases: Map<String,String> = emptyMap(),val responseTo: String?=null,val responseKind: String="",val to: String?=null,val subject: String?=null): Serializable
 
 data class ComposedBody(val plain: String,val html: String,val inlineIds: Map<String,String>)
 
@@ -45,7 +45,7 @@ object ComposeContent {
         if(quote!=null) {
             val header=doc.body().appendElement("div").attr("class","gmail_attr")
             header.html(escaped(quote.attribution()).replace("\n","<br>"))
-            val block=doc.body().appendElement("blockquote").attr("type","cite").attr("style","border-left:2px solid #a58ac7;margin:8px 0 8px 8px;padding-left:10px")
+            val block=doc.body().appendElement("blockquote").attr("class","gmail_quote").attr("type","cite").attr("style","border-left:2px solid #a58ac7;margin:8px 0 8px 8px;padding-left:10px")
             block.html(if(quote.html.isNotBlank())safeQuoteHtml(quote.html)else escaped(quote.plain).replace("\n","<br>"))
             block.select("img[src]").forEach { image->
                 val src=image.attr("src")
@@ -57,6 +57,10 @@ object ComposeContent {
             }
         }
         return ComposedBody(plain,doc.outerHtml(),inlineIds)
+    }
+    fun requireResources(d: ComposeDraft,body: ComposedBody=render(d)) {
+        val files=d.filesToSend().filter{it.contentId.isNotBlank()}.groupBy{HtmlMail.cid(it.contentId)}
+        body.inlineIds.keys.forEach{cid->require(files[cid]?.size==1){"Недоступно встроенное изображение цитаты: $cid"}}
     }
     fun escaped(text: String)=text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;").replace("\r\n","\n").replace('\r','\n')
     /** Source sanitization only; never uses reader document/canvas/resource URLs. */
@@ -81,5 +85,8 @@ object MessageThread {
     private val token=Regex("<[^<>\\s@]+@[^<>\\s@]+>")
     fun id(raw: String)=raw.trim().takeIf{!it.contains('\r') && !it.contains('\n') && token.matches(it)}
     fun ids(raw: String): List<String> = token.findAll(raw.replace(Regex("\\r?\\n[ \\t]+")," ")).mapNotNull{ id(it.value) }.distinct().toList().takeLast(100)
-    fun chain(headers: MessageHeaders)= (headers.references.mapNotNull(::id)+listOfNotNull(id(headers.messageId))).distinct().takeLast(100)
+    fun chain(headers: MessageHeaders): List<String> {
+        val parent=id(headers.messageId)
+        return (headers.references.mapNotNull(::id).filter{it!=parent}.distinct()+listOfNotNull(parent)).takeLast(100)
+    }
 }

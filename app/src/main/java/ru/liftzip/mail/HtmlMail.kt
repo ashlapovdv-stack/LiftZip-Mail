@@ -296,7 +296,17 @@ object HtmlMail {
             val originalBody=conversation.quotedBody?.let(::normalizedHistoryText)
             val originalWithHeader=conversation.quotedBody?.let{normalizedHistoryText(listOfNotNull(units.first().attribution,it).joinToString("\n"))}
             val completeChain=bodies.any{it.isNotEmpty() && (it==chain || it==chainWithoutFirstHeader || it==originalBody || it==originalWithHeader)} && attributionMatches(units.first())
-            if(bodies.all{it.isEmpty()} || !single && !completeChain)continue
+            // Plain > prefixes and nested HTML citation elements must agree in both
+            // text and depth. This is structural evidence, not a fuzzy text match.
+            val structured=conversation.quotedBody?.let{plain->
+                val expected=QuoteStructure.plain(plain,::attributionHeader)
+                expected.isNotEmpty() && listOf(false,true).any{targets->
+                    QuoteStructure.html(boundary,::attributionHeader,{element->
+                        genericQuoteBoundary(element) || element.hasClass("gmail_quote") || element.hasClass("yahoo_quoted") || element.hasClass("protonmail_quote")
+                    },targets)==expected
+                }
+            }==true && attributionMatches(units.first())
+            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured)continue
             // Generic citations need an attribution, not merely identical quoted words.
             if(providers.isEmpty() && attribution==null &&
                 !attributionHeader(historyText(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue

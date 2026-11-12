@@ -39,8 +39,9 @@ import androidx.compose.ui.unit.dp
     var copies by remember(d.id){mutableStateOf(d.cc.isNotBlank() || d.bcc.isNotBlank())}
     var attachmentError by remember(d.id){mutableStateOf<String?>(null)}
     var confirmResend by remember(d.id){mutableStateOf(false)}
-    val colors=MaterialTheme.colorScheme.copy(surface=Color.White,background=Color.White,onSurface=Color(0xFF303030),onSurfaceVariant=Color(0xFF777777),surfaceContainer=Color.White)
+    val colors=MaterialTheme.colorScheme.copy(surface=Color.White,background=Color.White,onBackground=Color(0xFF303030),onSurface=Color(0xFF303030),onSurfaceVariant=Color(0xFF777777),surfaceContainer=Color.White)
     MaterialTheme(colorScheme=colors) {
+    SystemBarIcons(forceLightSurface=true)
     if(confirmResend)AlertDialog(onDismissRequest={confirmResend=false},title={Text("Повторить отправку?")},text={Text("Результат предыдущей попытки неизвестен. Если письмо уже доставлено, получатель получит ещё одну копию.")},
         confirmButton={TextButton(onClick={confirmResend=false;onSend()}){Text("Отправить ещё раз")}},dismissButton={TextButton(onClick={confirmResend=false}){Text("Отмена")}})
     DisposableEffect(Unit){onDispose{onNoticeAnchor(null)}}
@@ -67,7 +68,7 @@ import androidx.compose.ui.unit.dp
                 IconButton(onClick={more=true},enabled=!s.busy){Icon(Icons.Outlined.MoreVert,"Действия с черновиком")}
                 DropdownMenu(expanded=more,onDismissRequest={more=false}) {
                     DropdownMenuItem(text={Text("Сохранить черновик")},onClick={more=false;onBack()})
-                    DropdownMenuItem(text={Text("Ящик по умолчанию")},onClick={more=false;onDefaultAccount(d.accountId)})
+                    DropdownMenuItem(text={Text("Сделать ящиком по умолчанию")},onClick={more=false;onDefaultAccount(d.accountId)})
                     DropdownMenuItem(text={Text("Удалить черновик")},onClick={more=false;onDelete()})
                 }
             }
@@ -79,9 +80,9 @@ import androidx.compose.ui.unit.dp
             if(d.previousDeliveryUncertain)Text("Результат прошлой отправки неизвестен. Проверьте доставку перед повтором.",Modifier.padding(16.dp),color=colors.error)
             Box {
                 Row(Modifier.fillMaxWidth().heightIn(min=56.dp).clickable(enabled=!s.busy){senderMenu=true}.padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
-                    Text("От",Modifier.width(60.dp),color=colors.onSurfaceVariant)
-                    Text(s.accounts.find{it.id==d.accountId}?.email.orEmpty(),Modifier.weight(1f))
-                    Icon(Icons.Outlined.ExpandMore,"Выбрать отправителя")
+                    Text("От",Modifier.width(84.dp),color=colors.onSurfaceVariant,style=MaterialTheme.typography.bodyMedium)
+                    Text(s.accounts.find{it.id==d.accountId}?.email.orEmpty(),Modifier.weight(1f),color=colors.onSurface)
+                    Icon(Icons.Outlined.ExpandMore,"Выбрать отправителя",tint=colors.onSurfaceVariant)
                 }
                 DropdownMenu(expanded=senderMenu,onDismissRequest={senderMenu=false}){s.accounts.forEach{a->
                     DropdownMenuItem(text={Text(a.email+if(a.enabled)""else " · выключен")},enabled=a.enabled,onClick={onChange(d.copy(accountId=a.id));senderMenu=false})
@@ -109,8 +110,8 @@ import androidx.compose.ui.unit.dp
                         Text(if(quote.kind=="forward")"Пересылаемое письмо"else "Цитируемое письмо",Modifier.weight(1f),style=MaterialTheme.typography.labelLarge)
                         TextButton(onClick={onChange(d.copy(quoteIncluded=!d.quoteIncluded))},enabled=!s.busy){Text(if(d.quoteIncluded)"Исключить цитату"else "Включить цитату")}
                     }
-                    if(d.quoteIncluded)Row(Modifier.fillMaxWidth().padding(bottom=12.dp)) {
-                        Box(Modifier.width(2.dp).height(88.dp).background(Color(0xFFA58AC7)))
+                    if(d.quoteIncluded)Row(Modifier.fillMaxWidth().padding(bottom=12.dp).height(IntrinsicSize.Min)) {
+                        Box(Modifier.width(2.dp).fillMaxHeight().background(Color(0xFFA58AC7)))
                         Column(Modifier.padding(start=10.dp)) {
                             Text(quote.attribution(),style=MaterialTheme.typography.bodySmall,color=colors.onSurfaceVariant,maxLines=3,overflow=TextOverflow.Ellipsis)
                             Text(quote.plain,style=MaterialTheme.typography.bodyMedium,maxLines=6,overflow=TextOverflow.Ellipsis)
@@ -146,7 +147,7 @@ import androidx.compose.ui.unit.dp
 @Composable private fun ComposeDivider()=HorizontalDivider(color=Color(0xFFE9E9E9),thickness=1.dp)
 @Composable private fun ComposeField(label: String,value: String,onChange: (String)->Unit,enabled: Boolean,email: Boolean=false,trailing: @Composable ()->Unit={}) {
     Row(Modifier.fillMaxWidth().heightIn(min=56.dp).padding(start=16.dp,end=8.dp),verticalAlignment=Alignment.CenterVertically) {
-        Text(label,Modifier.width(70.dp),color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodyMedium)
+        Text(label,Modifier.width(84.dp),color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodyMedium)
         BasicTextField(value,onChange,enabled=enabled,singleLine=true,textStyle=MaterialTheme.typography.bodyLarge.copy(color=MaterialTheme.colorScheme.onSurface),
             keyboardOptions=KeyboardOptions(keyboardType=if(email)KeyboardType.Email else KeyboardType.Text),cursorBrush=SolidColor(MaterialTheme.colorScheme.primary),
             modifier=Modifier.weight(1f).padding(vertical=14.dp).semantics{contentDescription=label}.testTag("compose-$label"))
