@@ -95,4 +95,13 @@ class ReaderDocumentsTest {
         val original="[image: Google] Important message";MailContent.snippet(original)
         assertEquals("[image: Google] Important message",original)
     }
+    @Test fun sourceAndAdaptivePresentationsHaveIndependentCachedGeometry() {
+        val cache=ReaderDocumentCache();val adaptive=cache.prepare(key())
+        val original=cache.prepare(key().copy(originalScale=true))
+        assertNotSame(adaptive,original);assertTrue(original.originalScale)
+        assertFalse(adaptive.originalScale)
+        assertSame(adaptive,cache.prepare(key()))
+        assertSame(original,cache.prepare(key().copy(originalScale=true)))
+    }
+
 }

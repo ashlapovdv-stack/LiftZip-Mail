@@ -174,7 +174,7 @@ class HtmlMailDeviceTest {
             rule.waitUntil(15_000){requests.get()==1}
             rule.waitUntil(15_000){rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().isNotEmpty()}
             rule.waitUntil(10_000){greenPixels()>50}
-            rule.onNodeWithText("Показать изображения").assertDoesNotExist()
+            rule.onNodeWithContentDescription("Показать изображения").assertDoesNotExist()
             val pixels=rule.onRoot().captureToImage().toPixelMap()
             // Sample the document canvas inside the native scrollbar gutter.
             val canvas=pixels[pixels.width-(8*c.resources.displayMetrics.density).toInt(),(40*c.resources.displayMetrics.density).toInt()]

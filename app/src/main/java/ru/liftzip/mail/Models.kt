@@ -20,7 +20,7 @@ data class MailAccount(
 )
 
 data class Attachment(val path: String, val name: String, val mime: String, val size: Int,val contentId: String="")
-data class OutgoingFile(val uri: String, val name: String, val mime: String, val size: Long) : java.io.Serializable
+data class OutgoingFile(val uri: String, val name: String, val mime: String, val size: Long,val contentId: String="") : java.io.Serializable
 data class OpenedAttachment(val uri: String, val name: String, val mime: String) : java.io.Serializable
 data class InboxHistory(val total: Int? = null, val hasOlder: Boolean = true, val unread: Int? = null)
 data class InboxPage(val messages: List<MailItem>, val history: InboxHistory, val validity: Long? = messages.firstOrNull()?.validity)
@@ -35,7 +35,8 @@ data class MailItem(
     val delivery: String = "", val previewOnly: Boolean = false, val contentCached: Boolean = true,
     val forwarding: ForwardPlan? = null, val internetMessageId: String="", val sourceDraftId: String?=null, val editRevision: Long=0, val pendingDelete: Boolean=false, val cacheBytes: Long=0, val cachedAt: Long=0,
     val htmlBody: String="", val contentVersion: Int=0,
-    val answered: Boolean=false, val forwarded: Boolean=false, val responseTo: String?=null, val responseKind: String="", val cc: String=""
+    val answered: Boolean=false, val forwarded: Boolean=false, val responseTo: String?=null, val responseKind: String="", val cc: String="", val bcc: String="",
+    val headers: MessageHeaders?=null,val composer: ComposerSnapshot?=null
 )
 
 data class ComposeDraft(
@@ -43,7 +44,9 @@ data class ComposeDraft(
     val to: String = "", val subject: String = "", val body: String = "",
     val attachments: List<OutgoingFile> = emptyList(), val previousDeliveryUncertain: Boolean = false,
     val forwarding: ForwardPlan? = null, val internetMessageId: String="",val sourceDraftId: String?=null,val timestamp: Long=0,
-    val responseTo: String?=null,val responseKind: String=""
+    val responseTo: String?=null,val responseKind: String="",
+    val cc: String="",val bcc: String="",val quote: QuotedSource?=null,val quoteIncluded: Boolean=true,
+    val bodyHtml: String?=null
 ) : java.io.Serializable
 
 enum class MailFolder(val label: String, val key: String) {
@@ -62,11 +65,11 @@ object MailRules {
     fun recipients(text: String) = text.split(',', ';', '\n').map(String::trim).filter(String::isNotEmpty)
     fun validEmail(value: String) = Regex("^[^\\s@<>]+@[^\\s@<>]+\\.[^\\s@<>]+$").matches(value.trim())
     fun validateDraft(draft: ComposeDraft): String? = when {
-        draft.forwarding?.ready==false -> "Дождитесь подготовки вложений или удалите недоступные файлы."
-        recipients(draft.to).isEmpty() || recipients(draft.to).any { !validEmail(it) } -> "Проверьте адреса получателей. Разделяйте их запятой."
+        !draft.resourcesReady() -> "Дождитесь подготовки вложений или удалите недоступные файлы."
+        (recipients(draft.to)+recipients(draft.cc)+recipients(draft.bcc)).isEmpty() || (recipients(draft.to)+recipients(draft.cc)+recipients(draft.bcc)).any { !validEmail(it) } -> "Проверьте адреса получателей. Разделяйте их запятой."
         draft.subject.isBlank() -> "Добавьте тему письма."
         draft.subject.any { it == '\r' || it == '\n' } -> "Тема письма должна быть одной строкой."
-        draft.body.isBlank() -> "Добавьте текст письма."
+        !ComposerHtml.hasContent(draft) && (draft.quote==null || !draft.quoteIncluded) -> "Добавьте текст письма."
         draft.filesToSend().any { it.size > 20 * 1024 * 1024 } -> "Максимальный размер файла — 20 МБ."
         draft.filesToSend().sumOf { it.size.coerceAtLeast(0) } > 25 * 1024 * 1024 -> "Суммарный размер вложений — не более 25 МБ."
         else -> null

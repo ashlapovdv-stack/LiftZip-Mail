@@ -19,7 +19,7 @@ class QueueFiles(private val context: Context) {
                 input.use{source->target.outputStream().use{out->val bytes=ByteArray(64*1024);while(true){val count=source.read(bytes);if(count<0)break;size+=count;total+=count
                     require(size<=20L*1024*1024 && total<=25L*1024*1024){"До 20 МБ на файл и 25 МБ суммарно."};out.write(bytes,0,count)
                 }}}
-                OutgoingFile(FileProvider.getUriForFile(context,"${context.packageName}.attachments",target).toString(),file.name,file.mime,size)
+                OutgoingFile(FileProvider.getUriForFile(context,"${context.packageName}.attachments",target).toString(),file.name,file.mime,size,file.contentId)
             }
             return draft.copy(attachments=files)
         }catch(e: Exception){directory.deleteRecursively();throw e}

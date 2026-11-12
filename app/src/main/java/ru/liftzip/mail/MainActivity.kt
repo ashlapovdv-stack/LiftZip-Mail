@@ -126,29 +126,36 @@ private val Olive=Color(0xFF4C5D47)
 private val Paper=Color(0xFFF8F9F6)
 
 @Composable internal fun MailTheme(style: MailStyle=MailStyle.STANDARD,content: @Composable ()->Unit) {
-    val dark=isSystemInDarkTheme()
+    val dark=isSystemInDarkTheme() && !style.lightNature
     val colors=if(dark)darkColorScheme(primary=Color(0xFFBDD0B2),secondary=Color(0xFFD5D8B8),secondaryContainer=Color(0xFF354332),onSecondaryContainer=Color(0xFFE2EADB),surface=Color(0xFF171B16),background=Color(0xFF111510))
     else lightColorScheme(primary=Olive,secondary=Color(0xFF69775F),secondaryContainer=Color(0xFFE3E8DC),onSecondaryContainer=Color(0xFF293525),primaryContainer=Color(0xFFE4EBD9),surface=Paper,background=Paper,surfaceContainer=Color(0xFFF0F2EB))
+    val palette=style.palette
     val selected=if(style==MailStyle.STANDARD)colors else if(dark)colors.copy(
         primary=if(style==MailStyle.COZY)Color(0xFFD3B8FF)else Color(0xFFA4C8FF),onPrimary=Color(0xFF172338),
         primaryContainer=if(style==MailStyle.COZY)Color(0xFF45315F)else Color(0xFF203F65),onPrimaryContainer=Color(0xFFF0EAFF),
         secondaryContainer=Color(0xFF303B50),onSecondaryContainer=Color(0xFFE2EAFF),surface=Color(0xFF171D29),background=Color(0xFF171D29),surfaceContainer=Color(0xFF242C3A))
-    else colors.copy(primary=style.accent,onPrimary=Color.White,primaryContainer=if(style==MailStyle.COZY)Color(0xFFEFE6FF)else Color(0xFFDBE8FF),
-        onPrimaryContainer=if(style==MailStyle.COZY)Color(0xFF50327C)else Color(0xFF163F81),
-        secondaryContainer=if(style==MailStyle.COZY)Color(0xFFF0EAF7)else Color(0xFFDFEAFE),onSecondaryContainer=Color(0xFF344661),
-        surface=if(style==MailStyle.COZY)Color(0xFFFFF8EF)else Color(0xFFF0F5FF),background=if(style==MailStyle.COZY)Color(0xFFFFF8EF)else Color(0xFFF0F5FF),surfaceContainer=Color(0xFFFFFEFC))
+    else colors.copy(primary=palette.accent,onPrimary=Color.White,primaryContainer=palette.container,
+        onPrimaryContainer=palette.onContainer,secondary=palette.accent,
+        secondaryContainer=palette.secondaryContainer,onSecondaryContainer=palette.onSecondaryContainer,
+        surface=palette.surface,background=palette.surface,surfaceContainer=palette.card)
     CompositionLocalProvider(LocalMailStyle provides style){MaterialTheme(colorScheme=selected,content=content)}
 }
 
 @Composable private fun MailApp(vm: MailViewModel=viewModel(),notificationRequest: NotificationOpenRequest?=null,onNotificationConsumed: (String)->Unit={}) {
     val s by vm.state.collectAsStateWithLifecycle()
+    val context=LocalContext.current
     var route by rememberSaveable { mutableStateOf("inbox") }
     var currentAccount by rememberSaveable { mutableStateOf<String?>(null) }
     var folder by rememberSaveable { mutableStateOf(MailFolder.INBOX) }
     var serverPath by rememberSaveable { mutableStateOf<String?>(null) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var notificationFallback by remember { mutableStateOf<MailItem?>(null) }
-    var draft by rememberSaveable { mutableStateOf<ComposeDraft?>(null) }
+    val editorSession=remember{ComposeEditorSession()}
+    val draftCache=remember(context.applicationContext){DraftSessionCache(context.applicationContext)}
+    val draftSaver=remember(draftCache){draftSessionSaver(draftCache,editorSession)}
+    val draftState=key("compose-session-v1"){rememberSaveable(stateSaver=draftSaver){mutableStateOf<ComposeDraft?>(null)}}
+    var draft by draftState
+    SideEffect{if(draft==null)draftCache.clear()}
     var preview by rememberSaveable { mutableStateOf<OpenedAttachment?>(null) }
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
     var historyReturn by rememberSaveable { mutableStateOf("inbox") }
@@ -156,7 +163,6 @@ private val Paper=Color(0xFFF8F9F6)
     val savedScreens=rememberSaveableStateHolder()
     val inboxDrawer=rememberDrawerState(DrawerValue.Closed)
     val snack=remember { SnackbarHostState() }
-    val context=LocalContext.current
     val density=LocalDensity.current
     var rootHeight by remember{mutableIntStateOf(0)}
     var noticeAnchor by remember{mutableStateOf<NoticeAnchor?>(null)}
@@ -204,7 +210,7 @@ private val Paper=Color(0xFFF8F9F6)
     LaunchedEffect(notificationRequest?.token,s.loaded) {
         val request=notificationRequest
         if(s.loaded && request!=null) {
-            if(route=="compose" && !s.busy)draft?.let{vm.preserveDraft(it)}
+            if(route=="compose" && !s.busy)draft?.let{vm.preserveDraft(editorSession.snapshot(it))}
             val id=request.destination.messageId
             if(id==null){serverPath=null;currentAccount=null;folder=MailFolder.UNREAD;goInbox()}
             else {
@@ -224,12 +230,12 @@ private val Paper=Color(0xFFF8F9F6)
         if(route=="inbox")vm.showFolders(folder,currentAccount,serverPath)
     }
     RouteBackHandler(route,onPreview={preview=null;route="reader"},onMessage={goInbox()},onCompose={
-        val d=draft
-        if(d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))
-            vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}
+        val d=draft?.let(editorSession::snapshot)
+        if(d!=null && (ComposerHtml.hasContent(d)||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))
+            editorSession.flush(d){latest->vm.saveDraft(latest){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}}
         else {draft=null;goInbox()}
     },onHome={systemInbox()})
-    if(route!="inbox" || !s.loaded || s.accounts.isEmpty())SystemBarIcons()
+    if(route!="inbox" || !s.loaded || s.accounts.isEmpty())SystemBarIcons(forceLightSurface=route=="compose")
     Scaffold(modifier=Modifier.onSizeChanged{rootHeight=it.height},snackbarHost={
         SnackbarHost(snack,Modifier.fillMaxWidth().padding(start=16.dp,end=16.dp,bottom=noticeBottom)){ServiceSnackbar(it)}
     },contentWindowInsets=WindowInsets(0,0,0,0)) { outer->
@@ -314,9 +320,9 @@ private val Paper=Color(0xFFF8F9F6)
                     val editor=draft!!
                     val stored=s.messages.find{it.id==editor.id}
                     val active=editor.copy(forwarding=s.forwarding[editor.id]?:stored?.forwarding?:editor.forwarding)
-                    ComposeScreen(active,s,onChange={draft=it},onBack={vm.saveDraft(active){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
-                        onDelete={vm.deleteDraft(active.id){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},onSend={vm.send(active){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
-                        onNoticeAnchor={anchor("compose",it)},
+                    ComposeScreen(active,s,editorSession=editorSession,onChange={if(route=="compose" && draft?.id==it.id)draft=it},onBack={value->vm.saveDraft(value){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
+                        onDelete={vm.deleteDraft(active.id){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},onSend={value->vm.send(value){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
+                        onNoticeAnchor={anchor("compose",it)},onDefaultAccount=vm::setDefaultAccount,
                         onRetryForward={vm.retryForward(active.id)},onRemoveForward={vm.removeForwardFile(active.id,it)})
                 }
                 route=="reader" -> {
@@ -333,8 +339,7 @@ private val Paper=Color(0xFFF8F9F6)
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
                         onSpam={vm.spamMessages(setOf(message.id),SpamRules.junk(message)){moved->if(message.id in moved && route=="reader" && selected==message.id)goInbox()}},
-                        onReply={compose(ComposeDraft(accountId=message.accountId,to=message.senderEmail,responseTo=message.id,responseKind="reply",
-                            subject=if(message.subject.startsWith("Re:",true))message.subject else "Re: ${message.subject}",body="\n\n──────────\n${message.sender} пишет:\n${message.body}"))},
+                        onReply={vm.reply(message){ready->if(route=="reader" && selected==message.id)compose(ready)else vm.notice("Ответ подготовлен в черновиках")}},
                         loadingError=s.openingError?.takeIf{it.first==message.id}?.second,onRetryLoad={vm.openMessage(message.id)},onForward={
                             val senderId=SenderRules.forNewMessage(s.accounts,s.defaultAccountId,message.accountId)?:message.accountId
                             vm.forward(message,senderId){ready->if(route=="reader" && selected==message.id)compose(ready)else vm.notice("Пересылка подготовлена в черновиках")}
@@ -521,13 +526,14 @@ private val Paper=Color(0xFFF8F9F6)
         scrollableContent=scrollable
         if(!scrollable){chrome.show();controlsProgress.floatValue=1f}
     }
-    val forceControls by rememberUpdatedState(selectionMode || !s.autoHidePanels || scrollableContent==false)
+    val forceControls by rememberUpdatedState(!s.autoHidePanels || scrollableContent==false)
     LaunchedEffect(selectionMode){if(!selectionMode)selectionMenu=false}
     LaunchedEffect(selectionMode){snapshotFlow{if(controlsProgress.floatValue>0.02f)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
     val scrollControls=remember(memory,chrome,focus,keyboard){InboxScrollConnection(chrome,controlsProgress,
         forced={forceControls},canPull={!memory.list.canScrollBackward},refreshing={latestRefreshing},
         onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true},listState=memory.list)}
-    LaunchedEffect(selectionMode,drawer.currentValue,s.autoHidePanels){if(selectionMode || !s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsProgress.floatValue=1f}}
+    // Selecting rows must not reveal hidden panels and move the list underneath the finger.
+    LaunchedEffect(drawer.currentValue,s.autoHidePanels){if(!s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsProgress.floatValue=1f}}
 
     val current=s.accounts.find{it.id==accountId}
     val selectedAccounts=remember(s.accounts,accountId){s.accounts.filter{if(accountId==null)it.enabled else it.id==accountId}}
@@ -541,6 +547,22 @@ private val Paper=Color(0xFFF8F9F6)
     val selectedRows=visible.filter{it.id in selected}
     val canSpam=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,false)}
     val canRestore=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,true)}
+    val selectionActions: @Composable ()->Unit = {
+        TopAppBar(modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.height(DecorativeHeaderHeight),
+                    windowInsets=WindowInsets(0,0,0,0),title={Text("Выбрано: ${selected.size}",maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
+                    IconButton(onClick={deleting=selected.toSet()},enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить выбранные письма")}
+                    Box {
+                        IconButton(onClick={selectionMenu=true},enabled=!s.busy){Icon(Icons.Outlined.MoreVert,"Действия с выбранными письмами")}
+                        DropdownMenu(expanded=selectionMenu,onDismissRequest={selectionMenu=false}) {
+                            DropdownMenuItem(text={Text("Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={selectionMenu=false;checked=ArrayList(visibleIds)})
+                            DropdownMenuItem(text={Text("Отметить прочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailRead,null)},onClick={selectionMenu=false;mark(false)})
+                            DropdownMenuItem(text={Text("Отметить непрочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailUnread,null)},onClick={selectionMenu=false;mark(true)})
+                            if(canSpam)DropdownMenuItem(text={Text("В спам")},leadingIcon={Icon(Icons.Outlined.Report,null)},onClick={selectionMenu=false;spam(false)})
+                            if(canRestore)DropdownMenuItem(text={Text("Не спам · во Входящие")},leadingIcon={Icon(Icons.Outlined.MoveToInbox,null)},onClick={selectionMenu=false;spam(true)})
+                        }
+                    }
+                })
+    }
     deleting?.let{ids->
         val rows=s.messages.filter{it.id in ids}
         AlertDialog(onDismissRequest={deleting=null},title={Text("Удалить выбранные письма?")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -587,19 +609,8 @@ private val Paper=Color(0xFFF8F9F6)
         InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},endInset=safeBottom,nearEnd=nearEndValue,
             modifier=Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),header={
             Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).testTag("inbox-header")) {
-                if(selectionMode)TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Text("Выбрано: ${selected.size}",maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
-                    IconButton(onClick={deleting=selected.toSet()},enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить выбранные письма")}
-                    Box {
-                        IconButton(onClick={selectionMenu=true},enabled=!s.busy){Icon(Icons.Outlined.MoreVert,"Действия с выбранными письмами")}
-                        DropdownMenu(expanded=selectionMenu,onDismissRequest={selectionMenu=false}) {
-                            DropdownMenuItem(text={Text("Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={selectionMenu=false;checked=ArrayList(visibleIds)})
-                            DropdownMenuItem(text={Text("Отметить прочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailRead,null)},onClick={selectionMenu=false;mark(false)})
-                            DropdownMenuItem(text={Text("Отметить непрочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailUnread,null)},onClick={selectionMenu=false;mark(true)})
-                            if(canSpam)DropdownMenuItem(text={Text("В спам")},leadingIcon={Icon(Icons.Outlined.Report,null)},onClick={selectionMenu=false;spam(false)})
-                            if(canRestore)DropdownMenuItem(text={Text("Не спам · во Входящие")},leadingIcon={Icon(Icons.Outlined.MoveToInbox,null)},onClick={selectionMenu=false;spam(true)})
-                        }
-                    }
-                }) else if(style!=MailStyle.STANDARD)DecorativeHeader(viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,
+                if(selectionMode)TopAppBar(modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.height(DecorativeHeaderHeight),
+                    windowInsets=WindowInsets(0,0,0,0),title={}) else if(style!=MailStyle.STANDARD)DecorativeHeader(viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,
                     current?.let{it.name+if(!it.enabled)" · выключен"else ""}?:"Все ящики",{scope.launch{drawer.open()}})
                 else TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Column{Text(viewedFolders.firstOrNull()?.takeIf{serverPath!=null}?.title?:folder.label,fontWeight=FontWeight.Bold);Text((current?.name?:"Все ящики")+if(current?.enabled==false)" · выключен" else "",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}},
                     navigationIcon={IconButton(onClick={scope.launch{drawer.open()}}){Icon(Icons.Outlined.Menu,"Выбрать ящик")}})
@@ -624,12 +635,15 @@ private val Paper=Color(0xFFF8F9F6)
             }
         },bottom={alpha->
             val fade=alpha
+            val composeButtonSize=56.dp
             Column(Modifier.fillMaxWidth().testTag("inbox-bottom")) {
-                if(!selectionMode)Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp),contentAlignment=Alignment.CenterEnd) {
-                    InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp)) {
+                // Keep the action slot when selection hides its button; reducing the
+                // list's end padding would move rows at the bottom of the mailbox.
+                Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp).height(composeButtonSize),contentAlignment=Alignment.CenterEnd) {
+                    if(!selectionMode)InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp)) {
                         FloatingActionButton(onClick=onCompose,shape=CircleShape,
                             containerColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.primaryContainer else style.accent,
-                            contentColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.onPrimaryContainer else Color.White,modifier=Modifier.semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top}) {Icon(Icons.Outlined.Edit,null)}
+                            contentColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.onPrimaryContainer else Color.White,modifier=Modifier.size(composeButtonSize).semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top}) {Icon(Icons.Outlined.Edit,null)}
                     }
                 }
                 Column(Modifier.fillMaxWidth().graphicsLayer{this.alpha=fade().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
@@ -643,6 +657,11 @@ private val Paper=Color(0xFFF8F9F6)
                 }
             }
         },overlay={
+            if(selectionMode)Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).testTag("inbox-selection-actions")) {
+                selectionActions()
+            }
+
             val showTop by remember(memory){derivedStateOf {
                 val state=memory.list;val info=state.layoutInfo
                 val row=info.visibleItemsInfo.firstOrNull()?.size?:1
@@ -709,9 +728,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         .combinedClickable(onClick=onOpen,onLongClick=onSelect,onLongClickLabel="Выделить письмо")
         .semantics{stateDescription=if(m.unread)"Не прочитано" else "Прочитано";selected=checked}) {
         Row(Modifier.weight(1f).padding(start=14.dp,top=7.dp,bottom=7.dp,end=8.dp),verticalAlignment=Alignment.CenterVertically) {
-            if(selectionMode)Checkbox(checked=checked,onCheckedChange={onSelect()},modifier=Modifier.size(44.dp))else {
-                val color=remember(m.sender){listOf(Color(0xFFE6EAD8),Color(0xFFE8E2D7),Color(0xFFDCE7E9),Color(0xFFEBDDDD))[(m.sender.hashCode() and Int.MAX_VALUE)%4]}
-                Surface(shape=CircleShape,color=color,modifier=Modifier.size(38.dp)){Box(contentAlignment=Alignment.Center){Text(m.sender.take(1).uppercase(),fontWeight=FontWeight.Medium,color=Color(0xFF475042),fontSize=18.sp)}}
+            Box(Modifier.size(38.dp),contentAlignment=Alignment.Center) {
+                if(selectionMode)Checkbox(checked=checked,onCheckedChange={onSelect()},modifier=Modifier.fillMaxSize())else {
+                    val color=remember(m.sender){listOf(Color(0xFFE6EAD8),Color(0xFFE8E2D7),Color(0xFFDCE7E9),Color(0xFFEBDDDD))[(m.sender.hashCode() and Int.MAX_VALUE)%4]}
+                    Surface(shape=CircleShape,color=color,modifier=Modifier.fillMaxSize()){Box(contentAlignment=Alignment.Center){Text(m.sender.take(1).uppercase(),fontWeight=FontWeight.Medium,color=Color(0xFF475042),fontSize=18.sp)}}
+                }
             }
             Column(Modifier.weight(1f).padding(start=10.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
@@ -732,8 +753,10 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 }
                 if(m.delivery=="uncertain")Text("Результат отправки неизвестен",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.labelSmall)
             }
-            if(!selectionMode)IconButton(onClick=onStar,enabled=!busy,modifier=Modifier.size(36.dp)) {
-                Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,if(m.starred)"Убрать из избранного" else "В избранное",Modifier.size(20.dp),tint=if(m.starred)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+            Box(Modifier.size(36.dp)) {
+                if(!selectionMode)IconButton(onClick=onStar,enabled=!busy,modifier=Modifier.fillMaxSize()) {
+                    Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,if(m.starred)"Убрать из избранного" else "В избранное",Modifier.size(20.dp),tint=if(m.starred)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                }
             }
         }
     }
@@ -748,26 +771,24 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         onSurface=Color(0xFF191919),onBackground=Color(0xFF191919),onSurfaceVariant=Color(0xFF4A4A4A),
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
-    val analysisKey=remember(m.id,m.accountId,m.validity,m.contentVersion,m.body,m.htmlBody){
-        ReaderAnalysisCache.Key("${m.accountId}:${m.id}:${m.validity}",m.body,m.htmlBody,m.contentVersion)
-    }
-    val conversation by key(analysisKey){produceState(ReaderDocuments.analysis.peek(analysisKey),analysisKey) {
-        value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.analysis.prepare(analysisKey)}
-    }}
+    val content by rememberReaderContent(m)
     // Observe the async result in the screen composition, before passing it to Scaffold subcomposition.
-    val currentConversation=conversation
-    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","reader state parsed=${currentConversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
+    val currentContent=content
+    val identity="${m.accountId}:${m.id}:${m.validity}"
+    var contentPresented by remember(identity){mutableStateOf(false)}
+    val showLoading=rememberReaderProgress(identity,loadingError==null && (!contentPresented || busy))
+    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","reader state parsed=${currentContent!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
     var messageMenu by remember(m.id){mutableStateOf(false)}
     var actionsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
+    var originalHtmlScale by rememberSaveable(m.id){mutableStateOf(false)}
+    var expandedHistoryBounds by remember(m.id){mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
-    var historyExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
-    var originalTextExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
-    var originalHtmlExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
-    val rendererFailed=remember(m.id,m.contentVersion){mutableStateOf(false)}
+    var historyExpanded by remember(m.id,currentContent?.message?.body,currentContent?.message?.htmlBody){mutableStateOf(false)}
+    val rendererFailed=remember(m.id,currentContent?.message?.contentVersion){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var pinchActive by remember(m.id){mutableStateOf(false)}
     val readerContext=LocalContext.current
@@ -802,7 +823,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             // Measured overlay content; its space is represented inside the HTML document.
             Spacer(Modifier.height(with(LocalDensity.current){scroll.toolbar.height.toDp()}))
             Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
-            if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().combinedClickable(onClick={subjectExpanded=!subjectExpanded},onLongClick={
                 val clipboard=readerContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("Тема письма",HeaderText.decode(m.subject)))
@@ -827,7 +847,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 if(m.attachments.isNotEmpty())key(m.id){AttachmentThumbnails(m.attachments,!busy,onThumbnail,onOpenAttachment,onDownload,
                     busyPaths=m.attachments.filter{"${m.id}|${it.path}" in attachmentBusy}.map{it.path}.toSet())}
                 if(m.outgoing.isNotEmpty()) {
-                    val local=m.outgoing.map{file->Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt())}
+                    val local=m.outgoing.filter{it.contentId.isBlank()}.map{file->Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt())}
                     key(m.id,"local"){AttachmentThumbnails(local,!busy,{file->OpenedAttachment(file.path,file.name,AttachmentRules.mime(file.name,file.mime))},
                         onOpen={file->m.outgoing.firstOrNull{it.uri==file.path}?.let(onOpenLocal)})}
                 }
@@ -838,6 +858,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        if((currentContent?.message?:m).htmlBody.isNotBlank() && !rendererFailed.value)SmallFloatingActionButton(
+            onClick={originalHtmlScale=!originalHtmlScale},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,
+            modifier=Modifier.semantics{contentDescription=if(originalHtmlScale)"Подогнать HTML по ширине"else "Оригинальный масштаб HTML";stateDescription=if(originalHtmlScale)"100%"else "По ширине"}) {
+            Icon(if(originalHtmlScale)Icons.Outlined.FitScreen else Icons.Outlined.AspectRatio,null)
+        }
         if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
@@ -847,7 +872,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
                 val outsideContent=down.position.y+readerOrigin.y !in scroll.contentTop..scroll.contentBottom
-                val view=scroll.view?.takeIf{it.interactionEnabled}
+                val overHistory=expandedHistoryBounds?.contains(down.position+readerOrigin)==true
+                val view=scroll.view?.takeIf{it.interactionEnabled && !overHistory}
                 var pinch=false
                 try {
                     do {
@@ -878,13 +904,13 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         }) {
         Column(Modifier.fillMaxSize().testTag("reader-viewport").onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record {"scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive"}}
             .nestedScroll(scroll.connection).verticalScroll(outer,enabled=!pinchActive)) {
-            val parsed=currentConversation
-            if(m.previewOnly || !m.contentCached || parsed==null) {
+            val prepared=currentContent
+            if(prepared==null) {
                 messageHeader()
                 if(loadingError!=null)Column(Modifier.padding(16.dp)) {
                     Text("Не удалось загрузить письмо: $loadingError",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick=onRetryLoad){Text("Повторить")}
-                } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             else if(scroll.toolbar.height<=0) {
                 // Native document insets depend on the measured toolbar. Starting
@@ -892,40 +918,41 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 messageHeader()
             }
             else {
-                val (parsed,history)=parsed
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                val source=prepared.message
+                val parsed=prepared.conversation
+                val history=prepared.history
+                MailHtmlBody(source,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
-                },onPinchChanged=updatePinch,rendererFailed=rendererFailed)
+                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true},afterContent={
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
                 if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
                     HistoryToggle(parsed.messages.size,historyExpanded,{historyExpanded=!historyExpanded})
                     if(historyExpanded) {
-                        QuotedHistoryContent(parsed)
-                        TextButton(onClick={originalTextExpanded=!originalTextExpanded}) {
-                            Text(if(originalTextExpanded)"Скрыть исходный текст" else "Показать полный исходный текст")
+                        DisposableEffect(m.id){onDispose{expandedHistoryBounds=null}}
+                        Column(Modifier.fillMaxWidth().onGloballyPositioned{coordinates->
+                            expandedHistoryBounds=androidx.compose.ui.geometry.Rect(coordinates.positionInWindow(),androidx.compose.ui.geometry.Size(coordinates.size.width.toFloat(),coordinates.size.height.toFloat()))
+                        }) {
+                        if(history.quotedHtml.isNotBlank()) {
+                            val quoted=source.copy(id=source.id+":quoted-html",htmlBody=history.quotedHtml,body=parsed.quotedBody.orEmpty())
+                            MailHtmlBody(quoted,quoted.body,HtmlMail.noHistory(quoted.htmlBody),onInline,onLink,onPinchChanged=updatePinch,
+                                originalScale=originalHtmlScale,parentScroll=scroll)
+                        } else {
+                            QuotedHistoryContent(parsed)
                         }
-                        if(originalTextExpanded)androidx.compose.foundation.text.selection.SelectionContainer {
-                            Text(parsed.original,style=MaterialTheme.typography.bodyMedium,
-                                modifier=Modifier.fillMaxWidth().padding(vertical=12.dp))
-                        }
-                        if(m.htmlBody.isNotBlank()) {
-                            TextButton(onClick={originalHtmlExpanded=!originalHtmlExpanded}) {
-                                Text(if(originalHtmlExpanded)"Скрыть оригинальное HTML-письмо" else "Показать оригинальное HTML-письмо")
-                            }
-                            // Independent renderer: never replace the main document or attach
-                            // another WebView to its scroll/zoom/header coordinator.
-                            if(originalHtmlExpanded)MailHtmlBody(m,parsed.original,HtmlMail.noHistory(m.htmlBody),onInline,onLink)
                         }
                     }
                 }
+                })
             }
             Spacer(Modifier.height(100.dp))
         }
         toolbar()
+        if(showLoading)CircularProgressIndicator(Modifier.align(Alignment.Center).size(24.dp)
+            .testTag("reader-opening-progress").semantics{contentDescription="Загрузка письма"},strokeWidth=2.dp)
         val showHorizontal by remember(scroll){derivedStateOf{scroll.horizontal.let{it.range>it.extent && it.extent>0}}}
         if(htmlZoomed && showHorizontal)Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start=4.dp,end=80.dp,bottom=4.dp).height(4.dp).testTag("reader-horizontal-scrollbar").drawBehind {
             val horizontal=scroll.horizontal
@@ -1058,95 +1085,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             },enabled=!formBusy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(formBusy)"Подождите…" else if(authKind==AuthKind.GOOGLE)"Подключить через Google" else if(initial==null)"Проверить и подключить" else "Проверить и сохранить")}
             Text("Проверим входящую и исходящую почту без отправки писем.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(18.dp))
-        }
-    }
-}
-
-@Composable private fun ComposeScreen(d: ComposeDraft,s: UiState,onChange: (ComposeDraft)->Unit,onBack: ()->Unit,onDelete: ()->Unit,onSend: ()->Unit,
-    onRetryForward: ()->Unit,onRemoveForward: (String)->Unit,onNoticeAnchor: (Float?)->Unit) {
-    val context=LocalContext.current
-    var senderMenu by remember { mutableStateOf(false) }
-    var attachmentError by remember { mutableStateOf<String?>(null) }
-    var confirmResend by remember { mutableStateOf(false) }
-    if(confirmResend)AlertDialog(onDismissRequest={confirmResend=false},title={Text("Повторить отправку?")},text={Text("Результат предыдущей попытки неизвестен. Если письмо уже доставлено, получатель получит ещё одну копию.")},
-        confirmButton={TextButton(onClick={confirmResend=false;onSend()}){Text("Отправить ещё раз")}},dismissButton={TextButton(onClick={confirmResend=false}){Text("Отмена")}})
-    DisposableEffect(Unit){onDispose{onNoticeAnchor(null)}}
-    val addFiles=rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()){uris->
-        val files=uris.mapNotNull { uri->runCatching {
-            context.contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            var name="Вложение";var size=-1L
-            context.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE),null,null,null)?.use{c->if(c.moveToFirst()){name=c.getString(0)?:name;if(!c.isNull(1))size=c.getLong(1)}}
-            OutgoingFile(uri.toString(),name,context.contentResolver.getType(uri)?:"application/octet-stream",size)
-        }.getOrNull() }
-        if(files.size!=uris.size)attachmentError="Некоторые файлы недоступны. Попробуйте выбрать их из папки на устройстве."
-        else if(files.any{it.size>20L*1024*1024}||(d.filesToSend()+files).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
-        else onChange(d.copy(attachments=(d.attachments+files).distinctBy{it.uri}))
-    }
-    Scaffold(topBar={TopAppBar(title={Text("Новое письмо")},navigationIcon={IconButton(onClick=onBack,enabled=!s.busy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Сохранить черновик и закрыть")}},actions={
-        IconButton(onClick={addFiles.launch(arrayOf("*/*"))},enabled=!s.busy){Icon(Icons.Outlined.AttachFile,"Добавить вложения")}
-        IconButton(onClick=onDelete,enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить черновик")}
-    })},bottomBar={Surface(tonalElevation=3.dp,modifier=Modifier.onGloballyPositioned{onNoticeAnchor(it.boundsInRoot().top)}){Row(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(14.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-        OutlinedButton(onClick=onBack,enabled=!s.busy,modifier=Modifier.weight(1f)){Text("Сохранить")}
-        Button(onClick={if(d.previousDeliveryUncertain)confirmResend=true else onSend()},enabled=!s.busy && d.forwarding?.ready!=false,modifier=Modifier.weight(1f)){Icon(Icons.AutoMirrored.Outlined.Send,null);Spacer(Modifier.width(8.dp));Text(if(s.busy)"Подождите…" else "Отправить")}
-    }}}) { padding->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            if(d.previousDeliveryUncertain)InfoCard("Результат прошлой отправки неизвестен. Проверьте доставку перед повтором.")
-            Box(Modifier.padding(horizontal=8.dp)) {
-                TextButton(onClick={senderMenu=true},enabled=!s.busy){Text("От: ${s.accounts.find{it.id==d.accountId}?.email.orEmpty()}");Icon(Icons.Outlined.ExpandMore,null)}
-                DropdownMenu(expanded=senderMenu,onDismissRequest={senderMenu=false}){s.accounts.forEach{a->DropdownMenuItem(text={Text(a.email+if(a.enabled)"" else " · выключен")},enabled=a.enabled,onClick={onChange(d.copy(accountId=a.id));senderMenu=false})}}
-            }
-            OutlinedTextField(d.to,{onChange(d.copy(to=it))},label={Text("Кому")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
-            OutlinedTextField(d.subject,{onChange(d.copy(subject=it))},label={Text("Тема")},modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
-            d.forwarding?.takeIf{it.files.isNotEmpty()}?.let { plan->
-                Column(Modifier.fillMaxWidth().padding(horizontal=20.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                    Text(if(plan.ready)"Вложения готовы · ${plan.files.size}" else "Подготовка вложений · ${plan.files.count{it.status==ForwardStatus.READY}} из ${plan.files.size}",style=MaterialTheme.typography.labelLarge)
-                    if(!plan.ready)Text("Можно вводить адрес и текст. Отправка станет доступна, когда файлы будут готовы.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                    plan.files.forEach{file->ForwardFileCard(file,!s.busy,onRemove={onRemoveForward(file.key)})}
-                    if(plan.files.any{it.status==ForwardStatus.ERROR})TextButton(onClick=onRetryForward,enabled=!s.busy){Icon(Icons.Outlined.Refresh,null);Spacer(Modifier.width(6.dp));Text("Повторить подготовку")}
-                }
-            }
-            HorizontalDivider(Modifier.padding(top=4.dp))
-            BasicTextField(value=d.body,onValueChange={onChange(d.copy(body=it))},enabled=!s.busy,
-                textStyle=MaterialTheme.typography.bodyLarge.copy(color=MaterialTheme.colorScheme.onSurface),cursorBrush=SolidColor(MaterialTheme.colorScheme.primary),
-                keyboardOptions=KeyboardOptions(capitalization=KeyboardCapitalization.Sentences),
-                modifier=Modifier.fillMaxWidth().heightIn(min=320.dp).padding(horizontal=14.dp,vertical=12.dp),
-                decorationBox={inner->Box(Modifier.fillMaxWidth()){if(d.body.isEmpty())Text("Текст письма",color=MaterialTheme.colorScheme.onSurfaceVariant);inner()}})
-            Column(Modifier.padding(horizontal=20.dp)) {
-                d.attachments.forEach { file->InputChip(selected=false,onClick={runCatching{context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(file.uri),AttachmentRules.mime(file.name,file.mime)).apply{clipData=ClipData.newRawUri(file.name,Uri.parse(file.uri))}.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))}.onFailure{attachmentError="Не удалось открыть файл для просмотра."}},label={Text(file.name,maxLines=1,overflow=TextOverflow.Ellipsis)},trailingIcon={IconButton(onClick={onChange(d.copy(attachments=d.attachments.filter{it.uri!=file.uri}))},enabled=!s.busy,modifier=Modifier.size(22.dp)){Icon(Icons.Outlined.Close,"Удалить вложение",Modifier.size(16.dp))}}) }
-                attachmentError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
-            }
-            Spacer(Modifier.height(16.dp))
-        }
-    }
-}
-
-@Composable private fun ForwardFileCard(file: ForwardFile,enabled: Boolean,onRemove: ()->Unit) {
-    val context=LocalContext.current
-    var openError by remember(file.key){mutableStateOf(false)}
-    Surface(shape=RoundedCornerShape(14.dp),color=MaterialTheme.colorScheme.surfaceContainer,modifier=Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(start=12.dp,top=8.dp,end=4.dp,bottom=8.dp)) {
-            Row(verticalAlignment=Alignment.CenterVertically) {
-                Icon(if(file.status==ForwardStatus.READY)Icons.Outlined.CheckCircleOutline else Icons.Outlined.AttachFile,null,Modifier.size(20.dp))
-                Column(Modifier.weight(1f).padding(horizontal=8.dp)) {
-                    Text(file.name,style=MaterialTheme.typography.bodyMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
-                    Text(when(file.status){
-                        ForwardStatus.WAITING->"В очереди"
-                        ForwardStatus.DOWNLOADING->"Подготовлено ${file.bytes/1024} КБ"+(if(file.size>0)" из ${file.size/1024} КБ" else "")
-                        ForwardStatus.READY->"Готово · ${(file.prepared!!.size/1024).coerceAtLeast(1)} КБ"
-                        ForwardStatus.ERROR->file.error
-                    },style=MaterialTheme.typography.labelSmall,color=if(file.status==ForwardStatus.ERROR)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if(file.prepared!=null)IconButton(onClick={runCatching{
-                    val uri=Uri.parse(file.prepared.uri)
-                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,file.prepared.mime).apply{clipData=ClipData.newRawUri(file.name,uri)}.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-                }.onFailure{openError=true}},enabled=enabled){Icon(Icons.AutoMirrored.Outlined.OpenInNew,"Открыть ${file.name}")}
-                IconButton(onClick=onRemove,enabled=enabled){Icon(Icons.Outlined.Close,"Удалить ${file.name} из пересылки")}
-            }
-            if(file.status==ForwardStatus.DOWNLOADING) {
-                if(file.size>0)LinearProgressIndicator(progress={(file.bytes.toFloat()/file.size).coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth().padding(end=8.dp))
-                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(end=8.dp))
-            }
-            if(openError)Text("Не удалось открыть файл. Установите приложение для этого формата.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
         }
     }
 }

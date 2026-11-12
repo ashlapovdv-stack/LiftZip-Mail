@@ -12,7 +12,7 @@ class ReaderPreparationTest {
     }
     @Test fun changedSourceAccountOrParserCannotReuseAnalysis() {
         val cache=ReaderAnalysisCache();val first=cache.prepare(key())
-        for(changed in listOf(key().copy(body="Другой ответ"),key().copy(html="<p>Иное письмо</p>"),key().copy(identity="other:m:7"),key().copy(contentVersion=2),key().copy(parserVersion=2))) {
+        for(changed in listOf(key().copy(body="Другой ответ"),key().copy(html="<p>Иное письмо</p>"),key().copy(identity="other:m:7"),key().copy(contentVersion=2),key().copy(parserVersion=key().parserVersion+1))) {
             assertNull(cache.peek(changed));assertNotSame(first,cache.prepare(changed))
         }
     }

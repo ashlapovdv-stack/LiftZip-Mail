@@ -25,12 +25,12 @@ class ReaderScroll(val outer: ScrollState) {
     var contentTop=0f
     var contentBottom=0f
     var viewportTop=0
-        set(value){bodyAnchor+=field-value;field=value}
+        set(value){val shift=field-value;windows.replaceAll{_,anchor->anchor+shift};field=value}
     var viewportHeight by mutableIntStateOf(0)
     var view: MailHtmlWebView?=null
     var horizontal by mutableStateOf(HorizontalScrollMetrics())
-    private var bodyAnchor=0
-    fun position(top: Int){bodyAnchor=outer.value+top-viewportTop}
+    private val windows=LinkedHashMap<MailHtmlWebView,Int>()
+    fun position(body: MailHtmlWebView,top: Int){if(body in windows)windows[body]=outer.value+top-viewportTop}
     val connection=object: NestedScrollConnection {
         override fun onPreScroll(available: Offset,source: NestedScrollSource): Offset {
             if(view==null || pinchActive)return Offset.Zero
@@ -39,22 +39,28 @@ class ReaderScroll(val outer: ScrollState) {
     }
     fun scroll(pixels: Float): Float {
         if(pinchActive)return 0f
-        val body=view?:return outer.dispatchRawDelta(pixels)
-        val anchor=bodyAnchor.coerceIn(0,outer.maxValue)
+        if(windows.isEmpty())return outer.dispatchRawDelta(pixels)
         var left=pixels
-        // Only consume the header/footer portion preceding the body in this direction.
-        val before=if(left>0)(anchor-outer.value).coerceAtLeast(0).toFloat()
-            else -(outer.value-anchor).coerceAtLeast(0).toFloat()
-        val step=if(left>0)minOf(left,before)else maxOf(left,before)
-        left-=outer.dispatchRawDelta(step)
-        left-=body.scrollContent(left.roundToInt())
+        // Visit every native window in document order (reverse order on the way back).
+        // Each window scrolls internally only after its preceding Compose extent has
+        // passed. Unused movement continues to the next window and the final footer.
+        val ordered=windows.entries.sortedBy{it.value}.let{if(pixels<0)it.asReversed()else it}
+        for((body,position) in ordered) {
+            val anchor=position.coerceIn(0,outer.maxValue)
+            val before=if(left>0)(anchor-outer.value).coerceAtLeast(0).toFloat()
+                else -(outer.value-anchor).coerceAtLeast(0).toFloat()
+            val step=if(left>0)minOf(left,before)else maxOf(left,before)
+            left-=outer.dispatchRawDelta(step)
+            left-=body.scrollContent(left.roundToInt())
+            if(kotlin.math.abs(left)<0.5f)break
+        }
         left-=outer.dispatchRawDelta(left)
         val consumed=pixels-left
         toolbar.scroll(consumed)
         return consumed
     }
-    fun attach(body: MailHtmlWebView){view=body;body.scrollPage={scroll(it)}}
-    fun detach(body: MailHtmlWebView){if(view===body)view=null;body.scrollPage=null}
+    fun attach(body: MailHtmlWebView,primary: Boolean=true){if(primary)view=body;windows[body]=0;body.scrollPage={scroll(it)}}
+    fun detach(body: MailHtmlWebView){if(view===body)view=null;windows.remove(body);body.scrollPage=null}
 }
 
 data class HorizontalScrollMetrics(val offset: Int=0,val extent: Int=0,val range: Int=0)

@@ -25,8 +25,8 @@ import kotlin.math.abs
 @RunWith(AndroidJUnit4::class)
 class ReaderZoomDeviceTest {
     @get:Rule val rule=createAndroidComposeRule<ComponentActivity>()
-    private val message=MailItem("reader-zoom-regression","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Длинное письмо",body="Ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст",date=1,
-        htmlBody="<p>Ответ</p><div style='height:100000px'></div><div class='gmail_quote'><p>Предыдущий текст</p></div>",contentVersion=MailContent.FORMAT_VERSION)
+    private val message=MailItem("reader-zoom-regression","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Длинное письмо",body="Ответ\nКонец письма\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст",date=1,
+        htmlBody="<p>Ответ</p><div style='height:100000px'></div><p>Конец письма</p><div class='gmail_quote'><p>Предыдущий текст</p></div>",contentVersion=MailContent.FORMAT_VERSION)
 
     private data class Sample(val time: Long,val scale: Float,val progress: Float,val anchorY: Float,val left: Float,val top: Float,val width: Int,val height: Int,val scrollY: Int)
 
@@ -173,7 +173,7 @@ class ReaderZoomDeviceTest {
         rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
-        rule.onNodeWithText("Показать изображения").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsDisplayed()
         screenshot("reader-initial")
         val focus=center();val density=view.resources.displayMetrics.density
         val sampler=FrameSampler(view,focus.y);sampler.start()
@@ -185,14 +185,14 @@ class ReaderZoomDeviceTest {
         assertTrue("Pinch must reach the fully hidden chrome state",samples.any{it.progress>=0.999f})
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
-        rule.onNodeWithText("Показать изображения").assertIsNotDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsNotDisplayed()
         screenshot("reader-zoom-hidden")
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
         rule.waitUntil(10_000){var initial=false;rule.runOnUiThread{initial=view.atInitialScale()};initial}
         rule.waitForIdle()
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
-        rule.onNodeWithText("Показать изображения").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsDisplayed()
         screenshot("reader-reset")
         rule.runOnIdle{assertSame(view,webView())}
     }
@@ -336,7 +336,7 @@ class ReaderZoomDeviceTest {
         for(label in listOf("Показать изображения","Скрыть внешние изображения")) {
             var scale=1f;var y=0;var revision=0L
             rule.runOnIdle{scale=view.relativeScale();y=view.scrollY;revision=view.documentGeneration()}
-            rule.onNodeWithText(label).performClick()
+            rule.onNodeWithContentDescription(label).performClick()
             rule.waitUntil(15_000){
                 var ready=false
                 rule.runOnUiThread{

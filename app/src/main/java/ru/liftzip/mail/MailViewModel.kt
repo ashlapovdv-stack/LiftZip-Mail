@@ -99,12 +99,12 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun showUnread(enabled: Boolean,accountId: String?){unreadScope.value=UnreadScope(enabled,accountId)}
     fun openMessage(id: String) {
         opening?.cancel()
-        mutable.update{it.copy(opened=it.opened?.takeIf{message->message.id==id && message.contentCached && !MailContent.needsRenderUpdate(message)},openingError=null)}
+        mutable.update{it.copy(opened=it.opened?.takeIf{message->message.id==id && MailContent.canDisplay(message)},openingError=null)}
         opening=viewModelScope.launch {
             try {
                 // Show offline content before waiting for content coordination, legacy refresh or LRU writes.
-                val cached=repo.cachedMessage(id)?.takeIf{it.contentCached}
-                if(cached!=null && !MailContent.needsRenderUpdate(cached))mutable.update{it.copy(opened=cached)}
+                val cached=repo.cachedMessage(id)?.takeIf(MailContent::canDisplay)
+                if(cached!=null)mutable.update{it.copy(opened=cached)}
                 val message=repo.message(id)?:error("Письмо не найдено.")
                 mutable.update{it.copy(opened=message)}
                 read(message)
@@ -255,6 +255,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun resumeHistory()=startHistory(mutable.value.historyDownload.accountIds)
     fun pauseHistory()=work{repo.pauseHistory();HistoryWorker.cancel(getApplication());notice("Загрузка приостановлена. Полученные письма сохранены.")}
     fun setDefaultAccount(id: String?)=work{repo.setDefaultAccount(id);notice("Ящик отправителя по умолчанию сохранён")}
+    fun reply(message: MailItem,onReady: (ComposeDraft)->Unit)=work{onReady(repo.reply(message))}
     fun forward(message: MailItem,senderId: String,onReady: (ComposeDraft)->Unit)=work{onReady(repo.forward(message,senderId))}
     fun retryForward(id: String){viewModelScope.launch{try{repo.retryForward(id)}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}
     fun removeForwardFile(id: String,key: String){viewModelScope.launch{try{repo.removeForwardFile(id,key)}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}

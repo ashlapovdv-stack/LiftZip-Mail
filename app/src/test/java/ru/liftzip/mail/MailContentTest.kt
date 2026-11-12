@@ -75,5 +75,21 @@ class MailContentTest {
         assertFalse(MailContent.needsRenderUpdate(legacy.copy(contentCached=false)))
         assertFalse(MailContent.needsRenderUpdate(legacy.copy(uid=0,localFolder="drafts")))
     }
+    @Test fun aFullLegacyBodyCanBeReadWhileItsFormatRefreshIsStillPending() {
+        val stored=mail("Полное сохранённое письмо").copy(uid=10,validity=1,contentVersion=0)
+        assertTrue(MailContent.needsRenderUpdate(stored))
+        assertTrue("A format refresh must not block already stored content",MailContent.canDisplay(stored))
+    }
+    @Test fun aPreviewOrEvictedBodyCannotBePresentedAsACompleteLetter() {
+        val current=mail("Сохранённый текст").copy(contentVersion=MailContent.FORMAT_VERSION)
+        assertFalse(MailContent.canDisplay(MailContent.preview(current)))
+        assertFalse(MailContent.canDisplay(current.copy(contentCached=false)))
+        assertFalse(MailContent.canDisplay(current.copy(previewOnly=true)))
+    }
+    @Test fun currentContentAndACompleteEmptyBodyAreImmediatelyReadable() {
+        val current=mail("Сохранённый текст").copy(uid=10,validity=1,contentVersion=MailContent.FORMAT_VERSION)
+        assertTrue(MailContent.canDisplay(current))
+        assertTrue(MailContent.canDisplay(current.copy(body="")))
+    }
 
 }
