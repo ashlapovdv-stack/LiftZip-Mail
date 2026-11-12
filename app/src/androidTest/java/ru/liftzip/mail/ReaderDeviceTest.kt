@@ -466,6 +466,23 @@ class ReaderDeviceTest {
         }
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
     }
+    @Test fun coldReaderPreparationKeepsNativeViewsOnTheMainLooper() {
+        var current by mutableStateOf<MailItem?>(null)
+        rule.setContent{MailTheme{current?.let{reader(it)}}}
+        repeat(8) { index->
+            // Each source has a new cache key, so both preparation jobs must complete.
+            val text="Холодное открытие $index"
+            rule.runOnIdle{current=message.copy(id="cold-main-$index",body=text,htmlBody="<p>$text</p>")}
+            val view=loaded()
+            rule.runOnIdle {
+                assertSame(android.os.Looper.getMainLooper(),view.handler.looper)
+                assertTrue(view.isAttachedToWindow)
+                current=null
+            }
+            rule.waitForIdle()
+            rule.runOnIdle{assertNull(view.parent)}
+        }
+    }
     private fun assertCompleteFallbackAfterHistoryCrash(expanded: Boolean,rich: Boolean=true) {
         val header="On Wed, 28 Oct 2026, Person <a@example.com> wrote:"
         val body="Текущий ответ до сбоя\n\n$header\n> Старое письмо до сбоя"

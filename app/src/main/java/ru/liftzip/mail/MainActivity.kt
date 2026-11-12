@@ -755,7 +755,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         ReaderAnalysisCache.Key("${m.accountId}:${m.id}:${m.validity}",m.body,m.htmlBody,m.contentVersion)
     }
     val conversation by key(analysisKey){produceState(ReaderDocuments.analysis.peek(analysisKey),analysisKey) {
-        value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.analysis.prepare(analysisKey)}
+        // Pin the publication context as well as the work context: test frame interceptors
+        // can otherwise resume the producer inline on the worker that completed parsing.
+        withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+            value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.analysis.prepare(analysisKey)}
+        }
     }}
     // Observe the async result in the screen composition, before passing it to Scaffold subcomposition.
     val currentConversation=conversation
