@@ -32,8 +32,11 @@ val MailStyle.artwork: Int get()=if(this==MailStyle.COZY)R.drawable.header_cozy 
 val MailStyle.accent: Color get()=if(this==MailStyle.COZY)Color(0xFF784BCE)else Color(0xFF135DBD)
 val MailStyle.navAccent: Color get()=if(this==MailStyle.COZY)Color(0xFF356331)else accent
 
+// Contextual actions replace the toolbar's content, not its layout footprint.
+internal val DecorativeHeaderHeight=112.dp
+
 @Composable fun DecorativeHeader(title: String,account: String,onMenu: ()->Unit) {
-    Box(Modifier.fillMaxWidth().height(112.dp)) {
+    Box(Modifier.fillMaxWidth().height(DecorativeHeaderHeight)) {
         Row(Modifier.align(Alignment.CenterStart).padding(start=14.dp,top=20.dp).fillMaxWidth(0.76f),verticalAlignment=Alignment.CenterVertically) {
             HeaderButton(onMenu){Icon(Icons.Outlined.Menu,"Выбрать ящик")}
             Column(Modifier.padding(start=12.dp)) {

@@ -525,13 +525,14 @@ private val Paper=Color(0xFFF8F9F6)
         scrollableContent=scrollable
         if(!scrollable){chrome.show();controlsProgress.floatValue=1f}
     }
-    val forceControls by rememberUpdatedState(selectionMode || !s.autoHidePanels || scrollableContent==false)
+    val forceControls by rememberUpdatedState(!s.autoHidePanels || scrollableContent==false)
     LaunchedEffect(selectionMode){if(!selectionMode)selectionMenu=false}
     LaunchedEffect(selectionMode){snapshotFlow{if(controlsProgress.floatValue>0.02f)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
     val scrollControls=remember(memory,chrome,focus,keyboard){InboxScrollConnection(chrome,controlsProgress,
         forced={forceControls},canPull={!memory.list.canScrollBackward},refreshing={latestRefreshing},
         onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true},listState=memory.list)}
-    LaunchedEffect(selectionMode,drawer.currentValue,s.autoHidePanels){if(selectionMode || !s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsProgress.floatValue=1f}}
+    // Selecting rows must not reveal hidden panels and move the list underneath the finger.
+    LaunchedEffect(drawer.currentValue,s.autoHidePanels){if(!s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsProgress.floatValue=1f}}
 
     val current=s.accounts.find{it.id==accountId}
     val selectedAccounts=remember(s.accounts,accountId){s.accounts.filter{if(accountId==null)it.enabled else it.id==accountId}}
@@ -591,7 +592,8 @@ private val Paper=Color(0xFFF8F9F6)
         InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},endInset=safeBottom,nearEnd=nearEndValue,
             modifier=Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),header={
             Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).testTag("inbox-header")) {
-                if(selectionMode)TopAppBar(windowInsets=WindowInsets(0,0,0,0),title={Text("Выбрано: ${selected.size}",maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
+                if(selectionMode)TopAppBar(modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.height(DecorativeHeaderHeight),
+                    windowInsets=WindowInsets(0,0,0,0),title={Text("Выбрано: ${selected.size}",maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={IconButton(onClick={checked=arrayListOf()},enabled=!s.busy){Icon(Icons.Outlined.Close,"Снять выделение")}},actions={
                     IconButton(onClick={deleting=selected.toSet()},enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить выбранные письма")}
                     Box {
                         IconButton(onClick={selectionMenu=true},enabled=!s.busy){Icon(Icons.Outlined.MoreVert,"Действия с выбранными письмами")}
@@ -628,12 +630,15 @@ private val Paper=Color(0xFFF8F9F6)
             }
         },bottom={alpha->
             val fade=alpha
+            val composeButtonSize=56.dp
             Column(Modifier.fillMaxWidth().testTag("inbox-bottom")) {
-                if(!selectionMode)Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp),contentAlignment=Alignment.CenterEnd) {
-                    InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp)) {
+                // Keep the action slot when selection hides its button; reducing the
+                // list's end padding would move rows at the bottom of the mailbox.
+                Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp).height(composeButtonSize),contentAlignment=Alignment.CenterEnd) {
+                    if(!selectionMode)InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp)) {
                         FloatingActionButton(onClick=onCompose,shape=CircleShape,
                             containerColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.primaryContainer else style.accent,
-                            contentColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.onPrimaryContainer else Color.White,modifier=Modifier.semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top}) {Icon(Icons.Outlined.Edit,null)}
+                            contentColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.onPrimaryContainer else Color.White,modifier=Modifier.size(composeButtonSize).semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top}) {Icon(Icons.Outlined.Edit,null)}
                     }
                 }
                 Column(Modifier.fillMaxWidth().graphicsLayer{this.alpha=fade().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
@@ -713,9 +718,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         .combinedClickable(onClick=onOpen,onLongClick=onSelect,onLongClickLabel="Выделить письмо")
         .semantics{stateDescription=if(m.unread)"Не прочитано" else "Прочитано";selected=checked}) {
         Row(Modifier.weight(1f).padding(start=14.dp,top=7.dp,bottom=7.dp,end=8.dp),verticalAlignment=Alignment.CenterVertically) {
-            if(selectionMode)Checkbox(checked=checked,onCheckedChange={onSelect()},modifier=Modifier.size(44.dp))else {
-                val color=remember(m.sender){listOf(Color(0xFFE6EAD8),Color(0xFFE8E2D7),Color(0xFFDCE7E9),Color(0xFFEBDDDD))[(m.sender.hashCode() and Int.MAX_VALUE)%4]}
-                Surface(shape=CircleShape,color=color,modifier=Modifier.size(38.dp)){Box(contentAlignment=Alignment.Center){Text(m.sender.take(1).uppercase(),fontWeight=FontWeight.Medium,color=Color(0xFF475042),fontSize=18.sp)}}
+            Box(Modifier.size(38.dp),contentAlignment=Alignment.Center) {
+                if(selectionMode)Checkbox(checked=checked,onCheckedChange={onSelect()},modifier=Modifier.fillMaxSize())else {
+                    val color=remember(m.sender){listOf(Color(0xFFE6EAD8),Color(0xFFE8E2D7),Color(0xFFDCE7E9),Color(0xFFEBDDDD))[(m.sender.hashCode() and Int.MAX_VALUE)%4]}
+                    Surface(shape=CircleShape,color=color,modifier=Modifier.fillMaxSize()){Box(contentAlignment=Alignment.Center){Text(m.sender.take(1).uppercase(),fontWeight=FontWeight.Medium,color=Color(0xFF475042),fontSize=18.sp)}}
+                }
             }
             Column(Modifier.weight(1f).padding(start=10.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
@@ -736,8 +743,10 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 }
                 if(m.delivery=="uncertain")Text("Результат отправки неизвестен",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.labelSmall)
             }
-            if(!selectionMode)IconButton(onClick=onStar,enabled=!busy,modifier=Modifier.size(36.dp)) {
-                Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,if(m.starred)"Убрать из избранного" else "В избранное",Modifier.size(20.dp),tint=if(m.starred)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+            Box(Modifier.size(36.dp)) {
+                if(!selectionMode)IconButton(onClick=onStar,enabled=!busy,modifier=Modifier.fillMaxSize()) {
+                    Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,if(m.starred)"Убрать из избранного" else "В избранное",Modifier.size(20.dp),tint=if(m.starred)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                }
             }
         }
     }
