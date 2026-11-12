@@ -191,6 +191,15 @@ class ReaderDeviceTest {
         rule.onNodeWithText("Показать полный исходный текст").assertDoesNotExist()
         rule.onNodeWithText("Показать оригинальное HTML-письмо").assertDoesNotExist()
         saveDeviceScreenshot(rule,"citation-final-line")
+        // Return through the same native/Compose route a person uses. A semantic
+        // jump to an off-screen control ignores the independently overlaid toolbar.
+        repeat(16) {
+            rule.onNodeWithTag("reader-viewport").performTouchInput {
+                swipe(Offset(width*0.4f,height*0.3f),Offset(width*0.4f,height*0.8f),400)
+            }
+            rule.waitForIdle()
+        }
+        rule.runOnIdle{assertEquals(0,quote.scrollY)}
         changeHistory(main,toggle,false)
         assertEquals(1,matches(main,"Ответ"))
     }
