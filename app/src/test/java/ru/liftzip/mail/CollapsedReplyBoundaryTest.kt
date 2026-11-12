@@ -54,9 +54,11 @@ class CollapsedReplyBoundaryTest {
         val html=source("<p style='padding-bottom:36px'>Reply<br><br></p>")
         val parsed=ConversationText.parse(plain);val analysis=HtmlMail.analyzeHistory(html,parsed)
         val full=HtmlMail.document(html,plain,emptyList())
-        val original=HtmlMail.document(html,plain,emptyList(),analysis,originalScale=true)
-        assertTrue(full.html.contains("padding-bottom:36px"));assertTrue(full.html.contains("<br><br>"))
-        assertTrue(original.html.contains("padding-bottom:36px"));assertTrue(original.html.contains("<br><br>"))
+        val original=HtmlMail.document(html,plain,emptyList(),originalScale=true)
+        assertTrue(full.html.contains("padding-bottom:36px"));assertTrue(Jsoup.parse(full.html).select("br").size>=2)
+        assertTrue(original.html.contains("padding-bottom:36px"));assertTrue(Jsoup.parse(original.html).select("br").size>=2)
+        val separatedOriginalScale=HtmlMail.document(html,parsed.current,emptyList(),analysis,originalScale=true)
+        assertTrue(Jsoup.parse(separatedOriginalScale.html).select("br").isEmpty())
         assertEquals(html,source("<p style='padding-bottom:36px'>Reply<br><br></p>"))
     }
 }

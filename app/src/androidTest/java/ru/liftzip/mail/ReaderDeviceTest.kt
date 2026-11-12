@@ -248,13 +248,42 @@ class ReaderDeviceTest {
             }
             val body=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot
             val capsule=rule.onNodeWithTag("history-capsule",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
-            assertEquals("The app's gap must not depend on MIME format",4*density,capsule.top-body.bottom,2f)
+            assertEquals("The app's gap must not depend on MIME format",12*density,capsule.top-body.bottom,2f)
             heights+=body.height
             saveDeviceScreenshot(rule,"quote-spacing-$name")
             rule.runOnIdle{current=null};rule.waitForIdle()
         }
         assertEquals("Plain text and a margin-free HTML line have the same extent",heights[0],heights[1],2*density)
         assertTrue("Sender-defined bottom padding remains part of the HTML content",heights[2]>heights[1]+24*density)
+    }
+    @Test fun collapsedHistoryHasOneGapAfterPlainAndHtmlTrailingFormatting() {
+        var current by mutableStateOf<MailItem?>(null)
+        rule.setContent{MailTheme{androidx.compose.foundation.layout.Column {
+            current?.let{m->
+                val parsed=ConversationText.parse(m.body)
+                val history=HtmlMail.analyzeHistory(m.htmlBody,parsed)
+                assertTrue(history.separateHistory)
+                MailHtmlBody(m,parsed.current,history,{error("No images")},{},afterContent={HistoryToggle(1,false,{})})
+            }
+        }}}
+        val body="Ответ\n\nOn Thu, 12 Nov 2026, Person <p@example.com> wrote:\n> Earlier text"
+        val suffix="<div class='gmail_attr'>On Thu, 12 Nov 2026, Person &lt;p@example.com&gt; wrote:</div><blockquote class='gmail_quote'><p>Earlier text</p></blockquote>"
+        val cases=listOf("plain" to "","author-brs" to "<div>Ответ<div><br></div></div>",
+            "paragraph-brs" to "<p style='margin-top:0'>Ответ</p><br><br>",
+            "wrapper-padding" to "<div style='padding-bottom:40px;margin-bottom:24px'><p style='margin-top:0'>Ответ</p><div><br></div></div>")
+        var baseline: Float?=null
+        val density=rule.activity.resources.displayMetrics.density
+        cases.forEachIndexed{index,(name,html)->
+            rule.runOnIdle{current=message.copy(id="collapsed-gap-$index",body=body,htmlBody=if(html.isBlank())""else html+suffix)}
+            rule.waitUntil(30_000){rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodesWithTag("history-capsule",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty()}
+            val bounds=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot
+            val capsule=rule.onNodeWithTag("history-capsule",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
+            assertEquals("Same visual gap for $name",12*density,capsule.top-bounds.bottom,2f)
+            if(baseline==null)baseline=bounds.height else assertEquals("No invisible tail remains for $name",baseline!!,bounds.height,2*density)
+            saveDeviceScreenshot(rule,"collapsed-gap-$name")
+            rule.runOnIdle{current=null};rule.waitForIdle()
+        }
     }
     // Exercise the production reader, including its header and bounded WebView.
     @Test fun realReaderFitsAWideNestedTableAtInitialScale() {
