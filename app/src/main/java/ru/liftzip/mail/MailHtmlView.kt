@@ -19,7 +19,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.FitScreen
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.HideImage
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -508,8 +511,12 @@ internal fun readerBodyHeight(normal: Int): Int=normal
             .readerChrome(scroll?.toolbar?.zoomProgress?:0f,scroll?.headerOffset?:0f).testTag("reader-message-header")
             .background(androidx.compose.ui.graphics.Color.White)) {
             header()
-            if(document?.externalImages==true)Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.SpaceBetween) {
-                TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
+            if(document?.externalImages==true)Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.End) {
+                IconButton(onClick={external=!external}) {
+                    Icon(if(external) Icons.Outlined.HideImage else Icons.Outlined.Image,
+                        contentDescription=if(external) "Скрыть внешние изображения" else "Показать изображения",
+                        tint=MaterialTheme.colorScheme.primary)
+                }
             }
         }
         // The main reader owns one opening timer across storage, analysis and native

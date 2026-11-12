@@ -411,7 +411,7 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
         rule.onNodeWithText("Вложения").assertIsNotDisplayed()
-        rule.onNodeWithText("Показать изображения").assertIsNotDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsNotDisplayed()
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
         rule.runOnIdle{
             assertSame(view,webView())

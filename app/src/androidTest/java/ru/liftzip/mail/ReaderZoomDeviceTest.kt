@@ -173,7 +173,7 @@ class ReaderZoomDeviceTest {
         rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
-        rule.onNodeWithText("Показать изображения").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsDisplayed()
         screenshot("reader-initial")
         val focus=center();val density=view.resources.displayMetrics.density
         val sampler=FrameSampler(view,focus.y);sampler.start()
@@ -185,14 +185,14 @@ class ReaderZoomDeviceTest {
         assertTrue("Pinch must reach the fully hidden chrome state",samples.any{it.progress>=0.999f})
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
-        rule.onNodeWithText("Показать изображения").assertIsNotDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsNotDisplayed()
         screenshot("reader-zoom-hidden")
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
         rule.waitUntil(10_000){var initial=false;rule.runOnUiThread{initial=view.atInitialScale()};initial}
         rule.waitForIdle()
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
-        rule.onNodeWithText("Показать изображения").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsDisplayed()
         screenshot("reader-reset")
         rule.runOnIdle{assertSame(view,webView())}
     }
@@ -336,7 +336,7 @@ class ReaderZoomDeviceTest {
         for(label in listOf("Показать изображения","Скрыть внешние изображения")) {
             var scale=1f;var y=0;var revision=0L
             rule.runOnIdle{scale=view.relativeScale();y=view.scrollY;revision=view.documentGeneration()}
-            rule.onNodeWithText(label).performClick()
+            rule.onNodeWithContentDescription(label).performClick()
             rule.waitUntil(15_000){
                 var ready=false
                 rule.runOnUiThread{
