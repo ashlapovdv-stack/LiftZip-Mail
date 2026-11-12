@@ -51,6 +51,10 @@ class AppearanceDeviceTest {
             val current=mutableStateOf(AppearancePreferences.read(prefs));var visible by mutableStateOf(true)
             rule.setContent{MailTheme(current.value){if(visible)AppearanceSettingsScreen(state(current.value),{}, {},{AppearancePreferences.write(prefs,it);current.value=it})}}
             rule.onNodeWithText("Уютный").performClick();rule.runOnIdle{assertEquals(MailStyle.COZY,AppearancePreferences.read(prefs))}
+            for(style in listOf(MailStyle.FOREST,MailStyle.FROST,MailStyle.EMERALD,MailStyle.MEADOW)) {
+                rule.onNodeWithText(style.title).performScrollTo().performClick();rule.waitForIdle()
+                rule.runOnIdle{assertEquals(style,AppearancePreferences.read(prefs))}
+            }
             rule.onNodeWithText("Деловой").performScrollTo().performClick();rule.waitForIdle()
             saveDeviceScreenshot(rule,"appearance")
             rule.runOnIdle{visible=false;prefs.edit().putBoolean("saved",true).commit()};rule.waitForIdle()

@@ -36,7 +36,7 @@ fun ComponentActivity.edgeMailWindow() {
     val top=with(density){WindowInsets.safeDrawing.getTop(density).toDp()}
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         if(style!=MailStyle.STANDARD)Box(Modifier.fillMaxWidth().height(112.dp+top)) {
-            Image(painterResource(style.artwork),null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
+            DecorativeArtwork(style,Modifier.fillMaxSize())
             // Keep the shared artwork visible while protecting dark clock/icons over foliage.
             Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(top+24.dp)
                 .background(Brush.verticalGradient(listOf(Color.White.copy(alpha=0.7f),Color.Transparent))))
@@ -50,7 +50,7 @@ fun ComponentActivity.edgeMailWindow() {
 /** The visible screen owns bar appearance, including when the drawer covers the header. */
 @Composable fun SystemBarIcons(decorativeStatus: Boolean=false,forceLightSurface: Boolean=false) {
     val activity=LocalContext.current.activity()?:return
-    val lightNavigation=forceLightSurface || !isSystemInDarkTheme()
+    val lightNavigation=forceLightSurface || LocalMailStyle.current.lightNature || !isSystemInDarkTheme()
     val lightStatus=decorativeStatus || lightNavigation
     val controller=remember(activity){WindowCompat.getInsetsController(activity.window,activity.window.decorView)}
     SideEffect {

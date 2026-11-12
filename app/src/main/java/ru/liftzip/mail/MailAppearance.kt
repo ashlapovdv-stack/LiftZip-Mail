@@ -28,8 +28,15 @@ object AppearancePreferences {
     fun read(prefs: SharedPreferences)=MailStyle.fromKey(prefs.getString("mail-style",null))
     fun write(prefs: SharedPreferences,style: MailStyle){prefs.edit().putString("mail-style",style.key).apply()}
 }
-val MailStyle.artwork: Int get()=if(this==MailStyle.COZY)R.drawable.header_cozy else R.drawable.header_business
-val MailStyle.accent: Color get()=if(this==MailStyle.COZY)Color(0xFF784BCE)else Color(0xFF135DBD)
+val MailStyle.artwork: Int get()=when(this) {
+    MailStyle.COZY->R.drawable.header_cozy
+    MailStyle.FOREST->R.drawable.header_forest
+    MailStyle.FROST->R.drawable.header_frost
+    MailStyle.EMERALD->R.drawable.header_emerald
+    MailStyle.MEADOW->R.drawable.header_meadow
+    else->R.drawable.header_business
+}
+val MailStyle.accent: Color get()=palette.accent
 val MailStyle.navAccent: Color get()=if(this==MailStyle.COZY)Color(0xFF356331)else accent
 
 // Contextual actions replace the toolbar's content, not its layout footprint.
@@ -55,10 +62,17 @@ internal val DecorativeHeaderHeight=112.dp
 @Composable fun StyleChoice(style: MailStyle,selected: Boolean,onSelect: ()->Unit) {
     OutlinedCard(onClick=onSelect,modifier=Modifier.fillMaxWidth(),shape=RoundedCornerShape(18.dp),
         border=androidx.compose.foundation.BorderStroke(if(selected)2.dp else 1.dp,if(selected)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
-        if(style!=MailStyle.STANDARD)Image(painterResource(style.artwork),null,Modifier.fillMaxWidth().height(84.dp),contentScale=ContentScale.Crop)
+        if(style!=MailStyle.STANDARD)DecorativeArtwork(style,Modifier.fillMaxWidth().height(84.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
             RadioButton(selected,onClick=null)
             Column(Modifier.weight(1f).padding(start=8.dp)){Text(style.title,fontWeight=FontWeight.SemiBold);Text(style.detail,style=MaterialTheme.typography.bodySmall)}
         }
     }
+}
+
+/** Fit scene artwork without zooming/cropping the business desk at unusual window ratios. */
+@Composable internal fun DecorativeArtwork(style: MailStyle,modifier: Modifier=Modifier) {
+    Image(painterResource(style.artwork),null,modifier.background(style.palette.header),
+        contentScale=if(style==MailStyle.BUSINESS)ContentScale.Fit else ContentScale.Crop,
+        alignment=Alignment.CenterEnd)
 }
