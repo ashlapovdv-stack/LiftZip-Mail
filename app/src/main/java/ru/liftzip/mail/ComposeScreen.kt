@@ -107,13 +107,13 @@ import androidx.compose.ui.unit.dp
             d.quote?.let{quote->
                 Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
                     Row(verticalAlignment=Alignment.CenterVertically) {
-                        Text(if(quote.kind=="forward")"Пересылаемое письмо"else "Цитируемое письмо",Modifier.weight(1f),style=MaterialTheme.typography.labelLarge)
+                        Text(when(quote.kind){"forward"->"Пересылаемое письмо";"draft"->"Содержимое черновика";else->"Цитируемое письмо"},Modifier.weight(1f),style=MaterialTheme.typography.labelLarge)
                         TextButton(onClick={onChange(d.copy(quoteIncluded=!d.quoteIncluded))},enabled=!s.busy){Text(if(d.quoteIncluded)"Исключить цитату"else "Включить цитату")}
                     }
                     if(d.quoteIncluded)Row(Modifier.fillMaxWidth().padding(bottom=12.dp).height(IntrinsicSize.Min)) {
                         Box(Modifier.width(2.dp).fillMaxHeight().background(Color(0xFFA58AC7)))
                         Column(Modifier.padding(start=10.dp)) {
-                            Text(quote.attribution(),style=MaterialTheme.typography.bodySmall,color=colors.onSurfaceVariant,maxLines=3,overflow=TextOverflow.Ellipsis)
+                            if(quote.kind!="draft")Text(quote.attribution(),style=MaterialTheme.typography.bodySmall,color=colors.onSurfaceVariant,maxLines=3,overflow=TextOverflow.Ellipsis)
                             Text(quote.plain,style=MaterialTheme.typography.bodyMedium,maxLines=6,overflow=TextOverflow.Ellipsis)
                             if(quote.html.isNotBlank())Text("Исходное HTML-оформление сохранено",style=MaterialTheme.typography.labelSmall,color=colors.onSurfaceVariant)
                         }

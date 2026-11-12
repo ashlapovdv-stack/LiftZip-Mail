@@ -33,7 +33,7 @@ object ComposeContent {
         m.recipients,m.subject,m.date,m.body.ifBlank{HtmlMail.text(m.htmlBody)},m.htmlBody,m.headers?:if(m.uid<=0)MessageHeaders(messageId=m.internetMessageId)else null,kind,m.senderEmail)
     fun plain(d: ComposeDraft): String {
         val quote=d.quote?.takeIf{d.quoteIncluded}
-        return if(quote==null)d.body else listOf(d.body,quote.attribution(),quote.plain.lineSequence().joinToString("\n"){"> $it"}).filter{it.isNotBlank()}.joinToString("\n\n")
+        return if(quote==null)d.body else if(quote.kind=="draft")listOf(d.body,quote.plain).filter{it.isNotBlank()}.joinToString("\n\n") else listOf(d.body,quote.attribution(),quote.plain.lineSequence().joinToString("\n"){"> $it"}).filter{it.isNotBlank()}.joinToString("\n\n")
     }
     fun render(d: ComposeDraft): ComposedBody {
         val quote=d.quote?.takeIf{d.quoteIncluded}
@@ -43,9 +43,11 @@ object ComposeContent {
         doc.body().appendElement("div").attr("data-liftzip-author","1").html(escaped(d.body).replace("\n","<br>"))
         val inlineIds=linkedMapOf<String,String>()
         if(quote!=null) {
-            val header=doc.body().appendElement("div").attr("class","gmail_attr")
-            header.html(escaped(quote.attribution()).replace("\n","<br>"))
-            val block=doc.body().appendElement("blockquote").attr("class","gmail_quote").attr("type","cite").attr("style","border-left:2px solid #a58ac7;margin:8px 0 8px 8px;padding-left:10px")
+            val block=if(quote.kind=="draft")doc.body().appendElement("div") else {
+                val header=doc.body().appendElement("div").attr("class","gmail_attr")
+                header.html(escaped(quote.attribution()).replace("\n","<br>"))
+                doc.body().appendElement("blockquote").attr("class","gmail_quote").attr("type","cite").attr("style","border-left:2px solid #a58ac7;margin:8px 0 8px 8px;padding-left:10px")
+            }
             block.html(if(quote.html.isNotBlank())safeQuoteHtml(quote.html)else escaped(quote.plain).replace("\n","<br>"))
             block.select("img[src]").forEach { image->
                 val src=image.attr("src")
@@ -85,6 +87,14 @@ object MessageThread {
     private val token=Regex("<[^<>\\s@]+@[^<>\\s@]+>")
     fun id(raw: String)=raw.trim().takeIf{!it.contains('\r') && !it.contains('\n') && token.matches(it)}
     fun ids(raw: String): List<String> = token.findAll(raw.replace(Regex("\\r?\\n[ \\t]+")," ")).mapNotNull{ id(it.value) }.distinct().toList().takeLast(100)
+    fun outgoing(draft: ComposeDraft): MessageHeaders {
+        val quote=draft.quote
+        val source=quote?.headers
+        val parent=when(quote?.kind){"reply"->source?.messageId;"draft"->source?.inReplyTo;else->null}?.let(::id).orEmpty()
+        val ancestors=if(quote?.kind in setOf("reply","draft"))source?.references.orEmpty()else emptyList()
+        return MessageHeaders(MessageIdentity.forDraft(draft.id,draft.internetMessageId),inReplyTo=parent,
+            references=chain(MessageHeaders(parent,references=ancestors)))
+    }
     fun chain(headers: MessageHeaders): List<String> {
         val parent=id(headers.messageId)
         return (headers.references.mapNotNull(::id).filter{it!=parent}.distinct()+listOfNotNull(parent)).takeLast(100)

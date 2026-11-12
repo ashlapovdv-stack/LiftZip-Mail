@@ -40,10 +40,9 @@ class OutgoingMime(private val resources: OutgoingResources) {
         require(!draft.subject.contains('\r') && !draft.subject.contains('\n')){"Тема письма должна быть одной строкой."}
         message.setSubject(draft.subject,"UTF-8")
         message.sentDate=Date(draft.timestamp.takeIf{it>0}?:System.currentTimeMillis())
-        draft.quote?.takeIf{it.kind=="reply"}?.headers?.let{h->
-            MessageThread.id(h.messageId)?.let{message.setHeader("In-Reply-To",it)}
-            MessageThread.chain(h).takeIf{it.isNotEmpty()}?.let{message.setHeader("References",it.joinToString(" "))}
-        }
+        val thread=MessageThread.outgoing(draft)
+        if(thread.inReplyTo.isNotBlank())message.setHeader("In-Reply-To",thread.inReplyTo)
+        if(thread.references.isNotEmpty())message.setHeader("References",thread.references.joinToString(" "))
         val alternatives=MimeMultipart("alternative")
         alternatives.addBodyPart(MimeBodyPart().apply{setText(body.plain,"UTF-8")})
         val htmlPart=MimeBodyPart().apply{setContent(body.html,"text/html; charset=UTF-8")}

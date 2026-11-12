@@ -308,7 +308,8 @@ class MailRepository(private val context: Context) {
         val id=kind.name+":"+m.id
         val previous=db.action(id)
         val original=if(kind==ActionKind.FLAGS && previous!=null)JSONObject(previous.payload)else db.encodeMessage(if(kind in setOf(ActionKind.FLAGS,ActionKind.MARK_ANSWERED,ActionKind.MARK_FORWARDED) || ActionRules.folderMove(kind) || kind==ActionKind.REMOVE_DRAFT)m.copy(body="",attachments=emptyList(),outgoing=emptyList(),forwarding=null)else m)
-        m.sourceDraftId?.let{source->db.message(source)?.let{original.put("_origin",db.encodeMessage(it.copy(body="",attachments=emptyList(),outgoing=emptyList(),forwarding=null)))}}
+        m.sourceDraftId?.let{source->db.message(source)?.let{original.put("_origin",db.encodeMessage(it.copy(body="",htmlBody="",composer=null,attachments=emptyList(),outgoing=emptyList(),forwarding=null)))
+            state.value.accounts.find{a->a.id==it.accountId}?.let{a->original.put("_originServer",AuthRules.serverKey(a))}}}
         val account=state.value.accounts.find{it.id==m.accountId}?:error("Ящик не найден.")
         return MailAction(id,m.accountId,m.id,kind,original.toString(),maxOf((previous?.revision?:0)+1,m.editRevision),m.subject,AuthRules.serverKey(account),
             unread?:previous?.unread,starred?:previous?.starred,created=previous?.created?:System.currentTimeMillis())
@@ -875,7 +876,7 @@ class MailRepository(private val context: Context) {
         coordinator.data {
             db.messages().firstOrNull{it.localFolder=="drafts" && it.sourceDraftId==m.id}?.let{return@data (db.message(it.id)?:it).draft()}
             val account=db.accounts().find{it.id==m.accountId}?:error("Ящик не найден.")
-            val draft=ComposeDraft(accountId=m.accountId,to=m.composer?.to?:HeaderText.editableRecipients(m.recipients),subject=m.composer?.subject?:m.subject,body=m.composer?.text?:m.body,forwarding=ForwardRules.plan(m,account,restoreDraft=true),quote=m.composer?.quote,quoteIncluded=m.composer?.quoteIncluded?:true,responseTo=m.composer?.responseTo?:m.composer?.quote?.messageId,responseKind=m.composer?.responseKind?.takeIf{it.isNotBlank()}?:m.composer?.quote?.kind.orEmpty(),cc=m.composer?.cc?:HeaderText.editableRecipients(m.cc),bcc=m.composer?.bcc?:HeaderText.editableRecipients(m.bcc),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
+            val draft=ComposeDraft(accountId=m.accountId,to=m.composer?.to?:HeaderText.editableRecipients(m.recipients),subject=m.composer?.subject?:m.subject,body=m.composer?.text?:if(m.htmlBody.isNotBlank())"" else m.body,forwarding=ForwardRules.plan(m,account,restoreDraft=true),quote=m.composer?.quote?:m.takeIf{m.composer==null && it.htmlBody.isNotBlank()}?.let{ComposeContent.quote(it,"draft")},quoteIncluded=m.composer?.quoteIncluded?:true,responseTo=m.composer?.responseTo?:m.composer?.quote?.messageId,responseKind=m.composer?.responseKind?.takeIf{it.isNotBlank()}?:m.composer?.quote?.kind.orEmpty(),cc=m.composer?.cc?:HeaderText.editableRecipients(m.cc),bcc=m.composer?.bcc?:HeaderText.editableRecipients(m.bcc),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
             db.putMessage(draft.toMessage(account,"drafts"));refresh()
             if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
             draft
@@ -884,6 +885,12 @@ class MailRepository(private val context: Context) {
     private fun sameActionServer(a: MailAction)=db.accounts().any{it.id==a.accountId && AuthRules.serverKey(it)==a.serverKey}
     private fun actionMessage(a: MailAction)=db.decodeMessage(JSONObject(a.payload))
     private fun actionOrigin(a: MailAction)=JSONObject(a.payload).optJSONObject("_origin")?.let{db.decodeMessage(it)}
+    private fun trustedOrigin(action: MailAction): MailItem? {
+        val origin=actionOrigin(action)?:return null
+        val owner=state.value.accounts.find{it.id==origin.accountId}?:return null
+        val key=JSONObject(action.payload).optString("_originServer").ifBlank{if(origin.accountId==action.accountId)action.serverKey else ""}
+        return origin.takeIf{key.isNotBlank() && key==AuthRules.serverKey(owner)}
+    }
     private fun MailItem.draft()=ComposeDraft(id,accountId,composer?.to?:recipients,composer?.subject?:subject,composer?.text?:body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date,composer?.responseTo?:responseTo,composer?.responseKind?.takeIf{it.isNotBlank()}?:responseKind,
         cc=composer?.cc?:cc,bcc=composer?.bcc?:bcc,quote=composer?.quote,quoteIncluded=composer?.quoteIncluded?:true)
     suspend fun networkAvailable() {
@@ -983,7 +990,7 @@ class MailRepository(private val context: Context) {
                             if(db.accounts().none{it.id==account.id})return@data
                             val sent=source.copy(localFolder="sent",delivery="accepted",pendingDelete=false)
                             val following=mutableListOf(actionFor(sent,ActionKind.APPEND_SENT))
-                            actionOrigin(first)?.let{following+=actionFor(it,ActionKind.REMOVE_DRAFT)}
+                            trustedOrigin(first)?.let{following+=actionFor(it,ActionKind.REMOVE_DRAFT)}
                             val original=source.responseTo?.let{db.message(it)}
                             val marked=ResponseMarkers.accepted(original,source.responseKind)
                             marked?.let{m->ResponseMarkers.serverAction(m,source.responseKind)?.let{following+=actionFor(m,it)}}
@@ -998,7 +1005,7 @@ class MailRepository(private val context: Context) {
                         require(editing.resourcesReady()){"Вложения черновика ещё подготавливаются. Сохраните черновик после завершения подготовки."}
                         val draft=ForwardRules.sending(editing)
                         val role=if(first.kind==ActionKind.APPEND_DRAFT)FolderRole.DRAFTS else FolderRole.SENT
-                        val copy=runInterruptible{gateway.append(account,password,draft,role,first.revision,actionOrigin(first))}
+                        val copy=runInterruptible{gateway.append(account,password,draft,role,first.revision,trustedOrigin(first))}
                         coordinator.data {
                             if(!sameActionServer(first)){db.completeAction(first);refresh();return@data}
                             val copyId=FolderRules.id(account.id,copy.folder,copy.validity,copy.uid)
@@ -1013,7 +1020,13 @@ class MailRepository(private val context: Context) {
                                     db.putAction(actionFor(remote,ActionKind.TRASH))
                                 }
                             }
-                            else if(local?.localFolder=="drafts")db.finishAction(first,items=listOf(remote,local.copy(sourceDraftId=copyId)))
+                            else if(local?.localFolder=="drafts") {
+                                // Changing sender may move a server draft between accounts.
+                                // Remove the old copy only after the new APPEND is confirmed,
+                                // and only in its captured account/server namespace.
+                                val cleanup=trustedOrigin(first)?.takeIf{it.accountId!=account.id}?.let{listOf(actionFor(it,ActionKind.REMOVE_DRAFT))}.orEmpty()
+                                db.finishAction(first,items=listOf(remote,local.copy(sourceDraftId=copyId)),enqueue=cleanup)
+                            }
                             else {
                                 val cleanup=actionFor(remote,ActionKind.REMOVE_DRAFT)
                                 if(!db.finishAction(first,enqueue=listOf(cleanup)))db.putAction(cleanup)
@@ -1143,13 +1156,12 @@ class MailRepository(private val context: Context) {
     private fun ComposeDraft.toMessage(a: MailAccount,folder: String): MailItem {
         val content=ComposeContent.render(this)
         val ownId=MessageIdentity.forDraft(id,internetMessageId)
-        val parent=quote?.takeIf{it.kind=="reply"}?.headers
         return MailItem(id,accountId,sender=a.senderName,senderEmail=a.email,recipients=to,cc=cc,bcc=bcc,
             subject=subject,body=content.plain,htmlBody=content.html,contentVersion=MailContent.FORMAT_VERSION,
             date=if(folder in setOf("outbox","sent") && timestamp>0)timestamp else System.currentTimeMillis(),localFolder=folder,outgoing=attachments,
             forwarding=forwarding,internetMessageId=ownId,sourceDraftId=sourceDraftId,responseTo=responseTo,responseKind=responseKind,
             attachments=attachments.filter{it.contentId.isNotBlank() && HtmlMail.cid(it.contentId) in content.inlineIds}.map{file->
                 Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt(),content.inlineIds.getValue(HtmlMail.cid(file.contentId)))},
-            composer=ComposeCodec.snapshot(this).copy(resourceAliases=content.inlineIds.entries.associate{it.value to it.key}),headers=MessageHeaders(ownId,inReplyTo=parent?.messageId.orEmpty(),references=parent?.let(MessageThread::chain).orEmpty()))
+            composer=ComposeCodec.snapshot(this).copy(resourceAliases=content.inlineIds.entries.associate{it.value to it.key}),headers=MessageThread.outgoing(this))
     }
 }

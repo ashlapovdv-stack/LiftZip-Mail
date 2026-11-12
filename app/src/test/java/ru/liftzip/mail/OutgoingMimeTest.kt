@@ -149,6 +149,36 @@ class OutgoingMimeTest {
         assertFalse(HtmlMail.analyzeHistory(wrongDepth,conversation).separateHistory)
         assertFalse(HtmlMail.analyzeHistory(decoded.html.replace("Самое старое письмо","Другой текст"),conversation).separateHistory)
     }
+    @Test fun anOrdinaryAttachmentWithThePrivateMetadataMimeTypeIsNeverConsumedAsEditorState() {
+        val d=draft()
+        val mixed=jakarta.mail.internet.MimeMultipart("mixed")
+        mixed.addBodyPart(jakarta.mail.internet.MimeBodyPart().apply{setText("Текст")})
+        mixed.addBodyPart(jakarta.mail.internet.MimeBodyPart().apply{
+            setContent(ComposeCodec.draftMetadata(d),ComposeCodec.MIME+"; charset=UTF-8")
+            fileName="saved.json";disposition=Part.ATTACHMENT
+        })
+        val message=MimeMessage(session).apply{setHeader("X-LiftZip-Draft-ID",d.id);setContent(mixed);saveChanges()}
+        val decoded=MimeReader().read(wire(message))
+        assertEquals("saved.json",decoded.attachments.single().name)
+        assertNull(decoded.composer)
+    }
+    @Test fun foreignHtmlDraftKeepsRichBodyInlineResourcesAndExistingThreadWithoutANewQuote() {
+        val original=source("<table><tr><td>Старая история<img src='cid:photo'></td></tr></table>").copy(headers=MessageHeaders(
+            "<foreign-draft@example.com>",inReplyTo="<parent@example.com>",references=listOf("<first@example.com>","<parent@example.com>")))
+        val d=draft(original).copy(body="",quote=ComposeContent.quote(original,"draft"),internetMessageId="<foreign-draft@example.com>",
+            attachments=listOf(OutgoingFile("owned","photo.png","image/png",10,"photo")))
+        val message=wire(builder.build(session,account,d).message)
+        val decoded=MimeReader().read(message)
+        assertEquals(original.body,decoded.text)
+        assertEquals(1,Jsoup.parse(decoded.html).select("table").size)
+        assertEquals(0,Jsoup.parse(decoded.html).select("blockquote").size)
+        assertEquals(1,decoded.attachments.size)
+        assertEquals("<foreign-draft@example.com>",message.messageID)
+        assertEquals("<parent@example.com>",message.getHeader("In-Reply-To",null))
+        assertEquals("<first@example.com> <parent@example.com>",message.getHeader("References",null))
+        val editor=MimeReader().read(wire(builder.build(session,account,d,MimePurpose.DRAFT,1).message)).composer!!
+        assertEquals("draft",editor.quote!!.kind);assertEquals("",editor.text)
+    }
     @Test fun incompleteAddressesAreRestoredInDraftsAndRejectedForDelivery() {
         val d=draft().copy(to="unfinished@",cc="copy@example.com, still-typing",bcc="hidden@")
         val m=wire(builder.build(session,account,d,MimePurpose.DRAFT,1).message)

@@ -346,7 +346,7 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             val uid=savedUid?:throw ServerCopyUnconfirmedException()
             if(role==FolderRole.DRAFTS && (connection as IMAPStore).hasCapability("UIDPLUS")) {
                 val old=folder.search(HeaderTerm("X-LiftZip-Draft-ID",draft.id)).filter{folder.getUID(it)!=uid}.toMutableList()
-                if(origin!=null && origin.remoteFolder==folder.fullName && origin.validity==folder.uidValidity && origin.uid!=uid)folder.getMessageByUID(origin.uid)?.let{m->if(old.none{folder.getUID(it)==origin.uid})old+=m}
+                if(origin!=null && origin.accountId==a.id && origin.remoteFolder==folder.fullName && origin.validity==folder.uidValidity && origin.uid!=uid)folder.getMessageByUID(origin.uid)?.let{m->if(old.none{folder.getUID(it)==origin.uid})old+=m}
                 if(old.isNotEmpty()){folder.setFlags(old.toTypedArray(),Flags(Flags.Flag.DELETED),true);folder.expunge(old.toTypedArray())}
             }
             ServerCopy(folder.fullName,uid,folder.uidValidity)

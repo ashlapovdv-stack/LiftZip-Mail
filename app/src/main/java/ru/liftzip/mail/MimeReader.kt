@@ -18,8 +18,8 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
         checkCancelled()
         if(depth>12) return DecodedMail("[Часть письма не показана: слишком сложная структура]",emptyList())
         val expectedDraftId=if(depth==0)part.getHeader("X-LiftZip-Draft-ID")?.firstOrNull() else draftId
-        if(part.isMimeType(ComposeCodec.MIME)) {
-            if(expectedDraftId==null)return DecodedMail("",emptyList())
+        val filename=part.fileName?.let { runCatching { MimeUtility.decodeText(it) }.getOrDefault(it) }
+        if(part.isMimeType(ComposeCodec.MIME) && expectedDraftId!=null && filename.isNullOrBlank() && part.disposition.equals(Part.INLINE,true)) {
             val bytes=ByteArrayOutputStream()
             part.inputStream.use{input->val buffer=ByteArray(8192);while(true){checkCancelled();val n=input.read(buffer);if(n<0)break
                 if(bytes.size()+n>ComposeCodec.MAX_METADATA_BYTES)return DecodedMail("",emptyList())
@@ -27,7 +27,6 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
             }}
             return DecodedMail("",emptyList(),composer=ComposeCodec.readMetadata(bytes.toString("UTF-8"),expectedDraftId))
         }
-        val filename=part.fileName?.let { runCatching { MimeUtility.decodeText(it) }.getOrDefault(it) }
         val mime=runCatching { ContentType(part.contentType).baseType }.getOrDefault("application/octet-stream").lowercase()
         val contentId=part.getHeader("Content-ID")?.firstOrNull()?.let(HtmlMail::cid).orEmpty()
         if(part.disposition.equals(Part.ATTACHMENT,true) || !filename.isNullOrBlank() || part.isMimeType("message/rfc822") || contentId.isNotBlank() && mime.startsWith("image/")) {
