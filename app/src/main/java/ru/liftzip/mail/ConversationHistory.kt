@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.sp
     Box(modifier.sizeIn(minWidth=56.dp,minHeight=48.dp)
         .clickable(interactionSource=interaction,indication=null,role=Role.Button,onClick=onClick)
         .semantics{contentDescription="Предыдущие сообщения: $count";stateDescription=if(expanded)"Развернуто" else "Свернуто"}) {
-        Box(Modifier.padding(top=4.dp)) {
+        Box(Modifier.padding(top=12.dp)) {
         Row(Modifier.heightIn(min=28.dp).widthIn(min=52.dp).clip(RoundedCornerShape(percent=50))
             .background(Color(0xFFEEEEEE)).testTag("history-capsule").padding(horizontal=10.dp),
             verticalAlignment=Alignment.CenterVertically) {

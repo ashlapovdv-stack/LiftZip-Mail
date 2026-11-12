@@ -25,8 +25,8 @@ import kotlin.math.abs
 @RunWith(AndroidJUnit4::class)
 class ReaderZoomDeviceTest {
     @get:Rule val rule=createAndroidComposeRule<ComponentActivity>()
-    private val message=MailItem("reader-zoom-regression","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Длинное письмо",body="Ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст",date=1,
-        htmlBody="<p>Ответ</p><div style='height:100000px'></div><div class='gmail_quote'><p>Предыдущий текст</p></div>",contentVersion=MailContent.FORMAT_VERSION)
+    private val message=MailItem("reader-zoom-regression","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Длинное письмо",body="Ответ\nКонец письма\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Предыдущий текст",date=1,
+        htmlBody="<p>Ответ</p><div style='height:100000px'></div><p>Конец письма</p><div class='gmail_quote'><p>Предыдущий текст</p></div>",contentVersion=MailContent.FORMAT_VERSION)
 
     private data class Sample(val time: Long,val scale: Float,val progress: Float,val anchorY: Float,val left: Float,val top: Float,val width: Int,val height: Int,val scrollY: Int)
 

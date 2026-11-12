@@ -406,6 +406,8 @@ object HtmlMail {
         if(!originalScale)doc.select("table").filter{table->table.parents().none{it.normalName()=="table"}}.forEach { table->
             table.wrap("<div class='mail-table-scroll'></div>")
         }
+        // Normalize the display-only cut, not recognition, source MIME or the expanded quote.
+        if(history.separateHistory)CollapsedReplyBoundary.normalize(doc.body())
         val page=doc.clone().apply{if(!originalScale)select("table").remove()}
         val layout=if(html.isNotBlank())layoutWidth(page)else 0
         val viewport=if(originalScale)"device-width, initial-scale=1"else if(layout>0)layout.toString()else "device-width"
