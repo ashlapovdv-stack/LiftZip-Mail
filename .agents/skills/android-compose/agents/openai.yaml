@@ -1,0 +1,4 @@
+interface:
+  display_name: "Android и Compose"
+  short_description: "Проверенная методика: Android и Compose"
+  default_prompt: "Применить $android-compose к текущей задаче проекта."

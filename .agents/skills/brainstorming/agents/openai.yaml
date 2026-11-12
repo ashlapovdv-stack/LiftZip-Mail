@@ -1,0 +1,4 @@
+interface:
+  display_name: "Проектирование решений"
+  short_description: "Проверенная методика: Проектирование решений"
+  default_prompt: "Применить $brainstorming к текущей задаче проекта."

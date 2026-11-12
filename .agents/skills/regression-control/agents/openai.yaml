@@ -1,0 +1,4 @@
+interface:
+  display_name: "Контроль регрессий"
+  short_description: "Проверенная методика: Контроль регрессий"
+  default_prompt: "Применить $regression-control к текущей задаче проекта."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Изоляция веток"
+  short_description: "Проверенная методика: Изоляция веток"
+  default_prompt: "Применить $using-git-worktrees к текущей задаче проекта."
