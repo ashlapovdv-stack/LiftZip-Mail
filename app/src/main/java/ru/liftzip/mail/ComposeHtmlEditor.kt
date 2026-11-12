@@ -86,7 +86,9 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
           html,body{margin:0;padding:0;background:white;color:#303030;font:16px/1.5 sans-serif}
           #editor{box-sizing:border-box;min-height:280px;padding:16px;outline:none;overflow-wrap:anywhere}
           #editor:empty:before{content:'Текст письма';color:#777;pointer-events:none}
-          #editor img{max-width:100%;height:auto} #editor table{max-width:100%} #editor pre{white-space:pre-wrap}
+          #editor img{max-width:100%;height:auto} #editor table{max-width:100%!important}
+          #editor p,#editor div,#editor span,#editor a,#editor td,#editor th{white-space:normal!important;overflow-wrap:anywhere}
+          #editor pre,#editor pre *{white-space:pre-wrap!important;overflow-wrap:anywhere}
         </style></head><body><div id="editor" role="textbox" aria-label="Текст письма" aria-multiline="true" contenteditable="true">${ComposerHtml.clean(initial)}</div><script nonce="$nonce">
           (function(){
             const editor=document.getElementById('editor');let range=null;

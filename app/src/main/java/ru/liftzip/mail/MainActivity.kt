@@ -230,7 +230,7 @@ private val Paper=Color(0xFFF8F9F6)
     }
     RouteBackHandler(route,onPreview={preview=null;route="reader"},onMessage={goInbox()},onCompose={
         val d=draft?.let(editorSession::snapshot)
-        if(d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))
+        if(d!=null && (ComposerHtml.hasContent(d)||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))
             editorSession.flush(d){latest->vm.saveDraft(latest){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}}
         else {draft=null;goInbox()}
     },onHome={systemInbox()})

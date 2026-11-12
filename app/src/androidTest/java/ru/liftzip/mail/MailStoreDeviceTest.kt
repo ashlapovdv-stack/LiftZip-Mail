@@ -51,7 +51,7 @@ class MailStoreDeviceTest {
     @Test fun structuredDraftSurvivesPreviewFlagUpdatesQueueSnapshotsAndReopen() {
         val c=context()
         val source=message().copy(id="source",body="Полная история",htmlBody="<table><tr><td>История</td></tr></table>",headers=MessageHeaders("<parent@example.com>","reply@example.com",references=listOf("<first@example.com>")))
-        val editor=ComposerSnapshot("Новый текст",ComposeContent.quote(source,"reply"),true,"copy@example.com","private@example.com")
+        val editor=ComposerSnapshot("Новый текст",ComposeContent.quote(source,"reply"),true,"copy@example.com","private@example.com",bodyHtml="<b>Новый текст</b><table><tbody><tr><td>HTML</td></tr></tbody></table>")
         val draft=message().copy(body="Новый текст и история",composer=editor,cc=editor.cc,bcc=editor.bcc,headers=MessageHeaders("<draft@example.com>"),
             outgoing=listOf(OutgoingFile("content://owned/photo","photo.png","image/png",12,"photo")))
         try {
@@ -61,7 +61,7 @@ class MailStoreDeviceTest {
                 db.putAction(MailAction("send","a",draft.id,ActionKind.SEND,payload,1))
                 db.putMessage(db.messages().first{it.id==draft.id}.copy(starred=true))
                 assertEquals(editor,db.message(draft.id)!!.composer)
-                db.putMessage(draft.copy(composer=editor.copy(text="Другая редакция")))
+                db.putMessage(draft.copy(composer=editor.copy(text="Другая редакция",bodyHtml="<i>Другая редакция</i>")))
                 assertEquals(editor,db.decodeMessage(org.json.JSONObject(db.action("send")!!.payload)).composer)
                 db.removeMessages(setOf(source.id))
             }
@@ -69,6 +69,7 @@ class MailStoreDeviceTest {
                 val restored=db.message(draft.id)!!
                 assertEquals(editor.quote,restored.composer!!.quote)
                 assertEquals("Другая редакция",restored.composer!!.text)
+                assertEquals("<i>Другая редакция</i>",restored.composer!!.bodyHtml)
                 assertEquals("private@example.com",restored.bcc)
                 assertEquals("photo",restored.outgoing.single().contentId)
                 assertEquals("<draft@example.com>",restored.headers!!.messageId)
