@@ -126,17 +126,18 @@ private val Olive=Color(0xFF4C5D47)
 private val Paper=Color(0xFFF8F9F6)
 
 @Composable internal fun MailTheme(style: MailStyle=MailStyle.STANDARD,content: @Composable ()->Unit) {
-    val dark=isSystemInDarkTheme()
+    val dark=isSystemInDarkTheme() && !style.lightNature
     val colors=if(dark)darkColorScheme(primary=Color(0xFFBDD0B2),secondary=Color(0xFFD5D8B8),secondaryContainer=Color(0xFF354332),onSecondaryContainer=Color(0xFFE2EADB),surface=Color(0xFF171B16),background=Color(0xFF111510))
     else lightColorScheme(primary=Olive,secondary=Color(0xFF69775F),secondaryContainer=Color(0xFFE3E8DC),onSecondaryContainer=Color(0xFF293525),primaryContainer=Color(0xFFE4EBD9),surface=Paper,background=Paper,surfaceContainer=Color(0xFFF0F2EB))
+    val palette=style.palette
     val selected=if(style==MailStyle.STANDARD)colors else if(dark)colors.copy(
         primary=if(style==MailStyle.COZY)Color(0xFFD3B8FF)else Color(0xFFA4C8FF),onPrimary=Color(0xFF172338),
         primaryContainer=if(style==MailStyle.COZY)Color(0xFF45315F)else Color(0xFF203F65),onPrimaryContainer=Color(0xFFF0EAFF),
         secondaryContainer=Color(0xFF303B50),onSecondaryContainer=Color(0xFFE2EAFF),surface=Color(0xFF171D29),background=Color(0xFF171D29),surfaceContainer=Color(0xFF242C3A))
-    else colors.copy(primary=style.accent,onPrimary=Color.White,primaryContainer=if(style==MailStyle.COZY)Color(0xFFEFE6FF)else Color(0xFFDBE8FF),
-        onPrimaryContainer=if(style==MailStyle.COZY)Color(0xFF50327C)else Color(0xFF163F81),
-        secondaryContainer=if(style==MailStyle.COZY)Color(0xFFF0EAF7)else Color(0xFFDFEAFE),onSecondaryContainer=Color(0xFF344661),
-        surface=if(style==MailStyle.COZY)Color(0xFFFFF8EF)else Color(0xFFF0F5FF),background=if(style==MailStyle.COZY)Color(0xFFFFF8EF)else Color(0xFFF0F5FF),surfaceContainer=Color(0xFFFFFEFC))
+    else colors.copy(primary=palette.accent,onPrimary=Color.White,primaryContainer=palette.container,
+        onPrimaryContainer=palette.onContainer,secondary=palette.accent,
+        secondaryContainer=palette.secondaryContainer,onSecondaryContainer=palette.onSecondaryContainer,
+        surface=palette.surface,background=palette.surface,surfaceContainer=palette.card)
     CompositionLocalProvider(LocalMailStyle provides style){MaterialTheme(colorScheme=selected,content=content)}
 }
 
