@@ -156,7 +156,8 @@ class ReaderZoomDeviceTest {
             assertTrue(citation.getGlobalVisibleRect(rect));rule.activity.window.decorView.getLocationOnScreen(root)
             mainScale=main.scale;base=citation.scale;generation=main.documentGeneration()
         }
-        val focus=Offset(rect.exactCenterX()-root[0],rect.exactCenterY()-root[1])
+        val logicalHeight=rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().last().boundsInRoot.height
+        val focus=Offset(rect.exactCenterX()-root[0],rect.top+minOf(rect.height().toFloat(),logicalHeight)/2f-root[1])
         val density=citation.resources.displayMetrics.density
         val sampler=FrameSampler(citation,focus.y);sampler.start()
         val pinch=Pinch(focus,35f*density);pinch.down()
@@ -170,6 +171,21 @@ class ReaderZoomDeviceTest {
         }
         assertStableViewport(samples)
         screenshot(if(html)"html-citation-zoom" else "plain-citation-zoom")
+        repeat(8) {
+            rule.onNodeWithTag("reader-viewport").performTouchInput {
+                swipe(Offset(width*0.4f,height*0.75f),Offset(width*0.4f,height*0.3f),400)
+            }
+            rule.waitForIdle()
+        }
+        rule.runOnIdle {
+            assertFalse(citation.canScrollVertically(1))
+            val visible=Rect();assertTrue(citation.getGlobalVisibleRect(visible))
+            val top=IntArray(2);citation.getLocationOnScreen(top)
+            assertTrue("Zoomed citation's final pixels must be visible",top[1]+citation.height<=visible.bottom+1)
+        }
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertIsDisplayed().performClick()
+        rule.waitUntil(10_000){var initial=false;rule.runOnUiThread{initial=citation.atInitialScale()};initial}
+        rule.runOnIdle{assertEquals(mainScale,main.scale,0.03f);assertEquals(generation,main.documentGeneration())}
     }
 
     @Test fun scrollControlsToolbarAtBaseScaleAndZoomTakesPriorityAfterPinch() {

@@ -65,7 +65,7 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: LiftZip-Mail-debug
-          run-id: 43205886724
+          run-id: 43231134395
           github-token: ${{ github.token }}
           path: upgrade-baseline
       - name: Free runner space for the Android userdata image
@@ -93,7 +93,7 @@ jobs:
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb shell run-as ru.liftzip.mail ls files/upgrade-probe > upgrade-check.txt
             adb shell dumpsys package ru.liftzip.mail | grep -F 'versionName=0.5.20' >> upgrade-check.txt
-            bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.AppearanceDeviceTest#selectionActionsStayVisibleAboveAHiddenInbox,ru.liftzip.mail.ReaderZoomDeviceTest#expandedHtmlCitationReceivesRealPinch,ru.liftzip.mail.ReaderZoomDeviceTest#expandedPlainCitationReceivesRealPinch -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
+            bash scripts/device-tests.sh
       - name: Save device test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -108,7 +108,6 @@ jobs:
           retention-days: 14
 
   reader-gestures:
-    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

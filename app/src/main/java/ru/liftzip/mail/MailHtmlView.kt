@@ -394,6 +394,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var failed by rendererFailed
     var web by remember(message.id,message.contentVersion){mutableStateOf<MailHtmlWebView?>(null)}
+    var citationZoomed by remember(message.id,message.contentVersion){mutableStateOf(false)}
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
     val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
     val background=if(message.htmlBody.isNotBlank() && MaterialTheme.colorScheme.surface.luminance()<0.4f)"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
@@ -471,14 +472,14 @@ internal fun readerBodyHeight(normal: Int): Int=normal
         } else if(ready!=null && headerMeasured) {
             val windowHeight=if(prepared)viewport else height.coerceAtMost(viewport)
             val contentTop=(headerHeight-(scroll?.headerOffset?:0f)).coerceIn(0f,viewport.toFloat()).roundToInt()
-            val contentHeight=((if(zoomed)viewport else height.coerceAtMost(viewport))-contentTop).coerceAtLeast(0)
+            val contentHeight=((if(zoomed || citationZoomed)viewport else height.coerceAtMost(viewport))-contentTop).coerceAtLeast(0)
             // The native child always has the complete viewport after initial preparation.
             // Its unzoomed document extent alone determines where the Compose history follows.
             androidx.compose.ui.layout.Layout(content={
                 key(message.id,message.contentVersion) {
                     AndroidView(factory={c->FrameLayout(c).apply {
                         try {
-                            val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{latestMeasured(it)},ready={latestPrepared()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={progress->scroll?.nativeScaleRatio=web?.relativeScale()?:1f;latestZoom(progress)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},verticalChanged={scroll?.nativeScrollY=it},waitForDocumentLayout=true)
+                            val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{latestMeasured(it)},ready={latestPrepared()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={progress->scroll?.nativeScaleRatio=web?.relativeScale()?:1f;if(parentScroll!=null)citationZoomed=progress>0.001f;web?.let{scrollOwner?.citationScaleChanged(it,progress)};latestZoom(progress)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},verticalChanged={scroll?.nativeScrollY=it},waitForDocumentLayout=true)
                             web=view
                             view.onReleased={scrollOwner?.detach(view);if(web===view)web=null}
                             scrollOwner?.attach(view,primary=scroll!=null)
@@ -502,7 +503,11 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 val unbounded=constraints.copy(minHeight=0,maxHeight=androidx.compose.ui.unit.Constraints.Infinity)
                 val child=measurables[0].measure(unbounded)
                 val contentBounds=measurables[1].measure(unbounded)
-                layout(child.width,height.coerceAtMost(viewport).coerceAtLeast(1)){
+                // A short citation needs the complete reading window after zoom, so
+                // its final pixels can be brought on screen by the shared page scroll.
+                // The native child's viewport and screen position remain unchanged.
+                val extent=if(citationZoomed)viewport else height.coerceAtMost(viewport)
+                layout(child.width,extent.coerceAtLeast(1)){
                     child.placeRelative(0,0)
                     contentBounds.placeRelative(0,contentTop)
                 }

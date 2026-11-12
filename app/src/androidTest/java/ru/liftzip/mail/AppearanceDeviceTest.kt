@@ -28,10 +28,12 @@ class AppearanceDeviceTest {
         }
     }
     @Test fun selectionActionsStayVisibleAboveAHiddenInbox() {
-        val memory=InboxMemory(androidx.compose.foundation.lazy.LazyListState(8),initialControls=0f)
+        val memory=InboxMemory(initialControls=0f)
         rule.setContent {MailTheme(MailStyle.COZY){InboxScreen(state(MailStyle.COZY),null,MailFolder.INBOX,null,memory,
             onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},
             onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}}
+        rule.waitUntil(10_000){rule.onAllNodesWithTag("mail-row:theme-1").fetchSemanticsNodes().isNotEmpty()}
+        rule.onNodeWithTag("inbox-list").performScrollToIndex(8)
         val row=rule.onNodeWithTag("mail-row:theme-10")
         row.assertIsDisplayed()
         val before=row.fetchSemanticsNode().boundsInRoot.top
@@ -40,6 +42,7 @@ class AppearanceDeviceTest {
         assertEquals("Selection must not reposition the list",before,row.fetchSemanticsNode().boundsInRoot.top,1f)
         rule.onNodeWithContentDescription("Действия с выбранными письмами").assertIsDisplayed().performClick()
         rule.onNodeWithText("Отметить прочитанными").assertIsDisplayed()
+        saveDeviceScreenshot(rule,"selection-hidden-inbox")
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         rule.onNodeWithContentDescription("Снять выделение").performClick()
         rule.runOnIdle{assertEquals(0f,memory.controlsProgress.floatValue,0f)}
