@@ -1,0 +1,4 @@
+interface:
+  display_name: "Контроль архитектуры"
+  short_description: "Проверенная методика: Контроль архитектуры"
+  default_prompt: "Применить $architecture-guardian к текущей задаче проекта."

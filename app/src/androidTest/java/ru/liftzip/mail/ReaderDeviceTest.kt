@@ -50,10 +50,26 @@ class ReaderDeviceTest {
             if(expanded)"Развернуто" else "Свернуто"))
         rule.waitUntil(15_000) {
             var ready=false
-            rule.runOnUiThread{ready=view.documentGeneration()>revision && view.interactionEnabled && view.progress==100}
+            rule.runOnUiThread{ready=view.documentGeneration()==revision && view.interactionEnabled && view.progress==100}
             ready
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
+    }
+    @Test fun historyBlocksKeepSourceHiddenUntilRequested() {
+        val source="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
+        val conversation=ConversationText.parse(source)
+        rule.setContent{MailTheme{androidx.compose.foundation.layout.Column {ConversationHistory("blocks",conversation,emptyList())}}}
+        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        rule.onNodeWithText("Старое письмо").assertDoesNotExist()
+        toggle.performClick()
+        rule.onNodeWithText("Старое письмо").assertExists()
+        rule.onNodeWithText(source).assertDoesNotExist()
+        rule.onNodeWithText("Показать полный исходный текст").performClick()
+        rule.onNodeWithText(source).assertExists()
+        rule.onNodeWithText("Скрыть исходный текст").performClick()
+        rule.onNodeWithText(source).assertDoesNotExist()
+        toggle.performClick()
+        rule.onNodeWithText("Старое письмо").assertDoesNotExist()
     }
     @Test fun unavailableBodyShowsErrorWithoutPresentingThePreviewAsMail() {
         val m=message.copy(body="Текст из списка",htmlBody="",contentCached=false,previewOnly=false)
@@ -93,8 +109,15 @@ class ReaderDeviceTest {
         assertEquals(1,matches(view,"Текущий ответ"))
         assertEquals(0,matches(view,"Первое старое письмо"))
         changeHistory(view,toggle,true)
-        assertEquals(1,matches(view,"Первое старое письмо"))
-        assertEquals(1,matches(view,"Самое старое письмо"))
+        rule.onNodeWithText("Первое старое письмо",substring=true).assertExists()
+        rule.onNodeWithText("Самое старое письмо",substring=true).assertExists()
+        assertEquals(0,matches(view,"Первое старое письмо"))
+        val source=rule.onNodeWithText("Показать полный исходный текст")
+        source.performScrollTo().performClick()
+        rule.onNodeWithText(conversation.original).assertExists()
+        rule.onNodeWithText("Скрыть исходный текст").performScrollTo().performClick()
+        rule.onNodeWithText(conversation.original).assertDoesNotExist()
+        rule.onNodeWithText("Показать оригинальное HTML-письмо").performScrollTo().assertExists()
         changeHistory(view,toggle,false)
         assertEquals(0,matches(view,"Первое старое письмо"))
         assertEquals(1,matches(view,"Текущий ответ"))
@@ -210,7 +233,8 @@ class ReaderDeviceTest {
         assertEquals(1,matches(view,"Цитата текущего ответа"));assertEquals(0,matches(view,"Старое письмо"))
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         history.assertIsDisplayed();changeHistory(view,history,true)
-        assertEquals(1,matches(view,"Старое письмо"))
+        assertEquals(0,matches(view,"Старое письмо"))
+        rule.onNodeWithText("Старое письмо").assertExists()
         assertEquals(1,matches(view,"Цитата текущего ответа"))
         changeHistory(view,history,false)
         assertEquals(0,matches(view,"Старое письмо"))
@@ -229,8 +253,9 @@ class ReaderDeviceTest {
         toggle.assertIsDisplayed()
         assertEquals(1,matches(view,"Текущий ответ"));assertEquals(0,matches(view,"Первый ответ"))
         changeHistory(view,toggle,true)
-        assertEquals(1,matches(view,"Второй ответ"))
-        assertEquals(1,matches(view,"Первый ответ"));assertEquals(1,matches(view,"Текущий ответ"))
+        rule.onNodeWithText("Второй ответ").assertExists()
+        rule.onNodeWithText("Первый ответ").assertExists()
+        assertEquals(0,matches(view,"Первый ответ"));assertEquals(1,matches(view,"Текущий ответ"))
         changeHistory(view,toggle,false)
         assertEquals(0,matches(view,"Первый ответ"))
         assertEquals(1,matches(view,"Текущий ответ"))

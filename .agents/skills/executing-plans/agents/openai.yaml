@@ -1,0 +1,4 @@
+interface:
+  display_name: "Выполнение плана"
+  short_description: "Проверенная методика: Выполнение плана"
+  default_prompt: "Применить $executing-plans к текущей задаче проекта."

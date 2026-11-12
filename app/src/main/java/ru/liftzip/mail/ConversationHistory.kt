@@ -30,8 +30,18 @@ import androidx.compose.ui.unit.sp
 
 @Composable fun ConversationHistory(id: String,conversation: QuotedConversation,ownAddresses: List<String>) {
     var expanded by remember(id,conversation.original){mutableStateOf(false)}
+    var original by remember(id,conversation.original){mutableStateOf(false)}
     if(conversation.messages.isNotEmpty())HistoryToggle(conversation.messages.size,expanded,{expanded=!expanded})
-    if(expanded)QuotedHistoryContent(conversation)
+    if(expanded) {
+        QuotedHistoryContent(conversation)
+        TextButton(onClick={original=!original}) {
+            Text(if(original)"Скрыть исходный текст" else "Показать полный исходный текст")
+        }
+        if(original)SelectionContainer {
+            Text(conversation.original,style=MaterialTheme.typography.bodyMedium,
+                modifier=Modifier.fillMaxWidth().padding(vertical=12.dp))
+        }
+    }
 }
 
 @Composable internal fun QuotedHistoryContent(conversation: QuotedConversation) {
@@ -40,7 +50,7 @@ import androidx.compose.ui.unit.sp
             Column(Modifier.fillMaxWidth()) {
                 conversation.messages.forEachIndexed { index,message->
                     val heading=message.attribution?.takeIf{it.isNotBlank()}?:listOfNotNull(message.date,message.sender?.let{"от $it"}).joinToString(" ").let{if(it.isNotBlank())"$it:" else "Предыдущее сообщение:"}
-                    val lineColor=MaterialTheme.colorScheme.primary.copy(alpha=0.7f)
+                    val lineColor=androidx.compose.ui.graphics.Color(0xFFA58AC7)
                     Row(Modifier.fillMaxWidth().padding(start=(index.coerceAtMost(4)*8).dp,bottom=18.dp).drawBehind{drawLine(lineColor,androidx.compose.ui.geometry.Offset(1.dp.toPx(),0f),androidx.compose.ui.geometry.Offset(1.dp.toPx(),size.height),2.dp.toPx())}) {
                         Column(Modifier.weight(1f).padding(start=10.dp)) {
                             Text(heading,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)

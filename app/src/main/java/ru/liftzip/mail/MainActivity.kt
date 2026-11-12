@@ -765,6 +765,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
     var historyExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
+    var originalTextExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
+    var originalHtmlExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
     val rendererFailed=remember(m.id,m.contentVersion){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var pinchActive by remember(m.id){mutableStateOf(false)}
@@ -891,7 +893,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
             else {
                 val (parsed,history)=parsed
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},if(historyExpanded && m.htmlBody.isNotBlank())HtmlMail.noHistory(m.htmlBody)else history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
@@ -901,7 +903,24 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
                 if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
                     HistoryToggle(parsed.messages.size,historyExpanded,{historyExpanded=!historyExpanded})
-                    if(m.htmlBody.isBlank() && historyExpanded)QuotedHistoryContent(parsed)
+                    if(historyExpanded) {
+                        QuotedHistoryContent(parsed)
+                        TextButton(onClick={originalTextExpanded=!originalTextExpanded}) {
+                            Text(if(originalTextExpanded)"Скрыть исходный текст" else "Показать полный исходный текст")
+                        }
+                        if(originalTextExpanded)androidx.compose.foundation.text.selection.SelectionContainer {
+                            Text(parsed.original,style=MaterialTheme.typography.bodyMedium,
+                                modifier=Modifier.fillMaxWidth().padding(vertical=12.dp))
+                        }
+                        if(m.htmlBody.isNotBlank()) {
+                            TextButton(onClick={originalHtmlExpanded=!originalHtmlExpanded}) {
+                                Text(if(originalHtmlExpanded)"Скрыть оригинальное HTML-письмо" else "Показать оригинальное HTML-письмо")
+                            }
+                            // Independent renderer: never replace the main document or attach
+                            // another WebView to its scroll/zoom/header coordinator.
+                            if(originalHtmlExpanded)MailHtmlBody(m,parsed.original,HtmlMail.noHistory(m.htmlBody),onInline,onLink)
+                        }
+                    }
                 }
             }
             Spacer(Modifier.height(100.dp))
