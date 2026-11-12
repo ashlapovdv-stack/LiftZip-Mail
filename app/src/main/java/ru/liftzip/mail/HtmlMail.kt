@@ -16,7 +16,7 @@ sealed interface MailImageSource {
     data class Remote(val url: String): MailImageSource
     data class Data(val mime: String,val base64: String): MailImageSource
 }
-data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSource>,val externalImages: Boolean,val layoutWidth: Int=0,val externalAllowed: Boolean=false)
+data class MailHtmlDocument(val html: String,val images: Map<String,MailImageSource>,val externalImages: Boolean,val layoutWidth: Int=0,val externalAllowed: Boolean=false,val originalScale: Boolean=false)
 
 /** HTML remains data. Only the renderer's generated image URLs can request resources. */
 object HtmlMail {
@@ -168,7 +168,7 @@ object HtmlMail {
         NO_HTML,NO_PLAIN_HISTORY,NO_PROVIDER_BOUNDARY,MULTIPLE_PROVIDER_BOUNDARIES,
         TRAILING_CONTENT,EMPTY_CURRENT,PLAIN_HISTORY_MISMATCH,SEPARATED
     }
-    data class HistoryAnalysis(val currentHtml: String,val separateHistory: Boolean,val reason: HistoryReason)
+    data class HistoryAnalysis(val currentHtml: String,val separateHistory: Boolean,val reason: HistoryReason,val quotedHtml: String="")
     fun noHistory(html: String)=HistoryAnalysis(html,false,HistoryReason.NO_PLAIN_HISTORY)
     private fun normalizedHistoryText(value: String)=value.replace('\u00a0',' ').replace("\uFFFC","")
         .replace(Regex("[\\s\\u200B\\uFEFF]+")," ").trim()
@@ -331,7 +331,10 @@ object HtmlMail {
             val attributionNodes=attributionPaths.map{path->resolveNode(shortened,path)}
             attributionNodes.forEach{it.remove()};nodes[path].remove()
             if(text(shortened.outerHtml()).isBlank())return keep(HistoryReason.EMPTY_CURRENT)
-            return HistoryAnalysis(shortened.outerHtml(),true,HistoryReason.SEPARATED)
+            val richHistory=attribution?.html.orEmpty()+boundary.outerHtml()
+            // Preserve scoped stylesheet rules for the independently rendered citation.
+            val styles=doc.select("style").joinToString(""){it.outerHtml()}
+            return HistoryAnalysis(shortened.outerHtml(),true,HistoryReason.SEPARATED,styles+richHistory)
         }
         if(providers.isEmpty())return keep(HistoryReason.NO_PROVIDER_BOUNDARY)
         if(candidates.any{contentAfter(doc.body(),it)})return keep(HistoryReason.TRAILING_CONTENT)
@@ -360,7 +363,7 @@ object HtmlMail {
             (sides["padding-right"]==true || sides["margin-right"]==true)
     }
     fun document(html: String,plain: String,attachments: List<Attachment>,history: HistoryAnalysis=noHistory(html),external: Boolean=false,
-        foreground: String="#20241f",background: String="#f8f9f6",identity: String=""): MailHtmlDocument {
+        foreground: String="#20241f",background: String="#f8f9f6",identity: String="",originalScale: Boolean=false): MailHtmlDocument {
         val currentHtml=html.takeIf{it.isNotBlank()}?.let{history.currentHtml}
         val source=currentHtml?:this.plain(plain)
         val namespace=MailImageLimits.hash(identity+source+external+attachments.joinToString{it.path+it.contentId})
@@ -397,12 +400,12 @@ object HtmlMail {
         val csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src $ORIGIN; font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'"
         // Data tables are independent horizontal regions. Their explicit width must
         // not reduce every surrounding paragraph to a desktop overview.
-        doc.select("table").filter{table->table.parents().none{it.normalName()=="table"}}.forEach { table->
+        if(!originalScale)doc.select("table").filter{table->table.parents().none{it.normalName()=="table"}}.forEach { table->
             table.wrap("<div class='mail-table-scroll'></div>")
         }
-        val page=doc.clone().apply{select("table").remove()}
+        val page=doc.clone().apply{if(!originalScale)select("table").remove()}
         val layout=if(html.isNotBlank())layoutWidth(page)else 0
-        val viewport=if(layout>0)layout.toString()else "device-width"
+        val viewport=if(originalScale)"device-width, initial-scale=1"else if(layout>0)layout.toString()else "device-width"
         // Only the outer wrapper's own horizontal spacing replaces our inset; inner
         // element styles such as p { margin: 0 } do not provide page margins.
         val outer=doc.body().children().singleOrNull()
@@ -410,17 +413,22 @@ object HtmlMail {
         val (hasLeftInset,hasRightInset)=horizontalInsets(outerStyle)
         val leftInset=if(currentHtml==null || !hasLeftInset)"16px" else "0"
         val rightInset=if(currentHtml==null || !hasRightInset)"16px" else "0"
-        val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport, minimum-scale=0.01, maximum-scale=10"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
-            html,body{margin:0;padding:0;max-width:100%;overflow-wrap:anywhere;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
-            body{box-sizing:border-box;padding-left:$leftInset;padding-right:$rightInset}
+        val adaptation=if(originalScale)"" else """
             p,div,span,a,td,th{overflow-wrap:anywhere;white-space:normal!important}
             pre,pre *{white-space:pre-wrap!important;overflow-wrap:anywhere}
             .mail-table-scroll{max-width:100%;overflow-x:auto}
             .mail-table-scroll>table{max-width:100%!important}
-            img{max-width:100%!important;height:auto} a{color:#526b45;text-decoration:underline}
+        """.trimIndent()
+        val imageSizing=if(originalScale)""else "img{max-width:100%!important;height:auto}"
+        val wrapping=if(originalScale)"normal"else "anywhere"
+        val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport, minimum-scale=0.01, maximum-scale=10"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
+            html,body{margin:0;padding:0;max-width:100%;overflow-wrap:$wrapping;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
+            body{box-sizing:border-box;padding-left:$leftInset;padding-right:$rightInset}
+            $adaptation
+            $imageSizing a{color:#526b45;text-decoration:underline}
             .mail-plain,.mail-plain *{white-space:pre-wrap!important}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
-        return MailHtmlDocument(wrapped,resources,hasExternal,layout,external)
+        return MailHtmlDocument(wrapped,resources,hasExternal,layout,external,originalScale)
     }
     /** One forward scan, including malformed input; nested url( text cannot cause regex backtracking. */
     private fun rewriteCss(value: String,resolve: (String)->String?): String {

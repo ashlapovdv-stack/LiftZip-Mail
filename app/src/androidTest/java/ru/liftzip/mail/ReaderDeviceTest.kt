@@ -30,6 +30,18 @@ class ReaderDeviceTest {
     @Composable private fun reader(m: MailItem=message) {
         ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("No inline images")},{},{},{},{},{},{})
     }
+    private fun historyView(): MailHtmlWebView {
+        fun collect(root: View,out: MutableList<MailHtmlWebView>) {
+            if(root is MailHtmlWebView)out+=root
+            if(root is ViewGroup)for(i in 0 until root.childCount)collect(root.getChildAt(i),out)
+        }
+        var result: MailHtmlWebView?=null
+        rule.waitUntil(30_000){rule.runOnUiThread{
+            val views=mutableListOf<MailHtmlWebView>();collect(rule.activity.window.decorView,views)
+            result=views.drop(1).firstOrNull{it.interactionEnabled && it.progress==100 && it.height>20}
+        };result!=null}
+        return result!!
+    }
     private fun loaded(): MailHtmlWebView {
         rule.waitForIdle()
         rule.waitUntil(60_000){var ready=false;rule.runOnUiThread{ready=webView()?.let{it.interactionEnabled && it.contentHeight>0 && it.height>20}?:false};ready}
@@ -109,8 +121,9 @@ class ReaderDeviceTest {
         assertEquals(1,matches(view,"Текущий ответ"))
         assertEquals(0,matches(view,"Первое старое письмо"))
         changeHistory(view,toggle,true)
-        rule.onNodeWithText("Первое старое письмо",substring=true).assertExists()
-        rule.onNodeWithText("Самое старое письмо",substring=true).assertExists()
+        val citation=historyView()
+        assertEquals(1,matches(citation,"Первое старое письмо"))
+        assertEquals(1,matches(citation,"Самое старое письмо"))
         assertEquals(0,matches(view,"Первое старое письмо"))
         val source=rule.onNodeWithText("Показать полный исходный текст")
         source.performScrollTo().performClick()
@@ -234,7 +247,7 @@ class ReaderDeviceTest {
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         history.assertIsDisplayed();changeHistory(view,history,true)
         assertEquals(0,matches(view,"Старое письмо"))
-        rule.onNodeWithText("Старое письмо").assertExists()
+        assertEquals(1,matches(historyView(),"Старое письмо"))
         assertEquals(1,matches(view,"Цитата текущего ответа"))
         changeHistory(view,history,false)
         assertEquals(0,matches(view,"Старое письмо"))
@@ -253,8 +266,9 @@ class ReaderDeviceTest {
         toggle.assertIsDisplayed()
         assertEquals(1,matches(view,"Текущий ответ"));assertEquals(0,matches(view,"Первый ответ"))
         changeHistory(view,toggle,true)
-        rule.onNodeWithText("Второй ответ").assertExists()
-        rule.onNodeWithText("Первый ответ").assertExists()
+        val citation=historyView()
+        assertEquals(1,matches(citation,"Второй ответ"))
+        assertEquals(1,matches(citation,"Первый ответ"))
         assertEquals(0,matches(view,"Первый ответ"));assertEquals(1,matches(view,"Текущий ответ"))
         changeHistory(view,toggle,false)
         assertEquals(0,matches(view,"Первый ответ"))
@@ -555,6 +569,51 @@ class ReaderDeviceTest {
         rule.runOnIdle{assertTrue("Whole page was shrunk",view.scale>=view.resources.displayMetrics.density*0.9f)}
         assertEquals(1,matches(view,"Широкая строка"))
         saveDeviceScreenshot(rule,"html-paste-responsive")
+    }
+
+    @Test fun receivedRichReplyExpandsAsHtmlAndBothPresentationsCanBeToggled() {
+        val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets.open("rich-reply-display.eml").use{
+            MimeReader().read(jakarta.mail.internet.MimeMessage(jakarta.mail.Session.getInstance(java.util.Properties()),it))}
+        val conversation=ConversationText.parse(mime.text)
+        rule.setContent{MailTheme{reader(message.copy(id="rich-reply",body=mime.text,htmlBody=mime.html))}}
+        val main=loaded()
+        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: ${conversation.messages.size}")
+        changeHistory(main,toggle,true)
+        val quote=historyView()
+        assertEquals(1,matches(quote,"Тест HTML-письма"));assertEquals(1,matches(quote,"Контактор"))
+        assertEquals(0,matches(main,"Контактор"))
+        toggle.performScrollTo();saveDeviceScreenshot(rule,"rich-reply-expanded")
+        var generation=0L;rule.runOnIdle{generation=quote.documentGeneration()}
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=quote.documentGeneration()>generation && quote.interactionEnabled && quote.progress==100};ready}
+        rule.runOnIdle {
+            assertEquals(quote.resources.displayMetrics.density,quote.scale,0.05f)
+            assertFalse(quote.settings.javaScriptEnabled)
+            assertTrue("Original width must be available to pan",quote.canScrollHorizontally(1))
+        }
+        toggle.performScrollTo();saveDeviceScreenshot(rule,"rich-reply-original")
+        rule.onNodeWithContentDescription("Подогнать HTML по ширине").performClick()
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").assertExists()
+        assertEquals(1,matches(historyView(),"Контактор"))
+        changeHistory(main,toggle,false)
+        assertEquals(0,matches(main,"Контактор"))
+    }
+    @Test fun originalScaleControlIsAbsentForPlainMailAndRoundTripsAFixedCanvas() {
+        var rich by mutableStateOf(false)
+        val html="<div style='width:960px'><p>Fixed canvas</p><table width='960'><tr><td>First</td><td>Second</td></tr></table></div>"
+        rule.setContent{MailTheme{reader(message.copy(id="scale-control",body="Fixed canvas",htmlBody=if(rich)html else ""))}}
+        loaded();rule.onNodeWithContentDescription("Оригинальный масштаб HTML").assertDoesNotExist()
+        rule.runOnIdle{rich=true}
+        val view=loaded()
+        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100 && view.scale<view.resources.displayMetrics.density*0.8f};ready}
+        var baseline=0f;var generation=0L
+        rule.runOnIdle{baseline=view.scale;generation=view.documentGeneration()}
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100};ready}
+        rule.runOnIdle{assertEquals(view.resources.displayMetrics.density,view.scale,0.05f);generation=view.documentGeneration()}
+        rule.onNodeWithContentDescription("Подогнать HTML по ширине").performClick()
+        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100};ready}
+        rule.runOnIdle{assertEquals(baseline,view.scale,0.05f);assertFalse(view.settings.javaScriptEnabled)}
     }
 
 }

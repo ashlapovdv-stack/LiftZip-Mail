@@ -143,7 +143,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                     // Wide HTML can exceed the sender's declared viewport. Measure the
                     // rendered scroll extent while hidden and lay out once at that width.
                     // This is done only during the initial preparation, never on pinch.
-                    if(!measuredInitialLayout && width>0 && renderScale>0f){
+                    if(document?.originalScale!=true && !measuredInitialLayout && width>0 && renderScale>0f){
                         measuredInitialLayout=true
                         val extent=computeHorizontalScrollRange()
                         if(extent>width+2){
@@ -161,7 +161,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                         }
                     }
                     if(initialScale==null){
-                        initialScale=renderScale;establishingScale=true;fitWidth()
+                        initialScale=renderScale;establishingScale=true
+                        if(document?.originalScale==true)zoomBy((resources.displayMetrics.density/renderScale).coerceIn(0.01f,100f))else fitWidth()
                         postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(fitRequest: Long){
                             if(live && fitRequest==documentRevision){
                                 initialScale=renderScale;establishingScale=false
@@ -186,6 +187,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(document===next)return
         val old=document
         val base=initialScale
+        val modeChanged=old!=null && old.originalScale!=next.originalScale
+        if(modeChanged)deferredAnchor=if(renderScale>0f)ReadingAnchor(1f,scrollX/renderScale,scrollY/renderScale)else null
         // Intrinsic measurement stays at base scale. Restore the reading anchor
         // only after the fixed native canvas is installed.
         pendingAnchor=if(waitForDocumentLayout)null else {
@@ -198,6 +201,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         layoutRevision++;layoutPending=false;awaitingInitialLayout=false
         measuredInitialLayout=false
         initialScale=null;establishingScale=false;lastHeight=0;documentHeight=0
+        if(modeChanged)post{if(live)zoomChanged(0f)}
         fling.abortAnimation();scrollTo(0,0)
         setInitialScale(0)
         loadDataWithBaseURL(documentUrl,next.html,"text/html","UTF-8",null)
@@ -382,7 +386,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
 // resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
 internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)}) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var failed by rendererFailed
@@ -390,8 +394,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
     val foreground=if(message.htmlBody.isNotBlank())"#20241f"else "#%06x".format(MaterialTheme.colorScheme.onSurface.toArgb() and 0xffffff)
     val background=if(message.htmlBody.isNotBlank() && MaterialTheme.colorScheme.surface.luminance()<0.4f)"#f8f9f6"else "#%06x".format(MaterialTheme.colorScheme.surface.toArgb() and 0xffffff)
-    val documentKey=remember(message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,history,external,foreground,background){
-        ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,history,external,foreground,background)
+    val documentKey=remember(message.id,message.htmlBody,message.attachments,message.contentVersion,message.accountId,message.validity,plain,history,external,foreground,background,originalScale){
+        ReaderDocumentCache.Key("${message.accountId}:${message.id}:${message.validity}",message.htmlBody,plain,message.attachments,history,external,foreground,background,originalScale)
     }
     val cachedDocument=remember(documentKey){ReaderDocuments.html.peek(documentKey)}
     // Keep the current native host while the next document is prepared. A null

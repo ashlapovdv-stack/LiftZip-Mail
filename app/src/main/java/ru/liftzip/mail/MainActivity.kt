@@ -771,6 +771,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var actionsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
+    var originalHtmlScale by rememberSaveable(m.id){mutableStateOf(false)}
+    var expandedHistoryBounds by remember(m.id){mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
     var historyExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
     var originalTextExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
@@ -846,6 +848,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+        if(m.htmlBody.isNotBlank() && !rendererFailed.value)SmallFloatingActionButton(
+            onClick={originalHtmlScale=!originalHtmlScale},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,
+            modifier=Modifier.semantics{contentDescription=if(originalHtmlScale)"Подогнать HTML по ширине"else "Оригинальный масштаб HTML";stateDescription=if(originalHtmlScale)"100%"else "По ширине"}) {
+            Icon(if(originalHtmlScale)Icons.Outlined.FitScreen else Icons.Outlined.AspectRatio,null)
+        }
         if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
@@ -855,7 +862,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial)
                 val outsideContent=down.position.y+readerOrigin.y !in scroll.contentTop..scroll.contentBottom
-                val view=scroll.view?.takeIf{it.interactionEnabled}
+                val overHistory=expandedHistoryBounds?.contains(down.position+readerOrigin)==true
+                val view=scroll.view?.takeIf{it.interactionEnabled && !overHistory}
                 var pinch=false
                 try {
                     do {
@@ -906,13 +914,20 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
-                },onPinchChanged=updatePinch,rendererFailed=rendererFailed)
+                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale)
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
                 if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
                     HistoryToggle(parsed.messages.size,historyExpanded,{historyExpanded=!historyExpanded})
                     if(historyExpanded) {
-                        QuotedHistoryContent(parsed)
+                        DisposableEffect(m.id){onDispose{expandedHistoryBounds=null}}
+                        Column(Modifier.fillMaxWidth().onGloballyPositioned{coordinates->
+                            expandedHistoryBounds=androidx.compose.ui.geometry.Rect(coordinates.positionInWindow(),androidx.compose.ui.geometry.Size(coordinates.size.width.toFloat(),coordinates.size.height.toFloat()))
+                        }) {
+                        if(history.quotedHtml.isNotBlank()) {
+                            val quoted=m.copy(id=m.id+":quoted-html",htmlBody=history.quotedHtml,body=parsed.quotedBody.orEmpty())
+                            MailHtmlBody(quoted,quoted.body,HtmlMail.noHistory(quoted.htmlBody),onInline,onLink,onPinchChanged=updatePinch,originalScale=originalHtmlScale)
+                        } else QuotedHistoryContent(parsed)
                         TextButton(onClick={originalTextExpanded=!originalTextExpanded}) {
                             Text(if(originalTextExpanded)"Скрыть исходный текст" else "Показать полный исходный текст")
                         }
@@ -926,7 +941,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                             }
                             // Independent renderer: never replace the main document or attach
                             // another WebView to its scroll/zoom/header coordinator.
-                            if(originalHtmlExpanded)MailHtmlBody(m,parsed.original,HtmlMail.noHistory(m.htmlBody),onInline,onLink)
+                            if(originalHtmlExpanded)MailHtmlBody(m.copy(id=m.id+":original-html"),parsed.original,HtmlMail.noHistory(m.htmlBody),onInline,onLink,onPinchChanged=updatePinch,originalScale=originalHtmlScale)
+                        }
                         }
                     }
                 }

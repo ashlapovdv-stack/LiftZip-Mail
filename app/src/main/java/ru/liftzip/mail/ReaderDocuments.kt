@@ -3,16 +3,16 @@ package ru.liftzip.mail
 /** Process-only LRU: no WebViews, Activities, credentials or downloaded images are retained. */
 class ReaderDocumentCache(private val budget: Long=4L*1024*1024,private val limit: Int=8) {
     data class Key(val identity: String,val html: String,val plain: String,val attachments: List<Attachment>,
-        val history: HtmlMail.HistoryAnalysis,val external: Boolean,val foreground: String,val background: String)
+        val history: HtmlMail.HistoryAnalysis,val external: Boolean,val foreground: String,val background: String,val originalScale: Boolean=false)
     private data class Entry(val document: MailHtmlDocument,val bytes: Long)
     private val entries=LinkedHashMap<Key,Entry>(8,0.75f,true)
     private var bytes=0L
     @Synchronized fun peek(key: Key)=entries[key]?.document
     fun prepare(key: Key): MailHtmlDocument {
         synchronized(this){entries[key]?.let{return it.document}}
-        val doc=HtmlMail.document(key.html,key.plain,key.attachments,key.history,key.external,key.foreground,key.background,key.identity)
+        val doc=HtmlMail.document(key.html,key.plain,key.attachments,key.history,key.external,key.foreground,key.background,key.identity,key.originalScale)
         val historyHtml=key.history.currentHtml
-        val historyBytes=if(historyHtml===key.html)0L else 2L*historyHtml.length
+        val historyBytes=(if(historyHtml===key.html)0L else 2L*historyHtml.length)+2L*key.history.quotedHtml.length
         val size=2L*(key.identity.length+key.html.length+key.plain.length+doc.html.length)+historyBytes+
             key.attachments.sumOf{2L*(it.name.length+it.path.length+it.contentId.length)}+doc.images.size*256L
         synchronized(this) {
@@ -47,7 +47,7 @@ class ReaderAnalysisCache(private val budget: Long=4L*1024*1024,private val limi
         val conversation=ConversationText.parse(key.body)
         val history=HtmlMail.analyzeHistory(key.html,conversation)
         val result=(if(history.separateHistory)conversation else conversation.copy(messages=emptyList())) to history
-        val size=6L*key.body.length+4L*key.html.length+2L*history.currentHtml.length
+        val size=6L*key.body.length+4L*key.html.length+2L*(history.currentHtml.length+history.quotedHtml.length)
         synchronized(this) {
             entries[key]?.let{return it.result}
             if(limit>0 && size<=budget) {
