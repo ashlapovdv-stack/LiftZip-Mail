@@ -40,9 +40,9 @@ class AppearanceDeviceTest {
         row.performTouchInput{longClick()}
         rule.onNodeWithContentDescription("Удалить выбранные письма").assertIsDisplayed()
         assertEquals("Selection must not reposition the list",before,row.fetchSemanticsNode().boundsInRoot.top,1f)
+        saveDeviceScreenshot(rule,"selection-hidden-inbox")
         rule.onNodeWithContentDescription("Действия с выбранными письмами").assertIsDisplayed().performClick()
         rule.onNodeWithText("Отметить прочитанными").assertIsDisplayed()
-        saveDeviceScreenshot(rule,"selection-hidden-inbox")
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         rule.onNodeWithContentDescription("Снять выделение").performClick()
         rule.runOnIdle{assertEquals(0f,memory.controlsProgress.floatValue,0f)}
