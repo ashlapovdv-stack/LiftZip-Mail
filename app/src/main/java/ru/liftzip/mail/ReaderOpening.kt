@@ -27,7 +27,7 @@ internal data class PreparedReaderContent(val message: MailItem,val conversation
     val analysisKey=remember(identity,message.body,message.htmlBody,message.contentVersion){
         ReaderAnalysisCache.Key(identity,message.body,message.htmlBody,message.contentVersion)
     }
-    val available=message.contentCached && !message.previewOnly
+    val available=MailContent.canDisplay(message)
     val latestPrepare by rememberUpdatedState(prepare)
     return key(identity) {
         val cached=if(available)ReaderDocuments.analysis.peek(analysisKey)else null

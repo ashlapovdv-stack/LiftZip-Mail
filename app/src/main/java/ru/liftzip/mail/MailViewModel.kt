@@ -99,12 +99,12 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun showUnread(enabled: Boolean,accountId: String?){unreadScope.value=UnreadScope(enabled,accountId)}
     fun openMessage(id: String) {
         opening?.cancel()
-        mutable.update{it.copy(opened=it.opened?.takeIf{message->message.id==id && message.contentCached && !MailContent.needsRenderUpdate(message)},openingError=null)}
+        mutable.update{it.copy(opened=it.opened?.takeIf{message->message.id==id && MailContent.canDisplay(message)},openingError=null)}
         opening=viewModelScope.launch {
             try {
                 // Show offline content before waiting for content coordination, legacy refresh or LRU writes.
-                val cached=repo.cachedMessage(id)?.takeIf{it.contentCached}
-                if(cached!=null && !MailContent.needsRenderUpdate(cached))mutable.update{it.copy(opened=cached)}
+                val cached=repo.cachedMessage(id)?.takeIf(MailContent::canDisplay)
+                if(cached!=null)mutable.update{it.copy(opened=cached)}
                 val message=repo.message(id)?:error("Письмо не найдено.")
                 mutable.update{it.copy(opened=message)}
                 read(message)

@@ -107,8 +107,8 @@ class ReaderOpeningDeviceTest {
         assertEquals(presented.get()!!.message.body,presented.get()!!.conversation.original)
     }
     @Test fun cachedAnalysisIsVisibleBeforeBackgroundPreparationCompletes() {
-        val source=message("opening-cached","Сохранённое письмо")
-        val key=ReaderAnalysisCache.Key("a:${source.id}:0",source.body,source.htmlBody,source.contentVersion)
+        val source=message("opening-cached","Сохранённое письмо").copy(uid=42,validity=7,contentVersion=0)
+        val key=ReaderAnalysisCache.Key("a:${source.id}:${source.validity}",source.body,source.htmlBody,source.contentVersion)
         ReaderDocuments.analysis.prepare(key)
         val blocked=CompletableDeferred<Pair<QuotedConversation,HtmlMail.HistoryAnalysis>>()
         rule.setContent {
