@@ -17,7 +17,7 @@ object ComposeCodec {
         return ComposerSnapshot(j.getString("text"),j.optJSONObject("quote")?.let{q->QuotedSource(q.optString("account"),q.optString("message"),q.optLong("uid"),q.optLong("validity"),q.optString("folder"),
             q.optString("sender"),q.optString("to"),q.optString("subject"),q.optLong("date"),q.optString("plain"),q.optString("html"),q.optJSONObject("headers")?.let(::headers),q.optString("kind","reply"),q.optString("senderEmail"),q.optString("serverKey"))},j.optBoolean("included",true),j.optString("cc"),j.optString("bcc"),j.optJSONObject("aliases")?.let{a->a.keys().asSequence().associateWith{a.getString(it)}}.orEmpty(),j.optString("responseTo").takeIf{it.isNotBlank() && it!="null"},j.optString("responseKind"),if(j.has("to"))j.getString("to")else null,if(j.has("subject"))j.getString("subject")else null,if(j.has("bodyHtml") && !j.isNull("bodyHtml"))ComposerHtml.clean(j.getString("bodyHtml"))else null)
     }
-    fun snapshot(d: ComposeDraft)=ComposerSnapshot(d.body,d.quote,d.quoteIncluded,d.cc,d.bcc,responseTo=d.responseTo,responseKind=d.responseKind,to=d.to,subject=d.subject,bodyHtml=d.bodyHtml)
+    fun snapshot(d: ComposeDraft)=ComposerSnapshot(d.bodyHtml?.let(ComposerHtml::plain)?:d.body,d.quote,d.quoteIncluded,d.cc,d.bcc,responseTo=d.responseTo,responseKind=d.responseKind,to=d.to,subject=d.subject,bodyHtml=d.bodyHtml)
     fun draftMetadata(d: ComposeDraft,inlineIds: Map<String,String> = emptyMap())=encode(snapshot(d).copy(resourceAliases=inlineIds.entries.associate{it.value to it.key})).put("draftId",d.id).toString()
     fun readMetadata(text: String,expectedDraftId: String?): ComposerSnapshot? = runCatching {
         if(expectedDraftId.isNullOrBlank() || text.toByteArray().size>MAX_METADATA_BYTES)return null

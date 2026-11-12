@@ -83,4 +83,10 @@ class ComposerHtmlTest {
         assertTrue(HtmlMail.analyzeHistory(rendered.html,ConversationText.parse(rendered.plain)).separateHistory)
     }
 
+    @Test fun htmlIsTheSourceOfTruthWhenImportingAVisibleDraftWithAnOldPlainProjection() {
+        val draft=ComposeDraft(accountId="a",body="Устаревшая текстовая версия",bodyHtml="<b>Актуальный текст</b>")
+        assertEquals("Актуальный текст",ComposeCodec.snapshot(draft).text)
+        assertEquals("Актуальный текст",ComposeContent.render(draft).plain)
+    }
+
 }

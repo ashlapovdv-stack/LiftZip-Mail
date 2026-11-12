@@ -34,6 +34,7 @@ internal class ComposeEditorSession {
     fun accept(id: String,html: String){value.set(Value(id,html))}
     fun snapshot(draft: ComposeDraft): ComposeDraft = value.get()?.takeIf{it.id==draft.id}?.let{ComposerHtml.replace(draft,it.html)}?:draft
     fun focus(){view?.let{it.requestFocus();it.evaluateJavascript("document.getElementById('editor').focus()",null)}}
+    fun replaceText(text: String){view?.let{editor->if(editor.ready)editor.evaluateJavascript("window.LiftZipEditor.selectAll();window.LiftZipEditor.insert("+JSONObject.quote(ComposeContent.escaped(text).replace("\n","<br>"))+")",null)}}
     fun insertText(text: String){view?.insertHtml(ComposeContent.escaped(text).replace("\n","<br>"))}
     fun attach(editor: ComposeEditorWebView){view=editor}
     fun detach(editor: ComposeEditorWebView){if(view===editor)view=null}
@@ -101,7 +102,7 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
             window.LiftZipEditor={
               html:()=>editor.innerHTML,
               enabled:value=>editor.contentEditable=String(value),
-              insert:html=>{editor.focus();const s=getSelection();s.removeAllRanges();if(range && editor.contains(range.commonAncestorContainer))s.addRange(range);else{const r=document.createRange();r.selectNodeContents(editor);r.collapse(false);s.addRange(r);}document.execCommand('insertHTML',false,html);emit();},
+              insert:html=>{const saved=range&&range.cloneRange();editor.focus();const s=getSelection();s.removeAllRanges();if(saved && editor.contains(saved.commonAncestorContainer))s.addRange(saved);else{const r=document.createRange();r.selectNodeContents(editor);r.collapse(false);s.addRange(r);}const r=s.getRangeAt(0);r.deleteContents();const fragment=r.createContextualFragment(html);const last=fragment.lastChild;r.insertNode(fragment);if(last)r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);range=r.cloneRange();editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertFromPaste'}));},
               selectAll:()=>{editor.focus();const r=document.createRange();r.selectNodeContents(editor);const s=getSelection();s.removeAllRanges();s.addRange(r);range=r;}
             };
             new ResizeObserver(()=>EditorBridge.height(Math.ceil(editor.scrollHeight))).observe(editor);
@@ -147,15 +148,19 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
 @Composable internal fun ComposeHtmlEditor(draft: ComposeDraft,enabled: Boolean,session: ComposeEditorSession,onChange: (ComposeDraft)->Unit) {
     val current by rememberUpdatedState(draft)
     val change by rememberUpdatedState(onChange)
+    var editorFocused by remember(draft.id){mutableStateOf(false)}
     var height by remember(draft.id){mutableIntStateOf(280)}
     key(draft.id) {
         AndroidView(factory={context->ComposeEditorWebView(context,draft.id,ComposerHtml.initial(draft),session,{html,plain->
             if(current.id==draft.id)change(current.copy(bodyHtml=html,body=plain))
-        },{height=it}).also(session::attach)},
+        },{height=it}).also{view->session.attach(view);view.onFocusChangeListener=View.OnFocusChangeListener{_,focused->editorFocused=focused}}},
             update={view->view.setEditable(enabled)},
             onRelease={it.close()},
             modifier=Modifier.fillMaxWidth().height(height.coerceIn(280,4000).dp).testTag("compose-body").semantics {
                 editableText=AnnotatedString(draft.body)
+                focused=editorFocused
+                if(!enabled)disabled()
+                setText{value->session.replaceText(value.text);true}
                 requestFocus{session.focus();true}
                 // Accessibility/test input uses the same DOM editing path as native IME input.
                 insertTextAtCursor{value->session.insertText(value.text);true}

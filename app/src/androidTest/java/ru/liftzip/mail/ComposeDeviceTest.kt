@@ -108,6 +108,7 @@ class ComposeDeviceTest {
             assertTrue(editor()!!.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_PASTE,null))
         }
         rule.waitUntil(10_000){draft.bodyHtml?.contains("<table")==true}
+        saveDeviceScreenshot(rule,"compose-rich-paste")
         js("const e=document.getElementById('editor');e.querySelector('td').textContent='Изменено';e.dispatchEvent(new Event('input',{bubbles:true}));")
         rule.onNodeWithContentDescription("Сохранить черновик и закрыть").performClick()
         rule.waitUntil(10_000){saved!=null}
@@ -129,7 +130,7 @@ class ComposeDeviceTest {
             assertTrue(editor()!!.pasteClipboard())
         }
         rule.waitUntil(10_000){draft.body.contains("Новый текст")}
-        assertFalse(draft.bodyHtml!!.contains("<table"));assertFalse(draft.bodyHtml!!.contains("<literal>"))
+        assertFalse(draft.bodyHtml,draft.bodyHtml!!.contains("<table"));assertFalse(draft.bodyHtml,draft.bodyHtml!!.contains("<literal>"))
         assertTrue(draft.body.contains("<literal>"))
     }
 
