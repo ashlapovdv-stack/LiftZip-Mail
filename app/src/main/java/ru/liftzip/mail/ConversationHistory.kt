@@ -41,17 +41,10 @@ import androidx.compose.ui.unit.sp
 
 @Composable fun ConversationHistory(id: String,conversation: QuotedConversation,ownAddresses: List<String>) {
     var expanded by remember(id,conversation.original){mutableStateOf(false)}
-    var original by remember(id,conversation.original){mutableStateOf(false)}
     if(conversation.messages.isNotEmpty())HistoryToggle(conversation.messages.size,expanded,{expanded=!expanded})
     if(expanded) {
         QuotedHistoryContent(conversation)
-        TextButton(onClick={original=!original}) {
-            Text(if(original)"Скрыть исходный текст" else "Показать полный исходный текст")
-        }
-        if(original)SelectionContainer {
-            Text(conversation.original,style=MaterialTheme.typography.bodyMedium,
-                modifier=Modifier.fillMaxWidth().padding(vertical=12.dp))
-        }
+
     }
 }
 

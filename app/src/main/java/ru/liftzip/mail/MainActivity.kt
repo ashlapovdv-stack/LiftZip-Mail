@@ -779,8 +779,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var expandedHistoryBounds by remember(m.id){mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
     var historyExpanded by remember(m.id,currentContent?.message?.body,currentContent?.message?.htmlBody){mutableStateOf(false)}
-    var originalTextExpanded by remember(m.id,currentContent?.message?.body,currentContent?.message?.htmlBody){mutableStateOf(false)}
-    var originalHtmlExpanded by remember(m.id,currentContent?.message?.body,currentContent?.message?.htmlBody){mutableStateOf(false)}
     val rendererFailed=remember(m.id,currentContent?.message?.contentVersion){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var pinchActive by remember(m.id){mutableStateOf(false)}
@@ -929,30 +927,12 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                         Column(Modifier.fillMaxWidth().onGloballyPositioned{coordinates->
                             expandedHistoryBounds=androidx.compose.ui.geometry.Rect(coordinates.positionInWindow(),androidx.compose.ui.geometry.Size(coordinates.size.width.toFloat(),coordinates.size.height.toFloat()))
                         }) {
-                        val sourceActions: @Composable ()->Unit = {
-                        TextButton(onClick={originalTextExpanded=!originalTextExpanded}) {
-                            Text(if(originalTextExpanded)"Скрыть исходный текст" else "Показать полный исходный текст")
-                        }
-                        if(originalTextExpanded)androidx.compose.foundation.text.selection.SelectionContainer {
-                            Text(parsed.original,style=MaterialTheme.typography.bodyMedium,
-                                modifier=Modifier.fillMaxWidth().padding(vertical=12.dp))
-                        }
-                        if(source.htmlBody.isNotBlank()) {
-                            TextButton(onClick={originalHtmlExpanded=!originalHtmlExpanded}) {
-                                Text(if(originalHtmlExpanded)"Скрыть оригинальное HTML-письмо" else "Показать оригинальное HTML-письмо")
-                            }
-                            // Independent renderer: never replace the main document or attach
-                            // another WebView to its scroll/zoom/header coordinator.
-                            if(originalHtmlExpanded)MailHtmlBody(source.copy(id=source.id+":original-html"),parsed.original,HtmlMail.noHistory(source.htmlBody),onInline,onLink,onPinchChanged=updatePinch,originalScale=originalHtmlScale)
-                        }
-                        }
                         if(history.quotedHtml.isNotBlank()) {
                             val quoted=source.copy(id=source.id+":quoted-html",htmlBody=history.quotedHtml,body=parsed.quotedBody.orEmpty())
                             MailHtmlBody(quoted,quoted.body,HtmlMail.noHistory(quoted.htmlBody),onInline,onLink,onPinchChanged=updatePinch,
-                                originalScale=originalHtmlScale,afterContent=sourceActions)
+                                originalScale=originalHtmlScale,parentScroll=scroll)
                         } else {
                             QuotedHistoryContent(parsed)
-                            sourceActions()
                         }
                         }
                     }

@@ -389,7 +389,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
 // resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
 internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false,onContentReady: (() -> Unit)?=null,afterContent: @Composable ()->Unit={}) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false,onContentReady: (() -> Unit)?=null,parentScroll: ReaderScroll?=null,afterContent: @Composable ()->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var failed by rendererFailed
@@ -419,11 +419,12 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var headerHeight by remember(message.id){mutableIntStateOf(0)}
     var headerMeasured by remember(message.id){mutableStateOf(false)}
     var bodyWidth by remember(message.id){mutableIntStateOf(0)}
-    val viewportMeasured=scroll==null || scroll.viewportHeight>0
+    val scrollOwner=scroll?:parentScroll
+    val viewportMeasured=scrollOwner==null || scrollOwner.viewportHeight>0
     val ready=remember(document,bodyWidth,viewportMeasured){document?.let{doc->
         if(bodyWidth<=0 || !viewportMeasured)null else doc.withReaderInset(0,bodyWidth)
     }}
-    val viewport=(scroll?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
+    val viewport=(scrollOwner?.viewportHeight?.takeIf{it>0}?:context.resources.displayMetrics.heightPixels).coerceIn(1,HtmlMail.MAX_VIEWPORT_PIXELS)
     val geometryKey=remember(document,bodyWidth,density.density,density.fontScale,viewport,viewportMeasured){
         document?.takeIf{bodyWidth>0 && viewportMeasured}?.let{ReaderGeometryCache.Key(it,bodyWidth,density.density,density.fontScale,viewport)}
     }
@@ -479,14 +480,14 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                         try {
                             val view=MailHtmlWebView(c,loader::load,{latestLink(it)},{latestMeasured(it)},ready={latestPrepared()},failed={failed=true;loader.close();latestZoom(0f)},zoomChanged={progress->scroll?.nativeScaleRatio=web?.relativeScale()?:1f;latestZoom(progress)},pinchChanged={latestPinch(it)},horizontalChanged={scroll?.horizontal=it},verticalChanged={scroll?.nativeScrollY=it},waitForDocumentLayout=true)
                             web=view
-                            view.onReleased={scroll?.detach(view);if(web===view)web=null}
-                            scroll?.attach(view)
+                            view.onReleased={scrollOwner?.detach(view);if(web===view)web=null}
+                            scrollOwner?.attach(view,primary=scroll!=null)
                             addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                         }catch(e: Exception){android.util.Log.e("MailReaderReady","create failed",e);failed=true;loader.close()}
                     }},modifier=Modifier.testTag("mail-native-window").fillMaxWidth().height(with(density){windowHeight.toDp()})
                         .graphicsLayer{alpha=if(rendered)1f else 0f}
                         .onGloballyPositioned{coordinates->
-                            scroll?.position(coordinates.positionInWindow().y.toInt())
+                            web?.let{scrollOwner?.position(it,coordinates.positionInWindow().y.toInt())}
                             MailZoomDiagnostics.record {"bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${coordinates.positionInWindow().y} layoutH=${coordinates.size.height} webH=${scroll?.view?.height}"}
                             val view=web
                             if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered commit=$nativeCommit normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")

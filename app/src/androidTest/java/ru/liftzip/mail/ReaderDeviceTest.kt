@@ -93,7 +93,7 @@ class ReaderDeviceTest {
         rule.waitForIdle()
         saveDeviceScreenshot(rule,"plain-order-comment")
     }
-    @Test fun historyBlocksKeepSourceHiddenUntilRequested() {
+    @Test fun historyBlocksExpandWithoutSourceDebugActions() {
         val source="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
         val conversation=ConversationText.parse(source)
         rule.setContent{MailTheme{androidx.compose.foundation.layout.Column {ConversationHistory("blocks",conversation,emptyList())}}}
@@ -102,10 +102,8 @@ class ReaderDeviceTest {
         toggle.performClick()
         rule.onNodeWithText("Старое письмо").assertExists()
         rule.onNodeWithText(source).assertDoesNotExist()
-        rule.onNodeWithText("Показать полный исходный текст").performClick()
-        rule.onNodeWithText(source).assertExists()
-        rule.onNodeWithText("Скрыть исходный текст").performClick()
-        rule.onNodeWithText(source).assertDoesNotExist()
+        rule.onNodeWithText("Показать полный исходный текст").assertDoesNotExist()
+        rule.onNodeWithText("Показать оригинальное HTML-письмо").assertDoesNotExist()
         toggle.performClick()
         rule.onNodeWithText("Старое письмо").assertDoesNotExist()
     }
@@ -153,16 +151,48 @@ class ReaderDeviceTest {
         assertEquals(1,matches(citation,"Первое старое письмо"))
         assertEquals(1,matches(citation,"Самое старое письмо"))
         assertEquals(0,matches(view,"Первое старое письмо"))
-        val source=rule.onNodeWithText("Показать полный исходный текст")
-        source.performScrollTo().performClick()
-        rule.onNodeWithText(conversation.original).assertExists()
-        rule.onNodeWithText("Скрыть исходный текст").performScrollTo().performClick()
-        rule.onNodeWithText(conversation.original).assertDoesNotExist()
-        rule.onNodeWithText("Показать оригинальное HTML-письмо").performScrollTo().assertExists()
+        rule.onNodeWithText("Показать полный исходный текст").assertDoesNotExist()
+        rule.onNodeWithText("Показать оригинальное HTML-письмо").assertDoesNotExist()
         changeHistory(view,toggle,false)
         assertEquals(0,matches(view,"Первое старое письмо"))
         assertEquals(1,matches(view,"Текущий ответ"))
         saveDeviceScreenshot(rule,"linked-mime-history")
+    }
+    @Test fun longHtmlCitationSharesScrollingAndRevealsItsFinalLine() {
+        val header="On 7 Nov 2026, sender@example.com wrote:"
+        val old=(1..32).joinToString("\n"){"Строка цитаты $it"}+"\nПоследняя строка цитаты"
+        val html="<p>Ответ</p><div>$header</div><blockquote>"+
+            old.lineSequence().joinToString(""){"<p>$it</p>"}+"</blockquote>"
+        val plain="Ответ\n\n$header\n"+old.lineSequence().joinToString("\n"){"> $it"}
+        rule.setContent{MailTheme{reader(message.copy(id="long-citation",body=plain,htmlBody=html))}}
+        val main=loaded()
+        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        changeHistory(main,toggle,true)
+        val quote=historyView()
+        assertEquals(1,matches(quote,"Последняя строка цитаты"))
+        // Native scrolling must hand the movement back to the Compose page at its
+        // bottom. A find match alone cannot prove that the final pixels are visible.
+        rule.runOnIdle{assertNotNull("Citation must join the continuous reader scroll",quote.scrollPage)}
+        repeat(16) {
+            rule.onNodeWithTag("reader-viewport").performTouchInput {
+                swipe(Offset(width*0.4f,height*0.75f),Offset(width*0.4f,height*0.25f),400)
+            }
+            rule.waitForIdle()
+        }
+        rule.runOnIdle {
+            assertFalse("Native citation must reach its final line",quote.canScrollVertically(1))
+            val visible=android.graphics.Rect()
+            assertTrue(quote.getGlobalVisibleRect(visible))
+            val position=IntArray(2);quote.getLocationOnScreen(position)
+            assertTrue("The bottom of the native citation must be inside the visible reader",
+                position[1]+quote.height<=visible.bottom+1)
+            assertTrue(main.interactionEnabled)
+        }
+        rule.onNodeWithText("Показать полный исходный текст").assertDoesNotExist()
+        rule.onNodeWithText("Показать оригинальное HTML-письмо").assertDoesNotExist()
+        saveDeviceScreenshot(rule,"citation-final-line")
+        changeHistory(main,toggle,false)
+        assertEquals(1,matches(main,"Ответ"))
     }
     @Test fun reopeningUsesWarmGeometryAndStartsWithCollapsedHistory() {
         rule.runOnIdle{MailZoomDiagnostics.setEnabled(true)}

@@ -37,7 +37,7 @@ object ReaderDocuments {
 
 /** Source/version keyed analysis; cached hits never need to parse HTML on the UI thread. */
 class ReaderAnalysisCache(private val budget: Long=4L*1024*1024,private val limit: Int=8) {
-    data class Key(val identity: String,val body: String,val html: String,val contentVersion: Int,val parserVersion: Int=1)
+    data class Key(val identity: String,val body: String,val html: String,val contentVersion: Int,val parserVersion: Int=2)
     private data class Entry(val result: Pair<QuotedConversation,HtmlMail.HistoryAnalysis>,val bytes: Long)
     private val entries=LinkedHashMap<Key,Entry>(8,0.75f,true)
     private var bytes=0L
