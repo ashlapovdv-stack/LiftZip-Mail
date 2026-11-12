@@ -27,8 +27,6 @@ class ReaderScroll(val outer: ScrollState) {
     var viewportTop=0
         set(value){val shift=field-value;windows.replaceAll{_,anchor->anchor+shift};field=value}
     var viewportHeight by mutableIntStateOf(0)
-    var citationZoomTarget by mutableStateOf<MailHtmlWebView?>(null)
-        private set
     var view: MailHtmlWebView?=null
     var horizontal by mutableStateOf(HorizontalScrollMetrics())
     private val windows=LinkedHashMap<MailHtmlWebView,Int>()
@@ -61,13 +59,8 @@ class ReaderScroll(val outer: ScrollState) {
         toolbar.scroll(consumed)
         return consumed
     }
-    fun citationScaleChanged(body: MailHtmlWebView,progress: Float) {
-        if(body===view || body !in windows)return
-        if(progress>0.001f)citationZoomTarget=body else if(citationZoomTarget===body)citationZoomTarget=null
-    }
-    fun resetZoom(){(citationZoomTarget?:view)?.resetZoom()}
     fun attach(body: MailHtmlWebView,primary: Boolean=true){if(primary)view=body;windows[body]=0;body.scrollPage={scroll(it)}}
-    fun detach(body: MailHtmlWebView){if(view===body)view=null;if(citationZoomTarget===body)citationZoomTarget=null;windows.remove(body);body.scrollPage=null}
+    fun detach(body: MailHtmlWebView){if(view===body)view=null;windows.remove(body);body.scrollPage=null}
 }
 
 data class HorizontalScrollMetrics(val offset: Int=0,val extent: Int=0,val range: Int=0)
