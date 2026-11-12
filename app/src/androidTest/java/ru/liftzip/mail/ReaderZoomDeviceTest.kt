@@ -135,6 +135,59 @@ class ReaderZoomDeviceTest {
         rule.waitForIdle()
     }
 
+    @Test fun expandedHtmlCitationReceivesRealPinch() { assertCitationPinch(html=true) }
+    @Test fun expandedPlainCitationReceivesRealPinch() { assertCitationPinch(html=false) }
+    private fun assertCitationPinch(html: Boolean) {
+        val header="On 7 Nov 2026, sender@example.com wrote:"
+        val old=(1..8).joinToString("\n"){"Цитируемое сообщение $it"}
+        val plain="Ответ\n\n$header\n"+old.lineSequence().joinToString("\n"){"> $it"}
+        val source=if(html)"<p>Ответ</p><div>$header</div><blockquote>"+old.lineSequence().joinToString(""){"<p>$it</p>"}+"</blockquote>" else ""
+        rule.setContent{MailTheme{reader(message.copy(id="quote-pinch-$html",body=plain,htmlBody=source))}}
+        val main=loaded()
+        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").performScrollTo().performClick()
+        fun views(root: View): List<MailHtmlWebView> = if(root is MailHtmlWebView)listOf(root)
+            else if(root is ViewGroup)(0 until root.childCount).flatMap{views(root.getChildAt(it))}else emptyList()
+        var quote: MailHtmlWebView?=null
+        rule.waitUntil(10_000){rule.runOnUiThread{quote=views(rule.activity.window.decorView).drop(1).firstOrNull{it.interactionEnabled}};quote!=null}
+        val citation=quote!!
+        val rect=Rect();val root=IntArray(2)
+        var mainScale=0f;var base=0f;var generation=0L
+        rule.runOnIdle {
+            assertTrue(citation.getGlobalVisibleRect(rect));rule.activity.window.decorView.getLocationOnScreen(root)
+            mainScale=main.scale;base=citation.scale;generation=main.documentGeneration()
+        }
+        val logicalHeight=rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().last().boundsInRoot.height
+        val focus=Offset(rect.exactCenterX()-root[0],rect.top+minOf(rect.height().toFloat(),logicalHeight)/2f-root[1])
+        val density=citation.resources.displayMetrics.density
+        val sampler=FrameSampler(citation,focus.y);sampler.start()
+        val pinch=Pinch(focus,35f*density);pinch.down()
+        for(step in 1..20)pinch.move((35f+55f*step/20)*density)
+        pinch.up();SystemClock.sleep(250)
+        val samples=sampler.stop();rule.waitForIdle()
+        rule.runOnIdle {
+            assertTrue("Citation must enlarge during a real pinch: base=$base scale=${citation.scale}",citation.scale>base*1.2f)
+            assertEquals("The main letter must keep its own zoom",mainScale,main.scale,0.03f)
+            assertEquals(generation,main.documentGeneration())
+        }
+        assertStableViewport(samples)
+        screenshot(if(html)"html-citation-zoom" else "plain-citation-zoom")
+        repeat(8) {
+            rule.onNodeWithTag("reader-viewport").performTouchInput {
+                swipe(Offset(width*0.4f,height*0.75f),Offset(width*0.4f,height*0.3f),400)
+            }
+            rule.waitForIdle()
+        }
+        rule.runOnIdle {
+            assertFalse(citation.canScrollVertically(1))
+            val visible=Rect();assertTrue(citation.getGlobalVisibleRect(visible))
+            val top=IntArray(2);citation.getLocationOnScreen(top)
+            assertTrue("Zoomed citation's final pixels must be visible",top[1]+citation.height<=visible.bottom+1)
+        }
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertIsDisplayed().performClick()
+        rule.waitUntil(10_000){var initial=false;rule.runOnUiThread{initial=citation.atInitialScale()};initial}
+        rule.runOnIdle{assertEquals(mainScale,main.scale,0.03f);assertEquals(generation,main.documentGeneration())}
+    }
+
     @Test fun scrollControlsToolbarAtBaseScaleAndZoomTakesPriorityAfterPinch() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
