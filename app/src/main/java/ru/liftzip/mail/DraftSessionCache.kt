@@ -51,4 +51,4 @@ internal class DraftSessionCache(private val root: File) {
     }
 }
 
-internal fun draftSessionSaver(cache: DraftSessionCache)=Saver<ComposeDraft?,String>(save={draft->draft?.let(cache::save)},restore=cache::restore)
+internal fun draftSessionSaver(cache: DraftSessionCache,editor: ComposeEditorSession?=null)=Saver<ComposeDraft?,String>(save={draft->draft?.let{cache.save(editor?.snapshot(it)?:it)}},restore=cache::restore)

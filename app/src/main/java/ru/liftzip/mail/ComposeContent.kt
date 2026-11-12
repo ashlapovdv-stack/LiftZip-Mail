@@ -23,7 +23,7 @@ data class QuotedSource(
 }
 
 /** Persisted editor state, distinct from the complete plain/HTML display projections. */
-data class ComposerSnapshot(val text: String,val quote: QuotedSource?=null,val quoteIncluded: Boolean=true,val cc: String="",val bcc: String="",val resourceAliases: Map<String,String> = emptyMap(),val responseTo: String?=null,val responseKind: String="",val to: String?=null,val subject: String?=null): Serializable
+data class ComposerSnapshot(val text: String,val quote: QuotedSource?=null,val quoteIncluded: Boolean=true,val cc: String="",val bcc: String="",val resourceAliases: Map<String,String> = emptyMap(),val responseTo: String?=null,val responseKind: String="",val to: String?=null,val subject: String?=null,val bodyHtml: String?=null): Serializable
 
 data class ComposedBody(val plain: String,val html: String,val inlineIds: Map<String,String>)
 
@@ -33,14 +33,15 @@ object ComposeContent {
         m.recipients,m.subject,m.date,m.body.ifBlank{HtmlMail.text(m.htmlBody)},m.htmlBody,m.headers?:if(m.uid<=0)MessageHeaders(messageId=m.internetMessageId)else null,kind,m.senderEmail)
     fun plain(d: ComposeDraft): String {
         val quote=d.quote?.takeIf{d.quoteIncluded}
-        return if(quote==null)d.body else if(quote.kind=="draft")listOf(d.body,quote.plain).filter{it.isNotBlank()}.joinToString("\n\n") else listOf(d.body,quote.attribution(),quote.plain.lineSequence().joinToString("\n"){"> $it"}).filter{it.isNotBlank()}.joinToString("\n\n")
+        val author=d.bodyHtml?.let(ComposerHtml::plain)?:d.body
+        return if(quote==null)author else if(quote.kind=="draft")listOf(author,quote.plain).filter{it.isNotBlank()}.joinToString("\n\n") else listOf(author,quote.attribution(),quote.plain.lineSequence().joinToString("\n"){"> $it"}).filter{it.isNotBlank()}.joinToString("\n\n")
     }
     fun render(d: ComposeDraft): ComposedBody {
         val quote=d.quote?.takeIf{d.quoteIncluded}
         val plain=plain(d)
         val doc=Jsoup.parseBodyFragment("")
         doc.outputSettings().prettyPrint(false)
-        doc.body().appendElement("div").attr("data-liftzip-author","1").html(escaped(d.body).replace("\n","<br>"))
+        doc.body().appendElement("div").attr("data-liftzip-author","1").html(d.bodyHtml?.let(ComposerHtml::clean)?:escaped(d.body).replace("\n","<br>"))
         val inlineIds=linkedMapOf<String,String>()
         if(quote!=null) {
             val block=if(quote.kind=="draft")doc.body().appendElement("div") else {
@@ -49,13 +50,13 @@ object ComposeContent {
                 doc.body().appendElement("blockquote").attr("class","gmail_quote").attr("type","cite").attr("style","border-left:2px solid #a58ac7;margin:8px 0 8px 8px;padding-left:10px")
             }
             block.html(if(quote.html.isNotBlank())safeQuoteHtml(quote.html)else escaped(quote.plain).replace("\n","<br>"))
-            block.select("img[src]").forEach { image->
-                val src=image.attr("src")
-                if(src.startsWith("cid:",true)) {
-                    val original=HtmlMail.cid(src.substring(4))
-                    val mapped=inlineIds.getOrPut(original){MailImageLimits.hash(d.id+":"+original).take(40)+"@liftzip.mail"}
-                    image.attr("src","cid:$mapped")
-                }
+        }
+        doc.body().select("img[src]").forEach { image->
+            val src=image.attr("src")
+            if(src.startsWith("cid:",true)) {
+                val original=HtmlMail.cid(src.substring(4))
+                val mapped=inlineIds.getOrPut(original){MailImageLimits.hash(d.id+":"+original).take(40)+"@liftzip.mail"}
+                image.attr("src","cid:$mapped")
             }
         }
         return ComposedBody(plain,doc.outerHtml(),inlineIds)

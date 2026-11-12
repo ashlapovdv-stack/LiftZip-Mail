@@ -31,8 +31,12 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-@Composable internal fun ComposeScreen(d: ComposeDraft,s: UiState,onChange: (ComposeDraft)->Unit,onBack: ()->Unit,onDelete: ()->Unit,onSend: ()->Unit,
-    onRetryForward: ()->Unit,onRemoveForward: (String)->Unit,onNoticeAnchor: (Float?)->Unit,onDefaultAccount: (String?)->Unit={}) {
+@Composable internal fun ComposeScreen(d: ComposeDraft,s: UiState,onChange: (ComposeDraft)->Unit,onBack: (ComposeDraft)->Unit,onDelete: ()->Unit,onSend: (ComposeDraft)->Unit,
+    onRetryForward: ()->Unit,onRemoveForward: (String)->Unit,onNoticeAnchor: (Float?)->Unit,onDefaultAccount: (String?)->Unit={},editorSession: ComposeEditorSession?=null) {
+    val ownSession=remember{ComposeEditorSession()}
+    val session=editorSession?:ownSession
+    fun save()=session.flush(d){onChange(it);onBack(it)}
+    fun send()=session.flush(d){onChange(it);onSend(it)}
     val context=LocalContext.current
     var senderMenu by remember(d.id){mutableStateOf(false)}
     var more by remember(d.id){mutableStateOf(false)}
@@ -43,7 +47,7 @@ import androidx.compose.ui.unit.dp
     MaterialTheme(colorScheme=colors) {
     SystemBarIcons(forceLightSurface=true)
     if(confirmResend)AlertDialog(onDismissRequest={confirmResend=false},title={Text("Повторить отправку?")},text={Text("Результат предыдущей попытки неизвестен. Если письмо уже доставлено, получатель получит ещё одну копию.")},
-        confirmButton={TextButton(onClick={confirmResend=false;onSend()}){Text("Отправить ещё раз")}},dismissButton={TextButton(onClick={confirmResend=false}){Text("Отмена")}})
+        confirmButton={TextButton(onClick={confirmResend=false;send()}){Text("Отправить ещё раз")}},dismissButton={TextButton(onClick={confirmResend=false}){Text("Отмена")}})
     DisposableEffect(Unit){onDispose{onNoticeAnchor(null)}}
     val addFiles=rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()){uris->
         val files=uris.mapNotNull{uri->runCatching {
@@ -58,16 +62,16 @@ import androidx.compose.ui.unit.dp
     }
     Scaffold(containerColor=Color.White,modifier=Modifier.testTag("compose-screen"),topBar={
         TopAppBar(title={},colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White),navigationIcon={
-            IconButton(onClick=onBack,enabled=!s.busy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Сохранить черновик и закрыть")}
+            IconButton(onClick={save()},enabled=!s.busy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Сохранить черновик и закрыть")}
         },actions={
             IconButton(onClick={addFiles.launch(arrayOf("*/*"))},enabled=!s.busy){Icon(Icons.Outlined.AttachFile,"Добавить вложения")}
-            IconButton(onClick={if(d.previousDeliveryUncertain)confirmResend=true else onSend()},enabled=!s.busy && d.resourcesReady()){
+            IconButton(onClick={if(d.previousDeliveryUncertain)confirmResend=true else send()},enabled=!s.busy && d.resourcesReady()){
                 Icon(Icons.AutoMirrored.Outlined.Send,"Отправить письмо")
             }
             Box {
                 IconButton(onClick={more=true},enabled=!s.busy){Icon(Icons.Outlined.MoreVert,"Действия с черновиком")}
                 DropdownMenu(expanded=more,onDismissRequest={more=false}) {
-                    DropdownMenuItem(text={Text("Сохранить черновик")},onClick={more=false;onBack()})
+                    DropdownMenuItem(text={Text("Сохранить черновик")},onClick={more=false;save()})
                     DropdownMenuItem(text={Text("Сделать ящиком по умолчанию")},onClick={more=false;onDefaultAccount(d.accountId)})
                     DropdownMenuItem(text={Text("Удалить черновик")},onClick={more=false;onDelete()})
                 }
@@ -99,12 +103,8 @@ import androidx.compose.ui.unit.dp
                 ComposeField("Скр. копия",d.bcc,{onChange(d.copy(bcc=it))},!s.busy,email=true)
             }
             ComposeField("Тема",d.subject,{onChange(d.copy(subject=it))},!s.busy)
-            BasicTextField(d.body,{onChange(d.copy(body=it))},enabled=!s.busy,
-                textStyle=MaterialTheme.typography.bodyLarge.copy(color=colors.onSurface),cursorBrush=SolidColor(colors.primary),
-                keyboardOptions=KeyboardOptions(capitalization=KeyboardCapitalization.Sentences),
-                modifier=Modifier.fillMaxWidth().heightIn(min=280.dp).padding(16.dp).testTag("compose-body"),
-                decorationBox={inner->Box{if(d.body.isEmpty())Text("Текст письма",color=colors.onSurfaceVariant);inner()}})
-            d.quote?.let{quote->
+            ComposeHtmlEditor(d,!s.busy,session,onChange)
+            d.quote?.takeUnless{it.kind=="draft" && it.plain.isEmpty() && it.html.isEmpty()}?.let{quote->
                 Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
                     Row(verticalAlignment=Alignment.CenterVertically) {
                         Text(when(quote.kind){"forward"->"Пересылаемое письмо";"draft"->"Содержимое черновика";else->"Цитируемое письмо"},Modifier.weight(1f),style=MaterialTheme.typography.labelLarge)

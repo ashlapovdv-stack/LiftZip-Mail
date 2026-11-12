@@ -71,7 +71,7 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
     private fun checked(decoded: DecodedMail,depth: Int,part: Part): DecodedMail {
         if(depth!=0 || decoded.composer==null)return decoded
         val editor=decoded.composer
-        val projection=ComposeContent.plain(ComposeDraft(accountId="",body=editor.text,quote=editor.quote,quoteIncluded=editor.quoteIncluded))
+        val projection=ComposeContent.plain(ComposeDraft(accountId="",body=editor.text,quote=editor.quote,quoteIncluded=editor.quoteIncluded,bodyHtml=editor.bodyHtml))
         fun normalized(text: String)=text.replace("\r\n","\n").replace('\r','\n').trimEnd('\n')
         // A different client may edit the visible draft without updating our metadata.
         // Keep that complete visible body instead of resurrecting a stale editor snapshot.
@@ -81,7 +81,10 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
             addresses(editor.cc)==addresses(actual("Cc")) && addresses(editor.bcc)==addresses(actual("Bcc"))
         val subject=runCatching{MimeUtility.decodeText(actual("Subject"))}.getOrDefault(actual("Subject")).replace(Regex("\\r?\\n[ \\t]+")," ")
         val subjectMatches=editor.subject==null || editor.subject==subject
-        return if(normalized(projection)==normalized(decoded.text) && recipientsMatch && subjectMatches)decoded else decoded.copy(composer=null)
+        val rendered=ComposeContent.render(ComposeDraft(id=part.getHeader("X-LiftZip-Draft-ID")?.firstOrNull().orEmpty(),accountId="",body=editor.text,quote=editor.quote,quoteIncluded=editor.quoteIncluded,bodyHtml=editor.bodyHtml)).html
+        fun visibleHtml(html: String)=ComposeContent.safeQuoteHtml(html)
+        val htmlMatches=visibleHtml(rendered)==visibleHtml(decoded.html)
+        return if(normalized(projection)==normalized(decoded.text) && htmlMatches && recipientsMatch && subjectMatches)decoded else decoded.copy(composer=null)
     }
 
 }

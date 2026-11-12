@@ -149,8 +149,9 @@ private val Paper=Color(0xFFF8F9F6)
     var serverPath by rememberSaveable { mutableStateOf<String?>(null) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var notificationFallback by remember { mutableStateOf<MailItem?>(null) }
+    val editorSession=remember{ComposeEditorSession()}
     val draftCache=remember(context.applicationContext){DraftSessionCache(context.applicationContext)}
-    val draftSaver=remember(draftCache){draftSessionSaver(draftCache)}
+    val draftSaver=remember(draftCache){draftSessionSaver(draftCache,editorSession)}
     val draftState=key("compose-session-v1"){rememberSaveable(stateSaver=draftSaver){mutableStateOf<ComposeDraft?>(null)}}
     var draft by draftState
     SideEffect{if(draft==null)draftCache.clear()}
@@ -208,7 +209,7 @@ private val Paper=Color(0xFFF8F9F6)
     LaunchedEffect(notificationRequest?.token,s.loaded) {
         val request=notificationRequest
         if(s.loaded && request!=null) {
-            if(route=="compose" && !s.busy)draft?.let{vm.preserveDraft(it)}
+            if(route=="compose" && !s.busy)draft?.let{vm.preserveDraft(editorSession.snapshot(it))}
             val id=request.destination.messageId
             if(id==null){serverPath=null;currentAccount=null;folder=MailFolder.UNREAD;goInbox()}
             else {
@@ -228,7 +229,7 @@ private val Paper=Color(0xFFF8F9F6)
         if(route=="inbox")vm.showFolders(folder,currentAccount,serverPath)
     }
     RouteBackHandler(route,onPreview={preview=null;route="reader"},onMessage={goInbox()},onCompose={
-        val d=draft
+        val d=draft?.let(editorSession::snapshot)
         if(d!=null && (d.body.isNotBlank()||d.subject.isNotBlank()||d.to.isNotBlank()||d.attachments.isNotEmpty()||d.forwarding!=null))
             vm.saveDraft(d){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}
         else {draft=null;goInbox()}
@@ -318,8 +319,8 @@ private val Paper=Color(0xFFF8F9F6)
                     val editor=draft!!
                     val stored=s.messages.find{it.id==editor.id}
                     val active=editor.copy(forwarding=s.forwarding[editor.id]?:stored?.forwarding?:editor.forwarding)
-                    ComposeScreen(active,s,onChange={draft=it},onBack={vm.saveDraft(active){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
-                        onDelete={vm.deleteDraft(active.id){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},onSend={vm.send(active){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
+                    ComposeScreen(active,s,editorSession=editorSession,onChange={draft=it},onBack={value->vm.saveDraft(value){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
+                        onDelete={vm.deleteDraft(active.id){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},onSend={value->vm.send(value){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
                         onNoticeAnchor={anchor("compose",it)},onDefaultAccount=vm::setDefaultAccount,
                         onRetryForward={vm.retryForward(active.id)},onRemoveForward={vm.removeForwardFile(active.id,it)})
                 }

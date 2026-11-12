@@ -22,9 +22,10 @@ data class ForwardPlan(
         sender="", senderEmail="", recipients="", subject="", body="", date=0)
 }
 
-fun ComposeDraft.selectedForwardFiles() = forwarding?.files.orEmpty().filter{it.contentId.isBlank() || (quote!=null && quoteIncluded)}
+private fun ComposeDraft.needsInline() = (quote!=null && quoteIncluded) || bodyHtml?.contains("cid:",ignoreCase=true)==true
+fun ComposeDraft.selectedForwardFiles() = forwarding?.files.orEmpty().filter{it.contentId.isBlank() || needsInline()}
 fun ComposeDraft.resourcesReady() = selectedForwardFiles().all{it.status==ForwardStatus.READY && it.prepared!=null}
-fun ComposeDraft.filesToSend() = (attachments + selectedForwardFiles().mapNotNull { it.prepared }).filter{it.contentId.isBlank() || (quote!=null && quoteIncluded)}
+fun ComposeDraft.filesToSend() = (attachments + selectedForwardFiles().mapNotNull { it.prepared }).filter{it.contentId.isBlank() || needsInline()}
 
 object ForwardRules {
     fun sourceKey(account: MailAccount)=listOf(account.imapHost.lowercase(),account.imapPort.toString(),account.imapStartTls.toString(),account.username).joinToString("|")

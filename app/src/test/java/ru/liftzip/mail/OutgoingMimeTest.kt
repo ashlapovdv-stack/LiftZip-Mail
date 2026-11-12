@@ -214,4 +214,14 @@ class OutgoingMimeTest {
         assertNull(ComposeCodec.readMetadata(ComposeCodec.draftMetadata(d),"other"))
         assertEquals(ComposeCodec.snapshot(d),ComposeCodec.readMetadata(ComposeCodec.draftMetadata(d),d.id))
     }
+    @Test fun anotherClientsFormattingOnlyEditInvalidatesStaleEditorMetadata() {
+        val message=builder.build(session,account,draft(),MimePurpose.DRAFT,1).message
+        val mixed=message.content as Multipart
+        val alternatives=mixed.getBodyPart(0).content as Multipart
+        val html=alternatives.getBodyPart(1).content as String
+        alternatives.getBodyPart(1).setContent(html.replace("Новый ответ","<b>Новый ответ</b>"),"text/html; charset=UTF-8")
+        message.saveChanges()
+        assertNull(MimeReader().read(wire(message)).composer)
+    }
+
 }

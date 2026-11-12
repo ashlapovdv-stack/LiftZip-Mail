@@ -876,7 +876,7 @@ class MailRepository(private val context: Context) {
         coordinator.data {
             db.messages().firstOrNull{it.localFolder=="drafts" && it.sourceDraftId==m.id}?.let{return@data (db.message(it.id)?:it).draft()}
             val account=db.accounts().find{it.id==m.accountId}?:error("Ящик не найден.")
-            val draft=ComposeDraft(accountId=m.accountId,to=m.composer?.to?:HeaderText.editableRecipients(m.recipients),subject=m.composer?.subject?:m.subject,body=m.composer?.text?:if(m.htmlBody.isNotBlank())"" else m.body,forwarding=ForwardRules.plan(m,account,restoreDraft=true),quote=m.composer?.quote?:m.takeIf{m.composer==null && it.htmlBody.isNotBlank()}?.let{ComposeContent.quote(it,"draft")},quoteIncluded=m.composer?.quoteIncluded?:true,responseTo=m.composer?.responseTo?:m.composer?.quote?.messageId,responseKind=m.composer?.responseKind?.takeIf{it.isNotBlank()}?:m.composer?.quote?.kind.orEmpty(),cc=m.composer?.cc?:HeaderText.editableRecipients(m.cc),bcc=m.composer?.bcc?:HeaderText.editableRecipients(m.bcc),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
+            val draft=ComposeDraft(accountId=m.accountId,to=m.composer?.to?:HeaderText.editableRecipients(m.recipients),subject=m.composer?.subject?:m.subject,body=m.composer?.text?:m.body,bodyHtml=m.composer?.bodyHtml?:m.htmlBody.takeIf{m.composer==null && it.isNotBlank()}?.let(ComposerHtml::clean),forwarding=ForwardRules.plan(m,account,restoreDraft=true),quote=m.composer?.quote?:m.takeIf{m.composer==null && it.htmlBody.isNotBlank()}?.let{ComposeContent.quote(it,"draft").copy(plain="",html="")},quoteIncluded=m.composer?.quoteIncluded?:true,responseTo=m.composer?.responseTo?:m.composer?.quote?.messageId,responseKind=m.composer?.responseKind?.takeIf{it.isNotBlank()}?:m.composer?.quote?.kind.orEmpty(),cc=m.composer?.cc?:HeaderText.editableRecipients(m.cc),bcc=m.composer?.bcc?:HeaderText.editableRecipients(m.bcc),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
             db.putMessage(draft.toMessage(account,"drafts"));refresh()
             if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
             draft
@@ -892,7 +892,7 @@ class MailRepository(private val context: Context) {
         return origin.takeIf{key.isNotBlank() && key==AuthRules.serverKey(owner)}
     }
     private fun MailItem.draft()=ComposeDraft(id,accountId,composer?.to?:recipients,composer?.subject?:subject,composer?.text?:body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date,composer?.responseTo?:responseTo,composer?.responseKind?.takeIf{it.isNotBlank()}?:responseKind,
-        cc=composer?.cc?:cc,bcc=composer?.bcc?:bcc,quote=composer?.quote,quoteIncluded=composer?.quoteIncluded?:true)
+        cc=composer?.cc?:cc,bcc=composer?.bcc?:bcc,quote=composer?.quote,quoteIncluded=composer?.quoteIncluded?:true,bodyHtml=composer?.bodyHtml)
     suspend fun networkAvailable() {
         coordinator.data{refresh(messages=state.value.messages)}
         if(snapshot.value.accounts.any{it.enabled}){wakeActions();requestBodyWarmup()}

@@ -45,7 +45,8 @@ data class ComposeDraft(
     val attachments: List<OutgoingFile> = emptyList(), val previousDeliveryUncertain: Boolean = false,
     val forwarding: ForwardPlan? = null, val internetMessageId: String="",val sourceDraftId: String?=null,val timestamp: Long=0,
     val responseTo: String?=null,val responseKind: String="",
-    val cc: String="",val bcc: String="",val quote: QuotedSource?=null,val quoteIncluded: Boolean=true
+    val cc: String="",val bcc: String="",val quote: QuotedSource?=null,val quoteIncluded: Boolean=true,
+    val bodyHtml: String?=null
 ) : java.io.Serializable
 
 enum class MailFolder(val label: String, val key: String) {
