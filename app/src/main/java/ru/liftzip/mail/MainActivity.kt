@@ -761,19 +761,13 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         onSurface=Color(0xFF191919),onBackground=Color(0xFF191919),onSurfaceVariant=Color(0xFF4A4A4A),
         surfaceContainer=Color(0xFFF8F8F8),surfaceContainerHigh=Color(0xFFEFEFEF))
     MaterialTheme(colorScheme=readerColors) {
-    val analysisKey=remember(m.id,m.accountId,m.validity,m.contentVersion,m.body,m.htmlBody){
-        ReaderAnalysisCache.Key("${m.accountId}:${m.id}:${m.validity}",m.body,m.htmlBody,m.contentVersion)
-    }
-    val conversation by key(analysisKey){produceState(ReaderDocuments.analysis.peek(analysisKey),analysisKey) {
-        // Pin the publication context as well as the work context: test frame interceptors
-        // can otherwise resume the producer inline on the worker that completed parsing.
-        withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
-            value=withContext(kotlinx.coroutines.Dispatchers.Default){ReaderDocuments.analysis.prepare(analysisKey)}
-        }
-    }}
+    val content by rememberReaderContent(m)
     // Observe the async result in the screen composition, before passing it to Scaffold subcomposition.
-    val currentConversation=conversation
-    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","reader state parsed=${currentConversation!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
+    val currentContent=content
+    val identity="${m.accountId}:${m.id}:${m.validity}"
+    var contentPresented by remember(identity){mutableStateOf(false)}
+    val showLoading=rememberReaderProgress(identity,loadingError==null && (!contentPresented || busy))
+    SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","reader state parsed=${currentContent!=null} preview=${m.previewOnly} cached=${m.contentCached}")}
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
     var messageMenu by remember(m.id){mutableStateOf(false)}
@@ -783,10 +777,10 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var originalHtmlScale by rememberSaveable(m.id){mutableStateOf(false)}
     var expandedHistoryBounds by remember(m.id){mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
-    var historyExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
-    var originalTextExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
-    var originalHtmlExpanded by remember(m.id,m.body,m.htmlBody){mutableStateOf(false)}
-    val rendererFailed=remember(m.id,m.contentVersion){mutableStateOf(false)}
+    var historyExpanded by remember(m.id,currentContent?.message?.body,currentContent?.message?.htmlBody){mutableStateOf(false)}
+    var originalTextExpanded by remember(m.id,currentContent?.message?.body,currentContent?.message?.htmlBody){mutableStateOf(false)}
+    var originalHtmlExpanded by remember(m.id,currentContent?.message?.body,currentContent?.message?.htmlBody){mutableStateOf(false)}
+    val rendererFailed=remember(m.id,currentContent?.message?.contentVersion){mutableStateOf(false)}
     var readerOrigin by remember(m.id){mutableStateOf(Offset.Zero)}
     var pinchActive by remember(m.id){mutableStateOf(false)}
     val readerContext=LocalContext.current
@@ -821,7 +815,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             // Measured overlay content; its space is represented inside the HTML document.
             Spacer(Modifier.height(with(LocalDensity.current){scroll.toolbar.height.toDp()}))
             Column(Modifier.fillMaxWidth().padding(horizontal=16.dp)) {
-            if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(HeaderText.decode(m.subject),style=MaterialTheme.typography.titleMedium,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=if(subjectExpanded)Int.MAX_VALUE else 2,overflow=TextOverflow.Ellipsis,modifier=Modifier.fillMaxWidth().combinedClickable(onClick={subjectExpanded=!subjectExpanded},onLongClick={
                 val clipboard=readerContext.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("Тема письма",HeaderText.decode(m.subject)))
@@ -857,7 +850,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     BackHandler(enabled=actionsExpanded){actionsExpanded=false}
     Scaffold(containerColor=Color.White,floatingActionButton={
         Row(verticalAlignment=Alignment.Bottom,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-        if(m.htmlBody.isNotBlank() && !rendererFailed.value)SmallFloatingActionButton(
+        if((currentContent?.message?:m).htmlBody.isNotBlank() && !rendererFailed.value)SmallFloatingActionButton(
             onClick={originalHtmlScale=!originalHtmlScale},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,
             modifier=Modifier.semantics{contentDescription=if(originalHtmlScale)"Подогнать HTML по ширине"else "Оригинальный масштаб HTML";stateDescription=if(originalHtmlScale)"100%"else "По ширине"}) {
             Icon(if(originalHtmlScale)Icons.Outlined.FitScreen else Icons.Outlined.AspectRatio,null)
@@ -903,13 +896,13 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         }) {
         Column(Modifier.fillMaxSize().testTag("reader-viewport").onGloballyPositioned{scroll.viewportTop=it.positionInWindow().y.toInt();scroll.viewportHeight=it.size.height;MailZoomDiagnostics.record {"scrollViewport top=${scroll.viewportTop} height=${scroll.viewportHeight} outer=${outer.value} pinch=$pinchActive"}}
             .nestedScroll(scroll.connection).verticalScroll(outer,enabled=!pinchActive)) {
-            val parsed=currentConversation
-            if(m.previewOnly || !m.contentCached || parsed==null) {
+            val prepared=currentContent
+            if(prepared==null) {
                 messageHeader()
                 if(loadingError!=null)Column(Modifier.padding(16.dp)) {
                     Text("Не удалось загрузить письмо: $loadingError",color=MaterialTheme.colorScheme.onSurfaceVariant)
                     TextButton(onClick=onRetryLoad){Text("Повторить")}
-                } else Text("Открываем сохранённое письмо…",Modifier.padding(vertical=14.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             else if(scroll.toolbar.height<=0) {
                 // Native document insets depend on the measured toolbar. Starting
@@ -917,13 +910,15 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 messageHeader()
             }
             else {
-                val (parsed,history)=parsed
-                MailHtmlBody(m,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                val source=prepared.message
+                val parsed=prepared.conversation
+                val history=prepared.history
+                MailHtmlBody(source,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
-                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale)
+                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true})
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
                 if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
@@ -934,7 +929,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                             expandedHistoryBounds=androidx.compose.ui.geometry.Rect(coordinates.positionInWindow(),androidx.compose.ui.geometry.Size(coordinates.size.width.toFloat(),coordinates.size.height.toFloat()))
                         }) {
                         if(history.quotedHtml.isNotBlank()) {
-                            val quoted=m.copy(id=m.id+":quoted-html",htmlBody=history.quotedHtml,body=parsed.quotedBody.orEmpty())
+                            val quoted=source.copy(id=source.id+":quoted-html",htmlBody=history.quotedHtml,body=parsed.quotedBody.orEmpty())
                             MailHtmlBody(quoted,quoted.body,HtmlMail.noHistory(quoted.htmlBody),onInline,onLink,onPinchChanged=updatePinch,originalScale=originalHtmlScale)
                         } else QuotedHistoryContent(parsed)
                         TextButton(onClick={originalTextExpanded=!originalTextExpanded}) {
@@ -944,13 +939,13 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                             Text(parsed.original,style=MaterialTheme.typography.bodyMedium,
                                 modifier=Modifier.fillMaxWidth().padding(vertical=12.dp))
                         }
-                        if(m.htmlBody.isNotBlank()) {
+                        if(source.htmlBody.isNotBlank()) {
                             TextButton(onClick={originalHtmlExpanded=!originalHtmlExpanded}) {
                                 Text(if(originalHtmlExpanded)"Скрыть оригинальное HTML-письмо" else "Показать оригинальное HTML-письмо")
                             }
                             // Independent renderer: never replace the main document or attach
                             // another WebView to its scroll/zoom/header coordinator.
-                            if(originalHtmlExpanded)MailHtmlBody(m.copy(id=m.id+":original-html"),parsed.original,HtmlMail.noHistory(m.htmlBody),onInline,onLink,onPinchChanged=updatePinch,originalScale=originalHtmlScale)
+                            if(originalHtmlExpanded)MailHtmlBody(source.copy(id=source.id+":original-html"),parsed.original,HtmlMail.noHistory(source.htmlBody),onInline,onLink,onPinchChanged=updatePinch,originalScale=originalHtmlScale)
                         }
                         }
                     }
@@ -959,6 +954,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             Spacer(Modifier.height(100.dp))
         }
         toolbar()
+        if(showLoading)CircularProgressIndicator(Modifier.align(Alignment.Center).size(24.dp)
+            .testTag("reader-opening-progress").semantics{contentDescription="Загрузка письма"},strokeWidth=2.dp)
         val showHorizontal by remember(scroll){derivedStateOf{scroll.horizontal.let{it.range>it.extent && it.extent>0}}}
         if(htmlZoomed && showHorizontal)Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start=4.dp,end=80.dp,bottom=4.dp).height(4.dp).testTag("reader-horizontal-scrollbar").drawBehind {
             val horizontal=scroll.horizontal

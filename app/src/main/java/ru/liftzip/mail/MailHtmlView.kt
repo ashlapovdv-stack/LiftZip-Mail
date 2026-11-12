@@ -386,7 +386,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
 // resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
 internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false,onContentReady: (() -> Unit)?=null) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var failed by rendererFailed
@@ -430,6 +430,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var prepared by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(cachedGeometry!=null)}
     var nativeCommit by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(0)}
     var rendered by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
+    val latestContentReady by rememberUpdatedState(onContentReady)
+    LaunchedEffect(rendered,failed){if(rendered || failed)latestContentReady?.invoke()}
     val latestMeasuring by rememberUpdatedState(!prepared)
     val latestMeasured by rememberUpdatedState<(Int)->Unit>({measured->
         if(latestMeasuring && scroll?.pinchActive!=true && web!=null)intrinsicHeight=measured
@@ -507,14 +509,10 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 TextButton(onClick={external=!external}){Text(if(external)"Скрыть внешние изображения" else "Показать изображения")}
             }
         }
-        // Announce real slow work only. Cached analysis, document and geometry avoid
-        // repeated preparation; the native visual commit still owns interaction readiness.
-        var slowPreparation by remember(documentKey){mutableStateOf(false)}
-        LaunchedEffect(rendered,failed,documentKey) {
-            slowPreparation=false
-            if(!rendered && !failed){kotlinx.coroutines.delay(300);slowPreparation=true}
-        }
-        if(slowPreparation && !failed && !rendered)CircularProgressIndicator(
+        // The main reader owns one opening timer across storage, analysis and native
+        // rendering. Independent quote/original views own only their own preparation.
+        val slowPreparation=rememberReaderProgress(documentKey,onContentReady==null && !rendered && !failed)
+        if(slowPreparation)CircularProgressIndicator(
             Modifier.padding(top=with(density){headerHeight.toDp()},start=16.dp).size(20.dp).testTag("reader-preparation-progress"),strokeWidth=2.dp)
     }
 }

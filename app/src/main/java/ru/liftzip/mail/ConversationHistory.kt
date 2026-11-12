@@ -1,8 +1,10 @@
 package ru.liftzip.mail
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreHoriz
@@ -11,20 +13,24 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** One history control for every source format. No container or pressed-state paint. */
+/** One neutral capsule for every source format; count and expansion stay accessible. */
 @Composable internal fun HistoryToggle(count: Int,expanded: Boolean,onClick: ()->Unit,modifier: Modifier=Modifier) {
     val interaction=remember{MutableInteractionSource()}
-    Row(modifier.sizeIn(minWidth=64.dp,minHeight=48.dp)
+    val ink=Color(0xFF191919)
+    Row(modifier.sizeIn(minWidth=72.dp,minHeight=48.dp)
+        .clip(RoundedCornerShape(percent=50)).background(Color(0xFFEEEEEE))
         .clickable(interactionSource=interaction,indication=null,role=Role.Button,onClick=onClick)
         .semantics{contentDescription="Предыдущие сообщения: $count";stateDescription=if(expanded)"Развернуто" else "Свернуто"}
-        .padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
-        Icon(Icons.Outlined.MoreHoriz,null,Modifier.size(22.dp),tint=MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.width(5.dp))
-        Text(count.toString(),color=MaterialTheme.colorScheme.primary)
+        .padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
+        Icon(Icons.Outlined.MoreHoriz,null,Modifier.size(24.dp),tint=ink)
+        Spacer(Modifier.width(8.dp))
+        Text(count.toString(),color=ink,fontSize=18.sp,lineHeight=24.sp)
     }
 }
 

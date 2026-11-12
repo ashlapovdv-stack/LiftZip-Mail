@@ -112,6 +112,8 @@ class ReaderDeviceTest {
         var retries=0
         rule.setContent{MailTheme{ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("unused")},{},{},{},{},{},{},loadingError="Нет соединения",onRetryLoad={retries++})}}
         rule.onNodeWithText("Не удалось загрузить письмо: Нет соединения").assertIsDisplayed()
+        rule.onNodeWithText("Открываем сохранённое письмо…").assertDoesNotExist()
+        rule.onNodeWithTag("reader-opening-progress").assertDoesNotExist()
         rule.onAllNodesWithTag("mail-body").assertCountEquals(0)
         rule.onNodeWithText("Повторить").performClick()
         rule.runOnIdle{assertEquals(1,retries)}
@@ -186,7 +188,7 @@ class ReaderDeviceTest {
         saveDeviceScreenshot(rule,"reader-warm-open")
         } finally {rule.runOnIdle{MailZoomDiagnostics.setEnabled(false)}}
     }
-    @Test fun plainAndHtmlReadersUseTheSameUnpaintedHistoryControl() {
+    @Test fun plainAndHtmlReadersUseTheSameNeutralHistoryCapsule() {
         var html by mutableStateOf(false)
         val body="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
         rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=if(html)"<p>Ответ</p><div>On 7 Nov 2026, sender@example.com wrote:</div><blockquote>Старое письмо</blockquote>" else ""))}}
@@ -197,15 +199,17 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
         rule.onAllNodesWithText("Показать переписку (1)").assertCountEquals(0)
         val control=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
-        fun assertNoContainer() {
+        fun assertNeutralCapsule() {
             val pixels=control.captureToImage().toPixelMap()
             val sample=pixels[3,pixels.height/2]
-            assertTrue("History control must not paint a container",sample.red>0.97f && sample.green>0.97f && sample.blue>0.97f)
+            assertEquals(238f/255,sample.red,0.02f)
+            assertEquals(sample.red,sample.green,0.01f)
+            assertEquals(sample.red,sample.blue,0.01f)
         }
-        assertNoContainer()
+        assertNeutralCapsule()
         control.performTouchInput{down(center)}
         rule.mainClock.advanceTimeBy(180)
-        assertNoContainer()
+        assertNeutralCapsule()
         control.performTouchInput{up()}
         loaded()
         saveDeviceScreenshot(rule,"history-unified-control")
