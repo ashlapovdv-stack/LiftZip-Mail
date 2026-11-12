@@ -142,13 +142,18 @@ private val Paper=Color(0xFFF8F9F6)
 
 @Composable private fun MailApp(vm: MailViewModel=viewModel(),notificationRequest: NotificationOpenRequest?=null,onNotificationConsumed: (String)->Unit={}) {
     val s by vm.state.collectAsStateWithLifecycle()
+    val context=LocalContext.current
     var route by rememberSaveable { mutableStateOf("inbox") }
     var currentAccount by rememberSaveable { mutableStateOf<String?>(null) }
     var folder by rememberSaveable { mutableStateOf(MailFolder.INBOX) }
     var serverPath by rememberSaveable { mutableStateOf<String?>(null) }
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var notificationFallback by remember { mutableStateOf<MailItem?>(null) }
-    var draft by rememberSaveable { mutableStateOf<ComposeDraft?>(null) }
+    val draftCache=remember(context.applicationContext){DraftSessionCache(context.applicationContext)}
+    val draftSaver=remember(draftCache){draftSessionSaver(draftCache)}
+    val draftState=key("compose-session-v1"){rememberSaveable(stateSaver=draftSaver){mutableStateOf<ComposeDraft?>(null)}}
+    var draft by draftState
+    SideEffect{if(draft==null)draftCache.clear()}
     var preview by rememberSaveable { mutableStateOf<OpenedAttachment?>(null) }
     var editing by rememberSaveable { mutableStateOf<String?>(null) }
     var historyReturn by rememberSaveable { mutableStateOf("inbox") }
@@ -156,7 +161,6 @@ private val Paper=Color(0xFFF8F9F6)
     val savedScreens=rememberSaveableStateHolder()
     val inboxDrawer=rememberDrawerState(DrawerValue.Closed)
     val snack=remember { SnackbarHostState() }
-    val context=LocalContext.current
     val density=LocalDensity.current
     var rootHeight by remember{mutableIntStateOf(0)}
     var noticeAnchor by remember{mutableStateOf<NoticeAnchor?>(null)}

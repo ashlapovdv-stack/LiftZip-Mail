@@ -25,6 +25,24 @@ class StorageDeviceTest {
             assertEquals("inline-id",frozen.attachments.single().contentId)
         }finally{source.delete();target?.let{c.contentResolver.delete(it,null,null)}}
     }
+    @Test fun aLargeEditorSnapshotIsRestoredThroughATinySavedStateToken() {
+        val c=ApplicationProvider.getApplicationContext<Context>()
+        val root=File(c.cacheDir,"editor-state-test-"+UUID.randomUUID())
+        val source=MailItem("source","a",sender="Sender",senderEmail="sender@example.com",recipients="a@example.com",subject="Large",body="Text ".repeat(100_000),htmlBody="<p>"+"HTML ".repeat(160_000)+"</p>",date=1)
+        val draft=ComposeDraft(accountId="a",to="client@example.com",subject="Ответ",body="Не потерять новый текст",quote=ComposeContent.quote(source,"reply"),quoteIncluded=false,cc="copy@example.com")
+        try {
+            val first=DraftSessionCache(root)
+            val token=first.save(draft)!!
+            val bundle=android.os.Bundle().apply{putString("editor",token)}
+            val parcel=android.os.Parcel.obtain()
+            try{bundle.writeToParcel(parcel,0);assertTrue("Only a tiny token belongs in Binder",parcel.dataSize()<1024)}finally{parcel.recycle()}
+            val afterProcessRestart=DraftSessionCache(root)
+            assertEquals(draft,afterProcessRestart.restore(token))
+            assertNull(afterProcessRestart.restore("../../outside"))
+            afterProcessRestart.clear()
+            assertNull(DraftSessionCache(root).restore(token))
+        }finally{root.deleteRecursively()}
+    }
     @Test fun previewTrimPreservesRecentViewersAndNeverTouchesOtherDirectories() {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val root=File(c.cacheDir,"storage-test-"+UUID.randomUUID()).apply{mkdirs()}
