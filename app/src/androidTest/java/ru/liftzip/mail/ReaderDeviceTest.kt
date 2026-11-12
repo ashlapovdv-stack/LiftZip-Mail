@@ -8,6 +8,8 @@ import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -192,19 +194,29 @@ class ReaderDeviceTest {
         var html by mutableStateOf(false)
         val body="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
         rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=if(html)"<p>Ответ</p><div>On 7 Nov 2026, sender@example.com wrote:</div><blockquote>Старое письмо</blockquote>" else ""))}}
-        loaded()
+        val initial=loaded()
+        var generation=0L
+        rule.runOnIdle{generation=initial.documentGeneration()}
         rule.onNodeWithContentDescription("Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
         rule.onAllNodesWithText("Показать переписку (1)").assertCountEquals(0)
-        rule.runOnIdle{html=true};loaded()
+        rule.runOnIdle{html=true}
+        rule.waitUntil(30_000){
+            var ready=false
+            rule.runOnUiThread{ready=initial.documentGeneration()>generation && initial.interactionEnabled && initial.progress==100}
+            ready && rule.onAllNodesWithTag("history-capsule",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithContentDescription("Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
         rule.onAllNodesWithText("Показать переписку (1)").assertCountEquals(0)
         val control=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         fun assertNeutralCapsule() {
-            val pixels=control.captureToImage().toPixelMap()
+            val capsule=rule.onNodeWithTag("history-capsule",useUnmergedTree=true)
+            val pixels=capsule.captureToImage().toPixelMap()
             val sample=pixels[3,pixels.height/2]
             assertEquals(238f/255,sample.red,0.02f)
             assertEquals(sample.red,sample.green,0.01f)
             assertEquals(sample.red,sample.blue,0.01f)
+            control.assertHeightIsAtLeast(48.dp)
+            capsule.assertHeightIsEqualTo(28.dp)
         }
         assertNeutralCapsule()
         control.performTouchInput{down(center)}
@@ -213,6 +225,36 @@ class ReaderDeviceTest {
         control.performTouchInput{up()}
         loaded()
         saveDeviceScreenshot(rule,"history-unified-control")
+    }
+    @Test fun coldBodyFootersWaitForContentAndKeepTheSameGapAcrossSourceFormats() {
+        var current by mutableStateOf<MailItem?>(null)
+        rule.setContent{MailTheme{androidx.compose.foundation.layout.Column {
+            current?.let{m->MailHtmlBody(m,m.body,HtmlMail.noHistory(m.htmlBody),{error("No images")},{},
+                afterContent={HistoryToggle(1,false,{})})}
+        }}}
+        val cases=listOf("plain" to "","html" to "<div style='margin:0'>Ответ</div>",
+            "padded" to "<div style='padding-bottom:36px'>Ответ</div>")
+        val heights=mutableListOf<Float>()
+        var density=1f
+        rule.runOnIdle{density=rule.activity.resources.displayMetrics.density}
+        cases.forEachIndexed{index,(name,html)->
+            rule.runOnIdle{current=message.copy(id="footer-spacing-$index",body="Ответ",htmlBody=html)}
+            rule.waitUntil(30_000){
+                val nodes=rule.onAllNodes(hasTestTag("mail-body") or hasContentDescription("Предыдущие сообщения: 1"),useUnmergedTree=true).fetchSemanticsNodes()
+                val body=nodes.any{it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag)=="mail-body"}
+                val footer=nodes.any{it.config.contains(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription)}
+                assertTrue("Following controls must not appear in the measurement window",!footer || body)
+                body && footer
+            }
+            val body=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot
+            val capsule=rule.onNodeWithTag("history-capsule",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
+            assertEquals("The app's gap must not depend on MIME format",4*density,capsule.top-body.bottom,2f)
+            heights+=body.height
+            saveDeviceScreenshot(rule,"quote-spacing-$name")
+            rule.runOnIdle{current=null};rule.waitForIdle()
+        }
+        assertEquals("Plain text and a margin-free HTML line have the same extent",heights[0],heights[1],2*density)
+        assertTrue("Sender-defined bottom padding remains part of the HTML content",heights[2]>heights[1]+24*density)
     }
     // Exercise the production reader, including its header and bounded WebView.
     @Test fun realReaderFitsAWideNestedTableAtInitialScale() {

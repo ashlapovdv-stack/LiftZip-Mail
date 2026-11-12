@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -23,14 +24,18 @@ import androidx.compose.ui.unit.sp
 @Composable internal fun HistoryToggle(count: Int,expanded: Boolean,onClick: ()->Unit,modifier: Modifier=Modifier) {
     val interaction=remember{MutableInteractionSource()}
     val ink=Color(0xFF191919)
-    Row(modifier.sizeIn(minWidth=72.dp,minHeight=48.dp)
-        .clip(RoundedCornerShape(percent=50)).background(Color(0xFFEEEEEE))
+    Box(modifier.sizeIn(minWidth=56.dp,minHeight=48.dp)
         .clickable(interactionSource=interaction,indication=null,role=Role.Button,onClick=onClick)
-        .semantics{contentDescription="Предыдущие сообщения: $count";stateDescription=if(expanded)"Развернуто" else "Свернуто"}
-        .padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
-        Icon(Icons.Outlined.MoreHoriz,null,Modifier.size(24.dp),tint=ink)
-        Spacer(Modifier.width(8.dp))
-        Text(count.toString(),color=ink,fontSize=18.sp,lineHeight=24.sp)
+        .semantics{contentDescription="Предыдущие сообщения: $count";stateDescription=if(expanded)"Развернуто" else "Свернуто"}) {
+        Box(Modifier.padding(top=4.dp)) {
+        Row(Modifier.heightIn(min=28.dp).widthIn(min=52.dp).clip(RoundedCornerShape(percent=50))
+            .background(Color(0xFFEEEEEE)).testTag("history-capsule").padding(horizontal=10.dp),
+            verticalAlignment=Alignment.CenterVertically) {
+            Icon(Icons.Outlined.MoreHoriz,null,Modifier.size(18.dp),tint=ink)
+            Spacer(Modifier.width(4.dp))
+            Text(count.toString(),color=ink,fontSize=14.sp,lineHeight=20.sp)
+        }
+        }
     }
 }
 

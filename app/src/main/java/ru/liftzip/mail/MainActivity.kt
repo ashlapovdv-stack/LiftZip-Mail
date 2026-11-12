@@ -918,7 +918,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
-                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true})
+                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true},afterContent={
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
                 if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
@@ -928,10 +928,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                         Column(Modifier.fillMaxWidth().onGloballyPositioned{coordinates->
                             expandedHistoryBounds=androidx.compose.ui.geometry.Rect(coordinates.positionInWindow(),androidx.compose.ui.geometry.Size(coordinates.size.width.toFloat(),coordinates.size.height.toFloat()))
                         }) {
-                        if(history.quotedHtml.isNotBlank()) {
-                            val quoted=source.copy(id=source.id+":quoted-html",htmlBody=history.quotedHtml,body=parsed.quotedBody.orEmpty())
-                            MailHtmlBody(quoted,quoted.body,HtmlMail.noHistory(quoted.htmlBody),onInline,onLink,onPinchChanged=updatePinch,originalScale=originalHtmlScale)
-                        } else QuotedHistoryContent(parsed)
+                        val sourceActions: @Composable ()->Unit = {
                         TextButton(onClick={originalTextExpanded=!originalTextExpanded}) {
                             Text(if(originalTextExpanded)"Скрыть исходный текст" else "Показать полный исходный текст")
                         }
@@ -948,8 +945,18 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                             if(originalHtmlExpanded)MailHtmlBody(source.copy(id=source.id+":original-html"),parsed.original,HtmlMail.noHistory(source.htmlBody),onInline,onLink,onPinchChanged=updatePinch,originalScale=originalHtmlScale)
                         }
                         }
+                        if(history.quotedHtml.isNotBlank()) {
+                            val quoted=source.copy(id=source.id+":quoted-html",htmlBody=history.quotedHtml,body=parsed.quotedBody.orEmpty())
+                            MailHtmlBody(quoted,quoted.body,HtmlMail.noHistory(quoted.htmlBody),onInline,onLink,onPinchChanged=updatePinch,
+                                originalScale=originalHtmlScale,afterContent=sourceActions)
+                        } else {
+                            QuotedHistoryContent(parsed)
+                            sourceActions()
+                        }
+                        }
                     }
                 }
+                })
             }
             Spacer(Modifier.height(100.dp))
         }

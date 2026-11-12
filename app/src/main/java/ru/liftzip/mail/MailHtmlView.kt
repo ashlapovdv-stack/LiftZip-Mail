@@ -386,7 +386,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
 // resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
 internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false,onContentReady: (() -> Unit)?=null) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false,onContentReady: (() -> Unit)?=null,afterContent: @Composable ()->Unit={}) {
     val context=LocalContext.current;val density=LocalDensity.current
     var external by rememberSaveable(message.id){mutableStateOf(false)}
     var failed by rendererFailed
@@ -430,6 +430,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var prepared by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(cachedGeometry!=null)}
     var nativeCommit by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(0)}
     var rendered by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
+    var followingContentPublished by remember(message.id,message.contentVersion,message.htmlBody,plain){mutableStateOf(false)}
+    SideEffect{if(rendered || failed)followingContentPublished=true}
     val latestContentReady by rememberUpdatedState(onContentReady)
     LaunchedEffect(rendered,failed){if(rendered || failed)latestContentReady?.invoke()}
     val latestMeasuring by rememberUpdatedState(!prepared)
@@ -456,6 +458,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
         if(rendered && prepared)geometryKey?.let{ReaderDocuments.geometry.put(it,ReaderGeometryCache.Geometry(intrinsicHeight,baseScale))}
     }
     SideEffect{if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","compose document=${document!=null} ready=${ready!=null} header=$headerHeight width=$bodyWidth prepared=$prepared commit=$nativeCommit rendered=$rendered failed=$failed")}
+    Column {
     Box(Modifier.fillMaxWidth().onSizeChanged{bodyWidth=it.width}) {
         if(failed)Column(Modifier.padding(top=with(density){headerHeight.toDp()})) {
             Text("Показываем текстовую версию письма",style=MaterialTheme.typography.labelMedium)
@@ -514,5 +517,10 @@ internal fun readerBodyHeight(normal: Int): Int=normal
         val slowPreparation=rememberReaderProgress(documentKey,onContentReady==null && !rendered && !failed)
         if(slowPreparation)CircularProgressIndicator(
             Modifier.padding(top=with(density){headerHeight.toDp()},start=16.dp).size(20.dp).testTag("reader-preparation-progress"),strokeWidth=2.dp)
+    }
+    // Publish following controls with the first visible document, not with its
+    // measurement window. Keep them mounted during zoom/layout changes of that
+    // same source, preserving expanded citation views and the outer scroll extent.
+    if(followingContentPublished || rendered || failed)afterContent()
     }
 }
