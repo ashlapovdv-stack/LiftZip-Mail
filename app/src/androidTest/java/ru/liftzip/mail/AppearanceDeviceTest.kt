@@ -27,6 +27,24 @@ class AppearanceDeviceTest {
                 onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose=onCompose,onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen=onOpen)}
         }
     }
+    @Test fun selectionActionsStayVisibleAboveAHiddenInbox() {
+        val memory=InboxMemory(androidx.compose.foundation.lazy.LazyListState(8),initialControls=0f)
+        rule.setContent {MailTheme(MailStyle.COZY){InboxScreen(state(MailStyle.COZY),null,MailFolder.INBOX,null,memory,
+            onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},onAdd={},onExit={},onNoticeAnchor={},
+            onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}}
+        val row=rule.onNodeWithTag("mail-row:theme-10")
+        row.assertIsDisplayed()
+        val before=row.fetchSemanticsNode().boundsInRoot.top
+        row.performTouchInput{longClick()}
+        rule.onNodeWithContentDescription("Удалить выбранные письма").assertIsDisplayed()
+        assertEquals("Selection must not reposition the list",before,row.fetchSemanticsNode().boundsInRoot.top,1f)
+        rule.onNodeWithContentDescription("Действия с выбранными письмами").assertIsDisplayed().performClick()
+        rule.onNodeWithText("Отметить прочитанными").assertIsDisplayed()
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        rule.onNodeWithContentDescription("Снять выделение").performClick()
+        rule.runOnIdle{assertEquals(0f,memory.controlsProgress.floatValue,0f)}
+        assertEquals(before,row.fetchSemanticsNode().boundsInRoot.top,1f)
+    }
     @Test fun cozyCardsKeepSelectionAndComposeActions() {
         var compose=0;inbox(MailStyle.COZY,onCompose={compose++});rule.waitForIdle()
         rule.onNodeWithText("Оповещение системы безопасности").assertIsDisplayed()
