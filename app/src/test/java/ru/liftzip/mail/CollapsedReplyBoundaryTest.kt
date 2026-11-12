@@ -55,6 +55,11 @@ class CollapsedReplyBoundaryTest {
             }
         }
     }
+    @Test fun stylesheetPaintedEmptyContentIsNotDeletedAsWhitespace() {
+        val doc=Jsoup.parse(render("<style>.logo{height:30px;background:#225588}.logo:after{content:'Mark'}</style><div>Reply</div><div class='logo'></div>"))
+        assertEquals(1,doc.select(".logo").size)
+        assertTrue(doc.select("style").html().contains("Mark"))
+    }
     @Test fun fullOriginalAndUnseparatedLettersKeepTheirTrailingFormatting() {
         val html=source("<p style='padding-bottom:36px'>Reply<br><br></p>")
         val parsed=ConversationText.parse(plain);val analysis=HtmlMail.analyzeHistory(html,parsed)

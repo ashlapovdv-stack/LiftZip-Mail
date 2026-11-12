@@ -8,9 +8,9 @@ import org.jsoup.nodes.TextNode
 internal object CollapsedReplyBoundary {
     private val flow=setOf("div","p","span","font","center","section","article","main","header","footer",
         "h1","h2","h3","h4","h5","h6","ul","ol","li","dl","dt","dd","address","b","i","u","strong","em","a")
-    private val decoration=Regex("(?i)(?:^|;)\\s*(?:background(?:-[a-z-]+)?|border(?:-[a-z-]+)?|box-shadow)\\s*:")
+    private val decoration=Regex("(?i)(?:^|[;{])\\s*(?:content|background(?:-[a-z-]+)?|border(?:-[a-z-]+)?|box-shadow)\\s*:")
     private fun blank(c: Char)=c.isWhitespace() || c=='\u00a0' || c=='\u200b' || c=='\ufeff'
-    private fun decorated(element: Element)=element.hasClass("mail-image-placeholder") || element.hasAttr("bgcolor") ||
+    private fun decorated(element: Element,stylesheetPaint: Boolean)=stylesheetPaint || element.hasClass("mail-image-placeholder") || element.hasAttr("bgcolor") ||
         decoration.containsMatchIn(element.attr("style"))
     private fun edge(element: Element,padding: Boolean) {
         val original=element.attr("style").trim().trimEnd(';')
@@ -18,6 +18,9 @@ internal object CollapsedReplyBoundary {
             if(padding)";padding-bottom:0!important"else "")
     }
     fun normalize(body: Element) {
+        // Sender stylesheets can paint an otherwise empty class/tag (logos or pseudo-elements).
+        // Treat that authored layout as a visible object instead of deleting it as blank markup.
+        val stylesheetPaint=body.ownerDocument()?.select("style")?.any{decoration.containsMatchIn(it.data())}==true
         var parent=body
         // Walk only the final content branch; earlier paragraphs and interior whitespace stay intact.
         while(true) {
@@ -37,7 +40,7 @@ internal object CollapsedReplyBoundary {
                     break
                 }
                 last is Element && last.normalName()=="br"->last.remove()
-                last is Element && last.normalName() in flow && !decorated(last)->parent=last
+                last is Element && last.normalName() in flow && !decorated(last,stylesheetPaint)->parent=last
                 else->{
                     // A table, picture, rule or painted footer is a visible object. Its own
                     // dimensions/padding belong to the content; only its outside margin is removed.
@@ -48,7 +51,7 @@ internal object CollapsedReplyBoundary {
         }
         var ancestor: Element?=parent
         while(ancestor!=null) {
-            edge(ancestor,!decorated(ancestor))
+            edge(ancestor,!decorated(ancestor,stylesheetPaint))
             if(ancestor===body)break
             ancestor=ancestor.parent()
         }
