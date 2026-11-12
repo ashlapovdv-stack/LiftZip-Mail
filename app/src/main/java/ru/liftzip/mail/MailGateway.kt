@@ -193,7 +193,7 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
                         if(remote==null)null else {
                             (remote as? IMAPMessage)?.setPeek(true)
                             val decoded=MimeReader(checkCancelled=budget::check).read(remote)
-                            m.copy(body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true)
+                            m.copy(headers=ReplyHeaders.read(remote),composer=decoded.composer,bcc=if(FolderRules.draft(m))HeaderText.addresses(remote.getRecipients(Message.RecipientType.BCC))else m.bcc,body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true)
                         }
                     }
                 },save=onItem,describe=::friendlyError,before=onStart,around=around)
@@ -209,7 +209,7 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             (remote as? IMAPMessage)?.setPeek(true)
             val budget=MailReadBudget(checkCancelled=checkCancelled)
             val decoded=MimeReader(checkCancelled=budget::check).read(remote)
-            message.copy(body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true,internetMessageId=message.internetMessageId.ifBlank{(remote as? MimeMessage)?.messageID.orEmpty()},recipients=message.recipients.ifBlank{HeaderText.decode((remote as? MimeMessage)?.getHeader("To",null).orEmpty())},cc=HeaderText.addresses(remote.getRecipients(Message.RecipientType.CC)))
+            message.copy(headers=ReplyHeaders.read(remote),composer=decoded.composer,bcc=if(FolderRules.draft(message))HeaderText.addresses(remote.getRecipients(Message.RecipientType.BCC))else message.bcc,body=decoded.text,htmlBody=decoded.html,contentVersion=MailContent.FORMAT_VERSION,attachments=decoded.attachments,outgoing=emptyList(),previewOnly=false,contentCached=true,internetMessageId=message.internetMessageId.ifBlank{(remote as? MimeMessage)?.messageID.orEmpty()},recipients=message.recipients.ifBlank{HeaderText.decode((remote as? MimeMessage)?.getHeader("To",null).orEmpty())},cc=HeaderText.addresses(remote.getRecipients(Message.RecipientType.CC)))
         }finally{folder.close(false)}
     }
     suspend fun trashMany(a: MailAccount,password: String,messages: List<MailItem>,before: suspend ()->Boolean,onConfirmed: suspend (Set<Long>)->Boolean) {
@@ -361,63 +361,30 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             f.setFlags(arrayOf(m),Flags(Flags.Flag.DELETED),true);f.expunge(arrayOf(m))
         }finally{f.close(false)}
     }
-    private fun mimeMessage(a: MailAccount,draft: ComposeDraft,revision: Long?=null): MimeMessage {
-        // Providers may omit or misreport file length. Check actual bytes before SMTP.
-        var total=0L
-        draft.attachments.forEach { file->
-            var length=0L
-            (context.contentResolver.openInputStream(Uri.parse(file.uri))?:error("Не удалось открыть ${file.name}")).use { input->
-                val bytes=ByteArray(8192)
-                while(true){val n=input.read(bytes);if(n<0)break;length+=n;total+=n
-                    require(length<=20L*1024*1024){"Вложение больше 20 МБ."}
-                    require(total<=25L*1024*1024){"Суммарный размер вложений больше 25 МБ."}
-                }
-            }
-        }
-        val session=session(a)
-        val message=object: MimeMessage(session) {
-            override fun updateMessageID() { setHeader("Message-ID",MessageIdentity.forDraft(draft.id,draft.internetMessageId)) }
-        }.apply {
-            setFrom(InternetAddress(a.email,a.senderName,"UTF-8"))
-            if(revision!=null)setHeader("To",draft.to.replace('\r',' ').replace('\n',','))
-            else setRecipients(Message.RecipientType.TO,MailRules.recipients(draft.to).map { InternetAddress(it,true) }.toTypedArray())
-            setSubject(draft.subject.replace('\r',' ').replace('\n',' '),"UTF-8");sentDate=Date(draft.timestamp.takeIf{it>0}?:System.currentTimeMillis())
-            if(revision!=null){setHeader("X-LiftZip-Draft-ID",draft.id);setHeader("X-LiftZip-Draft-Revision",revision.toString());setFlag(Flags.Flag.DRAFT,true)}
-            if(draft.attachments.isEmpty())setText(draft.body,"UTF-8")
-            else {
-                val multi=MimeMultipart().apply { addBodyPart(MimeBodyPart().apply { setText(draft.body,"UTF-8") }) }
-                draft.attachments.forEach { file->
-                    multi.addBodyPart(MimeBodyPart().apply {
-                        dataHandler=DataHandler(object: DataSource {
-                            override fun getInputStream(): InputStream {
-                                val stream=context.contentResolver.openInputStream(Uri.parse(file.uri))?:error("Не удалось открыть ${file.name}")
-                                return object: FilterInputStream(stream) {
-                                    var total=0L
-                                    private fun counted(n: Int): Int { if(n>0){total+=n;require(total<=20L*1024*1024){"Вложение больше 20 МБ"}};return n }
-                                    override fun read(): Int = super.read().also { if(it>=0)counted(1) }
-                                    override fun read(b: ByteArray,off: Int,len: Int)=counted(super.read(b,off,len))
-                                }
-                            }
-                            override fun getOutputStream(): OutputStream = throw UnsupportedOperationException()
-                            override fun getContentType()=file.mime
-                            override fun getName()=file.name
-                        })
-                        fileName=AttachmentRules.safeName(file.name);disposition=Part.ATTACHMENT
-                    })
-                }
-                setContent(multi)
-            }
-            saveChanges()
-        }
-        return message
+    private fun mimeMessage(a: MailAccount,draft: ComposeDraft,revision: Long?=null): MimeMessage =
+        outgoingMime().build(session(a),a,draft,if(revision!=null)MimePurpose.DRAFT else MimePurpose.SENT,revision).message
+    private fun outgoingMime()=OutgoingMime { file->
+        context.contentResolver.openInputStream(Uri.parse(file.uri))?:error("Не удалось открыть ${file.name}")
+    }
+    /** Read only envelope/thread headers. READ_ONLY + PEEK never changes Seen. */
+    fun replyHeaders(a: MailAccount,password: String,source: MailItem): MessageHeaders=store(a,password).use{connection->
+        val folder=connection.getFolder(source.remoteFolder) as IMAPFolder
+        folder.open(Folder.READ_ONLY)
+        try {
+            require(folder.uidValidity==source.validity){"Папка исходного письма изменилась. Обновите письмо перед ответом."}
+            val remote=folder.getMessageByUID(source.uid)?:error("Исходное письмо удалено. Не удалось получить заголовки ответа.")
+            (remote as? IMAPMessage)?.setPeek(true)
+            ReplyHeaders.read(remote)
+        }finally{folder.close(false)}
     }
     fun send(a: MailAccount,password: String,draft: ComposeDraft) {
         val session=session(a)
-        val message=mimeMessage(a,draft)
+        val built=outgoingMime().build(session,a,draft,MimePurpose.SEND)
+        val message=built.message
         val transport=session.getTransport("smtp")
         try {
             GoogleMailAuth.withCredential(context,a,password){transport.connect(a.smtpHost,a.smtpPort,a.username,it)}
-            try { transport.sendMessage(message,message.allRecipients) }
+            try { transport.sendMessage(message,built.envelope) }
             catch(e: Exception){throw DeliveryUncertainException()}
         } finally {
             // A failed QUIT must not turn an accepted message into a retry.

@@ -316,7 +316,7 @@ private val Paper=Color(0xFFF8F9F6)
                     val active=editor.copy(forwarding=s.forwarding[editor.id]?:stored?.forwarding?:editor.forwarding)
                     ComposeScreen(active,s,onChange={draft=it},onBack={vm.saveDraft(active){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
                         onDelete={vm.deleteDraft(active.id){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},onSend={vm.send(active){if(route=="compose" && draft?.id==active.id){draft=null;goInbox()}}},
-                        onNoticeAnchor={anchor("compose",it)},
+                        onNoticeAnchor={anchor("compose",it)},onDefaultAccount=vm::setDefaultAccount,
                         onRetryForward={vm.retryForward(active.id)},onRemoveForward={vm.removeForwardFile(active.id,it)})
                 }
                 route=="reader" -> {
@@ -333,8 +333,7 @@ private val Paper=Color(0xFFF8F9F6)
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
                         onSpam={vm.spamMessages(setOf(message.id),SpamRules.junk(message)){moved->if(message.id in moved && route=="reader" && selected==message.id)goInbox()}},
-                        onReply={compose(ComposeDraft(accountId=message.accountId,to=message.senderEmail,responseTo=message.id,responseKind="reply",
-                            subject=if(message.subject.startsWith("Re:",true))message.subject else "Re: ${message.subject}",body="\n\n──────────\n${message.sender} пишет:\n${message.body}"))},
+                        onReply={vm.reply(message){ready->if(route=="reader" && selected==message.id)compose(ready)else vm.notice("Ответ подготовлен в черновиках")}},
                         loadingError=s.openingError?.takeIf{it.first==message.id}?.second,onRetryLoad={vm.openMessage(message.id)},onForward={
                             val senderId=SenderRules.forNewMessage(s.accounts,s.defaultAccountId,message.accountId)?:message.accountId
                             vm.forward(message,senderId){ready->if(route=="reader" && selected==message.id)compose(ready)else vm.notice("Пересылка подготовлена в черновиках")}
@@ -827,7 +826,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 if(m.attachments.isNotEmpty())key(m.id){AttachmentThumbnails(m.attachments,!busy,onThumbnail,onOpenAttachment,onDownload,
                     busyPaths=m.attachments.filter{"${m.id}|${it.path}" in attachmentBusy}.map{it.path}.toSet())}
                 if(m.outgoing.isNotEmpty()) {
-                    val local=m.outgoing.map{file->Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt())}
+                    val local=m.outgoing.filter{it.contentId.isBlank()}.map{file->Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt())}
                     key(m.id,"local"){AttachmentThumbnails(local,!busy,{file->OpenedAttachment(file.path,file.name,AttachmentRules.mime(file.name,file.mime))},
                         onOpen={file->m.outgoing.firstOrNull{it.uri==file.path}?.let(onOpenLocal)})}
                 }
@@ -1058,95 +1057,6 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             },enabled=!formBusy,modifier=Modifier.fillMaxWidth().height(52.dp)) {Text(if(formBusy)"Подождите…" else if(authKind==AuthKind.GOOGLE)"Подключить через Google" else if(initial==null)"Проверить и подключить" else "Проверить и сохранить")}
             Text("Проверим входящую и исходящую почту без отправки писем.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(18.dp))
-        }
-    }
-}
-
-@Composable private fun ComposeScreen(d: ComposeDraft,s: UiState,onChange: (ComposeDraft)->Unit,onBack: ()->Unit,onDelete: ()->Unit,onSend: ()->Unit,
-    onRetryForward: ()->Unit,onRemoveForward: (String)->Unit,onNoticeAnchor: (Float?)->Unit) {
-    val context=LocalContext.current
-    var senderMenu by remember { mutableStateOf(false) }
-    var attachmentError by remember { mutableStateOf<String?>(null) }
-    var confirmResend by remember { mutableStateOf(false) }
-    if(confirmResend)AlertDialog(onDismissRequest={confirmResend=false},title={Text("Повторить отправку?")},text={Text("Результат предыдущей попытки неизвестен. Если письмо уже доставлено, получатель получит ещё одну копию.")},
-        confirmButton={TextButton(onClick={confirmResend=false;onSend()}){Text("Отправить ещё раз")}},dismissButton={TextButton(onClick={confirmResend=false}){Text("Отмена")}})
-    DisposableEffect(Unit){onDispose{onNoticeAnchor(null)}}
-    val addFiles=rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()){uris->
-        val files=uris.mapNotNull { uri->runCatching {
-            context.contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            var name="Вложение";var size=-1L
-            context.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE),null,null,null)?.use{c->if(c.moveToFirst()){name=c.getString(0)?:name;if(!c.isNull(1))size=c.getLong(1)}}
-            OutgoingFile(uri.toString(),name,context.contentResolver.getType(uri)?:"application/octet-stream",size)
-        }.getOrNull() }
-        if(files.size!=uris.size)attachmentError="Некоторые файлы недоступны. Попробуйте выбрать их из папки на устройстве."
-        else if(files.any{it.size>20L*1024*1024}||(d.filesToSend()+files).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
-        else onChange(d.copy(attachments=(d.attachments+files).distinctBy{it.uri}))
-    }
-    Scaffold(topBar={TopAppBar(title={Text("Новое письмо")},navigationIcon={IconButton(onClick=onBack,enabled=!s.busy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Сохранить черновик и закрыть")}},actions={
-        IconButton(onClick={addFiles.launch(arrayOf("*/*"))},enabled=!s.busy){Icon(Icons.Outlined.AttachFile,"Добавить вложения")}
-        IconButton(onClick=onDelete,enabled=!s.busy){Icon(Icons.Outlined.DeleteOutline,"Удалить черновик")}
-    })},bottomBar={Surface(tonalElevation=3.dp,modifier=Modifier.onGloballyPositioned{onNoticeAnchor(it.boundsInRoot().top)}){Row(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(14.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-        OutlinedButton(onClick=onBack,enabled=!s.busy,modifier=Modifier.weight(1f)){Text("Сохранить")}
-        Button(onClick={if(d.previousDeliveryUncertain)confirmResend=true else onSend()},enabled=!s.busy && d.forwarding?.ready!=false,modifier=Modifier.weight(1f)){Icon(Icons.AutoMirrored.Outlined.Send,null);Spacer(Modifier.width(8.dp));Text(if(s.busy)"Подождите…" else "Отправить")}
-    }}}) { padding->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            if(d.previousDeliveryUncertain)InfoCard("Результат прошлой отправки неизвестен. Проверьте доставку перед повтором.")
-            Box(Modifier.padding(horizontal=8.dp)) {
-                TextButton(onClick={senderMenu=true},enabled=!s.busy){Text("От: ${s.accounts.find{it.id==d.accountId}?.email.orEmpty()}");Icon(Icons.Outlined.ExpandMore,null)}
-                DropdownMenu(expanded=senderMenu,onDismissRequest={senderMenu=false}){s.accounts.forEach{a->DropdownMenuItem(text={Text(a.email+if(a.enabled)"" else " · выключен")},enabled=a.enabled,onClick={onChange(d.copy(accountId=a.id));senderMenu=false})}}
-            }
-            OutlinedTextField(d.to,{onChange(d.copy(to=it))},label={Text("Кому")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
-            OutlinedTextField(d.subject,{onChange(d.copy(subject=it))},label={Text("Тема")},modifier=Modifier.fillMaxWidth().padding(horizontal=20.dp),enabled=!s.busy)
-            d.forwarding?.takeIf{it.files.isNotEmpty()}?.let { plan->
-                Column(Modifier.fillMaxWidth().padding(horizontal=20.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                    Text(if(plan.ready)"Вложения готовы · ${plan.files.size}" else "Подготовка вложений · ${plan.files.count{it.status==ForwardStatus.READY}} из ${plan.files.size}",style=MaterialTheme.typography.labelLarge)
-                    if(!plan.ready)Text("Можно вводить адрес и текст. Отправка станет доступна, когда файлы будут готовы.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                    plan.files.forEach{file->ForwardFileCard(file,!s.busy,onRemove={onRemoveForward(file.key)})}
-                    if(plan.files.any{it.status==ForwardStatus.ERROR})TextButton(onClick=onRetryForward,enabled=!s.busy){Icon(Icons.Outlined.Refresh,null);Spacer(Modifier.width(6.dp));Text("Повторить подготовку")}
-                }
-            }
-            HorizontalDivider(Modifier.padding(top=4.dp))
-            BasicTextField(value=d.body,onValueChange={onChange(d.copy(body=it))},enabled=!s.busy,
-                textStyle=MaterialTheme.typography.bodyLarge.copy(color=MaterialTheme.colorScheme.onSurface),cursorBrush=SolidColor(MaterialTheme.colorScheme.primary),
-                keyboardOptions=KeyboardOptions(capitalization=KeyboardCapitalization.Sentences),
-                modifier=Modifier.fillMaxWidth().heightIn(min=320.dp).padding(horizontal=14.dp,vertical=12.dp),
-                decorationBox={inner->Box(Modifier.fillMaxWidth()){if(d.body.isEmpty())Text("Текст письма",color=MaterialTheme.colorScheme.onSurfaceVariant);inner()}})
-            Column(Modifier.padding(horizontal=20.dp)) {
-                d.attachments.forEach { file->InputChip(selected=false,onClick={runCatching{context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(file.uri),AttachmentRules.mime(file.name,file.mime)).apply{clipData=ClipData.newRawUri(file.name,Uri.parse(file.uri))}.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))}.onFailure{attachmentError="Не удалось открыть файл для просмотра."}},label={Text(file.name,maxLines=1,overflow=TextOverflow.Ellipsis)},trailingIcon={IconButton(onClick={onChange(d.copy(attachments=d.attachments.filter{it.uri!=file.uri}))},enabled=!s.busy,modifier=Modifier.size(22.dp)){Icon(Icons.Outlined.Close,"Удалить вложение",Modifier.size(16.dp))}}) }
-                attachmentError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
-            }
-            Spacer(Modifier.height(16.dp))
-        }
-    }
-}
-
-@Composable private fun ForwardFileCard(file: ForwardFile,enabled: Boolean,onRemove: ()->Unit) {
-    val context=LocalContext.current
-    var openError by remember(file.key){mutableStateOf(false)}
-    Surface(shape=RoundedCornerShape(14.dp),color=MaterialTheme.colorScheme.surfaceContainer,modifier=Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(start=12.dp,top=8.dp,end=4.dp,bottom=8.dp)) {
-            Row(verticalAlignment=Alignment.CenterVertically) {
-                Icon(if(file.status==ForwardStatus.READY)Icons.Outlined.CheckCircleOutline else Icons.Outlined.AttachFile,null,Modifier.size(20.dp))
-                Column(Modifier.weight(1f).padding(horizontal=8.dp)) {
-                    Text(file.name,style=MaterialTheme.typography.bodyMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
-                    Text(when(file.status){
-                        ForwardStatus.WAITING->"В очереди"
-                        ForwardStatus.DOWNLOADING->"Подготовлено ${file.bytes/1024} КБ"+(if(file.size>0)" из ${file.size/1024} КБ" else "")
-                        ForwardStatus.READY->"Готово · ${(file.prepared!!.size/1024).coerceAtLeast(1)} КБ"
-                        ForwardStatus.ERROR->file.error
-                    },style=MaterialTheme.typography.labelSmall,color=if(file.status==ForwardStatus.ERROR)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if(file.prepared!=null)IconButton(onClick={runCatching{
-                    val uri=Uri.parse(file.prepared.uri)
-                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,file.prepared.mime).apply{clipData=ClipData.newRawUri(file.name,uri)}.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-                }.onFailure{openError=true}},enabled=enabled){Icon(Icons.AutoMirrored.Outlined.OpenInNew,"Открыть ${file.name}")}
-                IconButton(onClick=onRemove,enabled=enabled){Icon(Icons.Outlined.Close,"Удалить ${file.name} из пересылки")}
-            }
-            if(file.status==ForwardStatus.DOWNLOADING) {
-                if(file.size>0)LinearProgressIndicator(progress={(file.bytes.toFloat()/file.size).coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth().padding(end=8.dp))
-                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(end=8.dp))
-            }
-            if(openError)Text("Не удалось открыть файл. Установите приложение для этого формата.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
         }
     }
 }

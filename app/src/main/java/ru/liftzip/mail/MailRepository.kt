@@ -642,18 +642,48 @@ class MailRepository(private val context: Context) {
         wakeActions()
     }
     suspend fun deleteDraft(id: String) {deleteMessages(setOf(id))}
-    suspend fun forward(message: MailItem,senderId: String): ComposeDraft=withContext(Dispatchers.IO){coordinator.data{
-        val accounts=db.accounts()
-        val sender=accounts.find{it.id==senderId}?:error("Ящик отправителя не найден.")
-        require(sender.enabled){"Включите ящик отправителя в меню."}
-        require(accounts.any{it.id==message.accountId}){"Исходный ящик не найден."}
-        val draft=ComposeDraft(accountId=sender.id,subject=if(message.subject.startsWith("Fwd:",true))message.subject else "Fwd: ${message.subject}",
-            body="\n\n──── Пересланное письмо ────\nОт: ${message.sender} <${message.senderEmail}>\nКому: ${message.recipients}\nТема: ${message.subject}\n\n${message.body}",
-            forwarding=ForwardRules.plan(message,accounts.first{it.id==message.accountId}),responseTo=message.id,responseKind="forward")
-        db.putMessage(draft.toMessage(sender,"drafts"));refresh()
-        if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
-        draft
-    }}
+    private suspend fun sourceHeaders(source: MailItem): MessageHeaders {
+        source.headers?.let{return it}
+        if(source.uid<=0)return MessageHeaders(messageId=source.internetMessageId)
+        val (account,version)=coordinator.data {
+            val account=db.accounts().find{it.id==source.accountId && it.enabled}?:error("Включите исходный ящик для подготовки ответа.")
+            account to coordinator.version(account.id)
+        }
+        val headers=runInterruptible{gateway.replyHeaders(account,vault.open(account.id,account.secret),source)}
+        coordinator.data {
+            require(coordinator.version(account.id)==version){"Параметры исходного ящика изменились."}
+            db.message(source.id)?.takeIf{it.uid==source.uid && it.validity==source.validity}?.let{db.putMessage(it.copy(headers=headers))}
+        }
+        return headers
+    }
+    suspend fun reply(message: MailItem): ComposeDraft=prepareResponse(message,message.accountId,"reply")
+    suspend fun forward(message: MailItem,senderId: String): ComposeDraft=prepareResponse(message,senderId,"forward")
+    private suspend fun prepareResponse(message: MailItem,senderId: String,kind: String): ComposeDraft=withContext(Dispatchers.IO) {
+        var source=this@MailRepository.message(message.id)?:error("Исходное письмо не найдено.")
+        if(kind=="reply" && source.headers==null) {
+            try {source=source.copy(headers=sourceHeaders(source))}
+            catch(e: CancellationException){throw e}catch(_: Exception){/* Offline editing remains available; resolve before enqueue. */}
+        }
+        coordinator.data {
+            val accounts=db.accounts()
+            val sender=accounts.find{it.id==senderId && it.enabled}?:error("Включите ящик отправителя в меню.")
+            val prefix=if(kind=="reply")"Re:" else "Fwd:"
+            val draft=ComposeDraft(accountId=sender.id,to=if(kind=="reply")ReplyHeaders.recipient(source)else "",
+                subject=if(source.subject.startsWith(prefix,true))source.subject else "$prefix ${source.subject}",
+                quote=ComposeContent.quote(source,kind),forwarding=ForwardRules.plan(source,accounts.find{it.id==source.accountId},includeOrdinary=kind=="forward"),
+                responseTo=source.id,responseKind=kind)
+            db.putMessage(draft.toMessage(sender,"drafts"));refresh()
+            if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
+            draft
+        }
+    }
+    private suspend fun resolveReply(draft: ComposeDraft): ComposeDraft {
+        val quote=draft.quote?.takeIf{it.kind=="reply" && it.headers==null}?:return draft
+        val headers=sourceHeaders(quote.sourceMessage())
+        // Respect an explicitly edited recipient; only complete our original default.
+        val to=if(draft.to==quote.senderEmail && headers.replyTo.isNotBlank())headers.replyTo else draft.to
+        return draft.copy(to=to,quote=quote.copy(headers=headers))
+    }
     // Called only under the short data lock. Text/sender edits and parallel file results are retained.
     private fun updateForward(id: String,change: (ForwardPlan)->ForwardPlan): ForwardPlan? {
         val m=db.message(id)?.takeIf{it.localFolder=="drafts"}?:return null
@@ -716,7 +746,7 @@ class MailRepository(private val context: Context) {
                                     }else (context.contentResolver.openInputStream(Uri.parse(requireNotNull(file.sourceUri)))?:error("Не удалось открыть ${file.name}"))
                                         .use{it.copyTo(output,64*1024)}
                                 }
-                            }
+                            }.copy(contentId=read.file.contentId)
                             coordinator.data{
                                 require(read.file.path==null || coordinator.version(read.plan.accountId)==read.version){"Исходный ящик изменён. Повторите подготовку вложения."}
                                 if(attachment!=null && db.message(id)?.forwarding?.files?.any{it.key==file.key}==true)
@@ -738,7 +768,9 @@ class MailRepository(private val context: Context) {
     }}
     suspend fun send(draft: ComposeDraft)=withContext(Dispatchers.IO) {
         MailRules.validateDraft(draft)?.let{error(it)}
-        val flattened=ForwardRules.sending(draft).copy(timestamp=System.currentTimeMillis())
+        val resolved=resolveReply(draft)
+        MailRules.validateDraft(resolved)?.let{error(it)}
+        val flattened=ForwardRules.sending(resolved).copy(timestamp=System.currentTimeMillis())
         val frozen=queueFiles.freeze(flattened)
         var queued=false
         try {coordinator.data {
@@ -838,7 +870,7 @@ class MailRepository(private val context: Context) {
         coordinator.data {
             db.messages().firstOrNull{it.localFolder=="drafts" && it.sourceDraftId==m.id}?.let{return@data (db.message(it.id)?:it).draft()}
             val account=db.accounts().find{it.id==m.accountId}?:error("Ящик не найден.")
-            val draft=ComposeDraft(accountId=m.accountId,to=HeaderText.editableRecipients(m.recipients),subject=m.subject,body=m.body,forwarding=ForwardRules.plan(m,account),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
+            val draft=ComposeDraft(accountId=m.accountId,to=HeaderText.editableRecipients(m.recipients),subject=m.subject,body=m.composer?.text?:m.body,forwarding=ForwardRules.plan(m,account,restoreDraft=true),quote=m.composer?.quote,quoteIncluded=m.composer?.quoteIncluded?:true,cc=m.composer?.cc?:HeaderText.editableRecipients(m.cc),bcc=m.composer?.bcc?:HeaderText.editableRecipients(m.bcc),internetMessageId=m.internetMessageId,sourceDraftId=m.id)
             db.putMessage(draft.toMessage(account,"drafts"));refresh()
             if(draft.forwarding!=null)ForwardWorker.enqueue(context,draft.id)
             draft
@@ -847,7 +879,8 @@ class MailRepository(private val context: Context) {
     private fun sameActionServer(a: MailAction)=db.accounts().any{it.id==a.accountId && AuthRules.serverKey(it)==a.serverKey}
     private fun actionMessage(a: MailAction)=db.decodeMessage(JSONObject(a.payload))
     private fun actionOrigin(a: MailAction)=JSONObject(a.payload).optJSONObject("_origin")?.let{db.decodeMessage(it)}
-    private fun MailItem.draft()=ComposeDraft(id,accountId,recipients,subject,body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date,responseTo,responseKind)
+    private fun MailItem.draft()=ComposeDraft(id,accountId,recipients,subject,composer?.text?:body,outgoing,delivery=="uncertain",forwarding,internetMessageId,sourceDraftId,date,responseTo,responseKind,
+        cc=composer?.cc?:cc,bcc=composer?.bcc?:bcc,quote=composer?.quote,quoteIncluded=composer?.quoteIncluded?:true)
     suspend fun networkAvailable() {
         coordinator.data{refresh(messages=state.value.messages)}
         if(snapshot.value.accounts.any{it.enabled}){wakeActions();requestBodyWarmup()}
@@ -957,7 +990,7 @@ class MailRepository(private val context: Context) {
                         val source=actionMessage(first)
                         val live=coordinator.data{db.message(source.id)}
                         val editing=source.draft().copy(forwarding=live?.forwarding?:source.forwarding)
-                        require(editing.forwarding?.ready!=false){"Вложения черновика ещё подготавливаются. Сохраните черновик после завершения подготовки."}
+                        require(editing.resourcesReady()){"Вложения черновика ещё подготавливаются. Сохраните черновик после завершения подготовки."}
                         val draft=ForwardRules.sending(editing)
                         val role=if(first.kind==ActionKind.APPEND_DRAFT)FolderRole.DRAFTS else FolderRole.SENT
                         val copy=runInterruptible{gateway.append(account,password,draft,role,first.revision,actionOrigin(first))}
@@ -1093,6 +1126,7 @@ class MailRepository(private val context: Context) {
     }
     suspend fun inlineImage(message: MailItem,file: Attachment): OpenedAttachment=withContext(Dispatchers.IO){
         require(file.contentId.isNotBlank() && file.mime.startsWith("image/",true) && message.attachments.any{it.path==file.path && it.contentId==file.contentId}){"Изображение не найдено в письме."}
+        message.outgoing.firstOrNull{it.uri==file.path && it.contentId.isNotBlank()}?.let{return@withContext OpenedAttachment(it.uri,it.name,it.mime)}
         require(file.size.toLong()<=MailImageLimits.MAX_BYTES*2){"Изображение слишком большое для просмотра в письме."}
         attachmentCache.opened(cachedAttachment(message,file,MailImageLimits.MAX_BYTES),file)
     }
@@ -1101,7 +1135,16 @@ class MailRepository(private val context: Context) {
         require(file.size>=0 && file.size.toLong()<=AttachmentRules.THUMBNAIL_MAX_BYTES){"Изображение слишком большое для миниатюры."}
         attachmentCache.opened(cachedAttachment(message,file,AttachmentRules.THUMBNAIL_MAX_BYTES),file)
     }
-    private fun ComposeDraft.toMessage(a: MailAccount,folder: String)=MailItem(id,accountId,sender=a.senderName,senderEmail=a.email,recipients=to,
-        subject=subject,body=body,date=if(folder in setOf("outbox","sent") && timestamp>0)timestamp else System.currentTimeMillis(),localFolder=folder,outgoing=attachments,forwarding=forwarding,internetMessageId=MessageIdentity.forDraft(id,internetMessageId),sourceDraftId=sourceDraftId,responseTo=responseTo,responseKind=responseKind)
+    private fun ComposeDraft.toMessage(a: MailAccount,folder: String): MailItem {
+        val content=ComposeContent.render(this)
+        val ownId=MessageIdentity.forDraft(id,internetMessageId)
+        val parent=quote?.takeIf{it.kind=="reply"}?.headers
+        return MailItem(id,accountId,sender=a.senderName,senderEmail=a.email,recipients=to,cc=cc,bcc=bcc,
+            subject=subject,body=content.plain,htmlBody=content.html,contentVersion=MailContent.FORMAT_VERSION,
+            date=if(folder in setOf("outbox","sent") && timestamp>0)timestamp else System.currentTimeMillis(),localFolder=folder,outgoing=attachments,
+            forwarding=forwarding,internetMessageId=ownId,sourceDraftId=sourceDraftId,responseTo=responseTo,responseKind=responseKind,
+            attachments=attachments.filter{it.contentId.isNotBlank() && HtmlMail.cid(it.contentId) in content.inlineIds}.map{file->
+                Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt(),content.inlineIds.getValue(HtmlMail.cid(file.contentId)))},
+            composer=ComposeCodec.snapshot(this).copy(resourceAliases=content.inlineIds.entries.associate{it.value to it.key}),headers=MessageHeaders(ownId,inReplyTo=parent?.messageId.orEmpty(),references=parent?.let(MessageThread::chain).orEmpty()))
+    }
 }
-

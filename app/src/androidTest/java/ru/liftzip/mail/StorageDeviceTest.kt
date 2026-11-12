@@ -17,11 +17,12 @@ class StorageDeviceTest {
         var target: android.net.Uri?=null
         try {
             source.writeText("original content")
-            val draft=ComposeDraft(accountId="test",attachments=listOf(OutgoingFile(android.net.Uri.fromFile(source).toString(),"test.txt","text/plain",source.length())))
+            val draft=ComposeDraft(accountId="test",attachments=listOf(OutgoingFile(android.net.Uri.fromFile(source).toString(),"test.txt","text/plain",source.length(),"inline-id")))
             val frozen=QueueFiles(c).freeze(draft);target=android.net.Uri.parse(frozen.attachments.single().uri)
             source.writeText("changed")
             assertEquals("original content",c.contentResolver.openInputStream(target)!!.bufferedReader().use{it.readText()})
             assertEquals(16L,frozen.attachments.single().size)
+            assertEquals("inline-id",frozen.attachments.single().contentId)
         }finally{source.delete();target?.let{c.contentResolver.delete(it,null,null)}}
     }
     @Test fun previewTrimPreservesRecentViewersAndNeverTouchesOtherDirectories() {

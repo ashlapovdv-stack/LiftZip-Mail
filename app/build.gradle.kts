@@ -10,8 +10,8 @@ android {
         applicationId = "ru.liftzip.mail"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "0.5.19"
+        versionCode = 32
+        versionName = "0.5.20"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
@@ -53,6 +53,7 @@ dependencies {
     implementation("org.eclipse.angus:angus-activation:2.0.3")
     implementation("com.google.android.gms:play-services-auth:21.6.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
