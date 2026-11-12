@@ -133,4 +133,20 @@ class ComposeDeviceTest {
         assertTrue(draft.body.contains("<literal>"))
     }
 
+    @Test fun styledAndroidClipboardWithoutHtmlMimeStillPreservesItsSpans() {
+        var draft by mutableStateOf(ComposeDraft(accountId=a.id))
+        rule.setContent{MailTheme{ComposeScreen(draft,UiState(accounts=listOf(a)),{draft=it},{},{},{},{},{},{})}}
+        waitForEditor()
+        rule.runOnIdle {
+            val text=android.text.SpannableString("Жирный")
+            text.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD),0,text.length,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val clipboard=rule.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("test",text))
+            editor()!!.requestFocus();assertTrue(editor()!!.pasteClipboard())
+        }
+        rule.waitUntil(10_000){draft.bodyHtml?.contains("Жирный")==true}
+        val doc=org.jsoup.Jsoup.parse(draft.bodyHtml!!)
+        assertEquals("Жирный",doc.select("b,strong").text())
+    }
+
 }

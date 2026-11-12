@@ -68,7 +68,7 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
             @JavascriptInterface fun input(html: String) {
                 if(!alive)return
                 val safe=ComposerHtml.clean(html)
-                val plain=HtmlMail.text(safe)
+                val plain=ComposerHtml.plain(safe)
                 session.input(this@ComposeEditorWebView,safe)
                 post{if(alive)changed(safe,plain)}
             }
@@ -114,6 +114,7 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
         val fragments=(0 until clip.itemCount).map { index->
             val item=clip.getItemAt(index)
             if(!plain && !item.htmlText.isNullOrBlank())ComposerHtml.clean(item.htmlText!!)
+            else if(!plain && item.text is android.text.Spanned)ComposerHtml.clean(android.text.Html.toHtml(item.text as android.text.Spanned,android.text.Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE))
             else ComposeContent.escaped(item.coerceToText(context).toString()).replace("\n","<br>")
         }
         insertHtml(fragments.joinToString("<br>"));return true

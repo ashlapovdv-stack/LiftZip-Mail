@@ -73,4 +73,14 @@ class ComposerHtmlTest {
         assertEquals(migrated,ComposerHtml.forEditing(migrated))
     }
 
+    @Test fun pastedQuoteKeepsDepthInThePlainAlternativeAndKnownProviderClassesInHtml() {
+        val html="<p>Ответ</p><div class='gmail_attr'>On Thu, 12 Nov 2026, Person &lt;p@example.com&gt; wrote:</div><div class='gmail_quote arbitrary'><p>Старое письмо</p><blockquote>Ещё старее</blockquote></div>"
+        val draft=ComposerHtml.replace(ComposeDraft(accountId="a"),html)
+        val rendered=ComposeContent.render(draft)
+        assertTrue(rendered.plain.contains("> Старое письмо"))
+        assertTrue(rendered.plain.contains("> > Ещё старее"))
+        assertFalse(rendered.html.contains("arbitrary"))
+        assertTrue(HtmlMail.analyzeHistory(rendered.html,ConversationText.parse(rendered.plain)).separateHistory)
+    }
+
 }

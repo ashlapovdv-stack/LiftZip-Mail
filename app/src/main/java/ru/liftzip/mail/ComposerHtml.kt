@@ -1,6 +1,11 @@
 package ru.liftzip.mail
 
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import org.jsoup.nodes.Node
+import org.jsoup.nodes.TextNode
+import org.jsoup.select.NodeTraversor
+import org.jsoup.select.NodeVisitor
 import org.jsoup.safety.Cleaner
 import org.jsoup.safety.Safelist
 
@@ -8,7 +13,7 @@ import org.jsoup.safety.Safelist
 object ComposerHtml {
     private val tags="p,div,span,br,b,strong,i,em,u,s,strike,sub,sup,font,h1,h2,h3,h4,h5,h6,ul,ol,li,blockquote,pre,code,hr,table,thead,tbody,tfoot,tr,td,th,caption,colgroup,col,a,img,center"
     private val safe=Safelist.none().addTags(*tags.split(',').toTypedArray())
-        .addAttributes(":all","style","dir","align")
+        .addAttributes(":all","style","dir","align","class")
         .addAttributes("a","href","title").addProtocols("a","href","http","https","mailto")
         .addAttributes("img","src","alt","width","height").addProtocols("img","src","http","https","cid","data")
         .addAttributes("font","color","face","size").addAttributes("ol","start","type").addAttributes("li","value")
@@ -43,6 +48,10 @@ object ComposerHtml {
         doc.select("style").remove()
         val cleaned=Cleaner(safe).clean(doc)
         cleaned.outputSettings().prettyPrint(false)
+        cleaned.select("[class]").forEach{node->
+            val classes=node.classNames().filter{it in setOf("gmail_quote","gmail_attr","yahoo_quoted","protonmail_quote")}
+            if(classes.isEmpty())node.removeAttr("class")else node.attr("class",classes.joinToString(" "))
+        }
         cleaned.select("[style]").forEach{node->val value=css(node.attr("style"));if(value.isBlank())node.removeAttr("style")else node.attr("style",value)}
         cleaned.select("a[href]").forEach{if(HtmlMail.link(it.attr("href"))==null)it.removeAttr("href")}
         cleaned.select("img[src]").forEach { image->
@@ -53,7 +62,33 @@ object ComposerHtml {
         }
         return cleaned.body().html()
     }
-    fun plain(html: String)=HtmlMail.text(clean(html))
+    fun plain(html: String): String {
+        val safe=clean(html)
+        val doc=Jsoup.parseBodyFragment(safe)
+        fun quote(element: Element)=element.normalName()=="blockquote" || element.attr("type").equals("cite",true) ||
+            element.classNames().any{it in setOf("gmail_quote","yahoo_quoted","protonmail_quote")}
+        if(doc.body().getAllElements().none(::quote))return HtmlMail.text(safe)
+        doc.select("a[href]").forEach{a->HtmlMail.link(a.attr("href"))?.let{url->if(a.text().trim()!=url)a.appendText(" ($url)")}}
+        val lines=mutableListOf<String>();val line=StringBuilder();var depth=0
+        fun flush(){val text=line.toString().trim();if(text.isNotEmpty())lines+=("> ".repeat(depth)+text);line.setLength(0)}
+        NodeTraversor.traverse(object: NodeVisitor {
+            override fun head(node: Node,level: Int) {
+                if(node is TextNode)line.append(node.text())
+                if(node is Element) {
+                    if(quote(node)){flush();depth++}
+                    if(node.isBlock || node.normalName()=="br")flush()
+                    if(node.normalName() in setOf("td","th"))line.append(' ')
+                }
+            }
+            override fun tail(node: Node,level: Int) {
+                if(node is Element) {
+                    if(node.isBlock)flush()
+                    if(quote(node)){flush();depth--}
+                }
+            }
+        },doc.body())
+        flush();return lines.joinToString("\n")
+    }
     fun hasContent(draft: ComposeDraft)=draft.bodyHtml?.let{html->plain(html).isNotBlank() || Jsoup.parse(clean(html)).select("img[src]").isNotEmpty()}?:draft.body.isNotBlank()
     fun initial(draft: ComposeDraft)=draft.bodyHtml?.let(::clean)?:ComposeContent.escaped(draft.body).replace("\n","<br>")
     fun forEditing(draft: ComposeDraft): ComposeDraft {
@@ -63,6 +98,6 @@ object ComposerHtml {
     }
     fun replace(draft: ComposeDraft,html: String): ComposeDraft {
         val safe=clean(html)
-        return draft.copy(bodyHtml=safe,body=HtmlMail.text(safe))
+        return draft.copy(bodyHtml=safe,body=plain(safe))
     }
 }
