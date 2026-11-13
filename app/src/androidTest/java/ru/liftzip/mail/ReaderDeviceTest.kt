@@ -22,6 +22,11 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ReaderDeviceTest {
     @get:Rule val rule=createAndroidComposeRule<ComponentActivity>()
+    @org.junit.Before fun connectNativeAccessibilityBeforeCreatingWebView() {
+        // UiAutomation connects lazily. Connect before setContent creates Chromium's
+        // accessibility bridge, including when this class is run in isolation.
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+    }
     private val message=MailItem("reader-regression","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Длинное письмо",body="Начало письма. Последняя строка письма.",date=1,
         htmlBody="<p>Начало письма</p><div style='height:100000px'></div><p>Последняя строка письма</p>",contentVersion=MailContent.FORMAT_VERSION)
     private fun webView(root: View=rule.activity.window.decorView): MailHtmlWebView? {
