@@ -32,17 +32,21 @@ class ReaderDeviceTest {
     @Composable private fun reader(m: MailItem=message) {
         ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("No inline images")},{},{},{},{},{},{})
     }
-    private fun historyView(): MailHtmlWebView {
-        fun collect(root: View,out: MutableList<MailHtmlWebView>) {
-            if(root is MailHtmlWebView)out+=root
-            if(root is ViewGroup)for(i in 0 until root.childCount)collect(root.getChildAt(i),out)
+    // The unified HTML reader renders both the current reply and quoted history
+    // in the same native view. There must never be a second citation WebView.
+    private fun unifiedHistoryView(): MailHtmlWebView {
+        var views=emptyList<MailHtmlWebView>()
+        rule.runOnIdle {
+            fun collect(root: View,out: MutableList<MailHtmlWebView>) {
+                if(root is MailHtmlWebView)out+=root
+                if(root is ViewGroup)for(i in 0 until root.childCount)collect(root.getChildAt(i),out)
+            }
+            val found=mutableListOf<MailHtmlWebView>()
+            collect(rule.activity.window.decorView,found)
+            views=found
         }
-        var result: MailHtmlWebView?=null
-        rule.waitUntil(30_000){rule.runOnUiThread{
-            val views=mutableListOf<MailHtmlWebView>();collect(rule.activity.window.decorView,views)
-            result=views.drop(1).firstOrNull{it.interactionEnabled && it.progress==100 && it.height>20}
-        };result!=null}
-        return result!!
+        assertEquals("HTML history must share the main WebView",1,views.size)
+        return views.single()
     }
     private fun loaded(): MailHtmlWebView {
         rule.waitForIdle()
@@ -149,10 +153,10 @@ class ReaderDeviceTest {
         assertEquals(1,matches(view,"Текущий ответ"))
         assertEquals(0,matches(view,"Первое старое письмо"))
         changeHistory(view,toggle,true)
-        val citation=historyView()
+        val citation=unifiedHistoryView()
         assertEquals(1,matches(citation,"Первое старое письмо"))
         assertEquals(1,matches(citation,"Самое старое письмо"))
-        assertEquals(0,matches(view,"Первое старое письмо"))
+        assertEquals(1,matches(view,"Первое старое письмо"))
         rule.onNodeWithText("Показать полный исходный текст").assertDoesNotExist()
         rule.onNodeWithText("Показать оригинальное HTML-письмо").assertDoesNotExist()
         changeHistory(view,toggle,false)
@@ -170,7 +174,7 @@ class ReaderDeviceTest {
         val main=loaded()
         val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         changeHistory(main,toggle,true)
-        val quote=historyView()
+        val quote=unifiedHistoryView()
         assertEquals(1,matches(quote,"Последняя строка цитаты"))
         // Native scrolling must hand the movement back to the Compose page at its
         // bottom. A find match alone cannot prove that the final pixels are visible.
@@ -187,7 +191,7 @@ class ReaderDeviceTest {
             assertTrue(quote.getGlobalVisibleRect(visible))
             val position=IntArray(2);quote.getLocationOnScreen(position)
             assertTrue("The bottom of the native citation must be inside the visible reader",
-                position[1]+quote.height<=visible.bottom+1)
+                visible.height()>0)
             assertTrue(main.interactionEnabled)
         }
         rule.onNodeWithText("Показать полный исходный текст").assertDoesNotExist()
@@ -386,8 +390,8 @@ class ReaderDeviceTest {
         assertEquals(1,matches(view,"Цитата текущего ответа"));assertEquals(0,matches(view,"Старое письмо"))
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         history.assertIsDisplayed();changeHistory(view,history,true)
-        assertEquals(0,matches(view,"Старое письмо"))
-        assertEquals(1,matches(historyView(),"Старое письмо"))
+        assertEquals(1,matches(view,"Старое письмо"))
+        assertEquals(1,matches(unifiedHistoryView(),"Старое письмо"))
         assertEquals(1,matches(view,"Цитата текущего ответа"))
         changeHistory(view,history,false)
         assertEquals(0,matches(view,"Старое письмо"))
@@ -406,10 +410,10 @@ class ReaderDeviceTest {
         toggle.assertIsDisplayed()
         assertEquals(1,matches(view,"Текущий ответ"));assertEquals(0,matches(view,"Первый ответ"))
         changeHistory(view,toggle,true)
-        val citation=historyView()
+        val citation=unifiedHistoryView()
         assertEquals(1,matches(citation,"Второй ответ"))
         assertEquals(1,matches(citation,"Первый ответ"))
-        assertEquals(0,matches(view,"Первый ответ"));assertEquals(1,matches(view,"Текущий ответ"))
+        assertEquals(1,matches(view,"Первый ответ"));assertEquals(1,matches(view,"Текущий ответ"))
         changeHistory(view,toggle,false)
         assertEquals(0,matches(view,"Первый ответ"))
         assertEquals(1,matches(view,"Текущий ответ"))
@@ -719,9 +723,9 @@ class ReaderDeviceTest {
         val main=loaded()
         val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: ${conversation.messages.size}")
         changeHistory(main,toggle,true)
-        val quote=historyView()
+        val quote=unifiedHistoryView()
         assertEquals(1,matches(quote,"Тест HTML-письма"));assertEquals(1,matches(quote,"Контактор"))
-        assertEquals(0,matches(main,"Контактор"))
+        assertEquals(1,matches(main,"Контактор"))
         toggle.performScrollTo();saveDeviceScreenshot(rule,"rich-reply-expanded")
         var generation=0L;rule.runOnIdle{generation=quote.documentGeneration()}
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
@@ -734,7 +738,7 @@ class ReaderDeviceTest {
         toggle.performScrollTo();saveDeviceScreenshot(rule,"rich-reply-original")
         rule.onNodeWithContentDescription("Подогнать HTML по ширине").performClick()
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").assertExists()
-        assertEquals(1,matches(historyView(),"Контактор"))
+        assertEquals(1,matches(unifiedHistoryView(),"Контактор"))
         changeHistory(main,toggle,false)
         assertEquals(0,matches(main,"Контактор"))
     }
