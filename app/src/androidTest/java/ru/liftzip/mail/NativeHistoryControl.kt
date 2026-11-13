@@ -42,10 +42,11 @@ internal class NativeHistoryControl(
                     return null
                 }
                 view=find(rule.activity.window.decorView)
+                view?.setFindListener{_,total,done->if(done && total>0){view?.setFindListener(null);view?.findNext(true)}}
                 view?.findAllAsync("••• "+label.substringAfterLast(": "))
             }
             assertExists()
-            rule.runOnUiThread{view?.clearMatches()}
+            rule.runOnUiThread{view?.setFindListener(null);view?.clearMatches()}
         }
         assertExists()
         node()!!.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)
