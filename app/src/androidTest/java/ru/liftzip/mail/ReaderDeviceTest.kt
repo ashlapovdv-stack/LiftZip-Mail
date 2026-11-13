@@ -445,11 +445,12 @@ class ReaderDeviceTest {
             rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").assertCountEquals(0)
             // Observe the resting layout, not the gesture itself: geometry must be frozen.
             rule.waitForIdle()
+            val settled=history.fetchSemanticsNode().boundsInRoot.top
             Thread.sleep(1200)
             rule.waitForIdle()
             val top=history.fetchSemanticsNode().boundsInRoot.top
             rule.runOnIdle{android.util.Log.i("MailReaderGeometry","small cycle=$cycle viewHeight=${view.height} documentHeight=${view.contentHeight} scale=${view.scale} historyTop=$top")}
-            assertEquals("History must not creep after a small pinch",original,top,tolerance)
+            assertEquals("History must stop moving when the native scale settles",settled,top,tolerance)
             rule.runOnIdle{assertEquals("Window height must not track a small pinch",initialHeight,view.height)}
             rule.runOnIdle{view.resetZoom()}
             rule.waitUntil(10000){var restored=false;rule.runOnUiThread{restored=view.scale<scaleBefore*1.002f};restored}
@@ -602,13 +603,17 @@ class ReaderDeviceTest {
         var before=0f;rule.runOnIdle{before=view.scale}
         rule.onRoot().performTouchInput {
             down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
-            moveTo(0,center-Offset(80f,0f));moveTo(1,center+Offset(80f,0f));move()
+            repeat(10) { step->
+                val distance=20f+(step+1)*8f
+                moveTo(0,center-Offset(distance,0f));moveTo(1,center+Offset(distance,0f));move()
+            }
             up(1);up(0)
         }
         rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>before*1.05f};enlarged}
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
         rule.waitUntil(10000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
-        rule.onAllNodesWithText("Предыдущий текст",substring=true).assertCountEquals(0)
+        NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertExpanded(false)
+        assertEquals(0,matches(view,"Предыдущий текст"))
     }
     @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
         rule.setContent{MailTheme{reader()}}
@@ -779,6 +784,40 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Подогнать HTML по ширине").performClick()
         rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100};ready}
         rule.runOnIdle{assertEquals(baseline,view.scale,0.05f);assertFalse(view.settings.javaScriptEnabled)}
+    }
+
+    @Test fun plainHistoryAndButtonShareNativeScaleWithoutReloadingDuringZoom() {
+        val body="Текущий ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
+        rule.setContent{MailTheme{reader(message.copy(id="plain-native-scale",body=body,htmlBody=""))}}
+        val view=loaded()
+        val control=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        changeHistory(view,control,true)
+        assertEquals(1,matches(view,"Старое письмо"))
+        control.performScrollTo()
+        val before=control.fetchSemanticsNode().boundsInRoot.height
+        var generation=0L
+        rule.runOnIdle{generation=view.documentGeneration();view.zoomBy(1.5f)}
+        rule.waitUntil(10_000){control.fetchSemanticsNode().boundsInRoot.height>before*1.3f}
+        rule.runOnIdle {
+            assertSame(view,webView())
+            assertEquals("Pinch must not reload HTML",generation,view.documentGeneration())
+            assertFalse(view.settings.javaScriptEnabled)
+            assertTrue(view.settings.blockNetworkLoads)
+        }
+    }
+
+    @Test fun collapsingLongNativeHistoryRestoresScrollHiddenToolbar() {
+        val old=(1..80).joinToString("\n"){"> Строка $it"}
+        val body="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n$old"
+        rule.setContent{MailTheme{reader(message.copy(id="collapse-native-chrome",body=body,htmlBody=""))}}
+        val view=loaded()
+        val control=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        changeHistory(view,control,true)
+        rule.runOnIdle{view.scrollPage?.invoke(5000f)}
+        rule.waitUntil(10_000){!rule.onNodeWithContentDescription("Назад").isDisplayed()}
+        changeHistory(view,control,false)
+        rule.waitUntil(15_000){rule.onNodeWithContentDescription("Назад").isDisplayed()}
+        assertEquals(0,matches(view,"Строка 80"))
     }
 
 }
