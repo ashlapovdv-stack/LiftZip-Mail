@@ -185,7 +185,8 @@ class ReaderZoomDeviceTest {
         assertTrue("Pinch must reach the fully hidden chrome state",samples.any{it.progress>=0.999f})
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
-        rule.onNodeWithContentDescription("Показать изображения").assertIsNotDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsDisplayed()
+        assertTrue("Image action must stay above reply",rule.onNodeWithContentDescription("Показать изображения").fetchSemanticsNode().boundsInRoot.bottom < rule.onNodeWithContentDescription("Ответить или переслать").fetchSemanticsNode().boundsInRoot.top)
         screenshot("reader-zoom-hidden")
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
         rule.waitUntil(10_000){var initial=false;rule.runOnUiThread{initial=view.atInitialScale()};initial}
@@ -279,7 +280,7 @@ class ReaderZoomDeviceTest {
         rule.waitForIdle()
         assertAnchorContinuous(samples,density)
         rule.runOnIdle{assertSame(view,webView())}
-        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").assertExists()
+        NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertExists()
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
     }
 
@@ -357,7 +358,7 @@ class ReaderZoomDeviceTest {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
         rule.waitUntil(15_000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
-        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         val original=history.fetchSemanticsNode().boundsInRoot.top
         val density=view.resources.displayMetrics.density
         repeat(10) {cycle->

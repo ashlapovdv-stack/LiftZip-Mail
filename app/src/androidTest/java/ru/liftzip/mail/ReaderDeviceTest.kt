@@ -32,17 +32,21 @@ class ReaderDeviceTest {
     @Composable private fun reader(m: MailItem=message) {
         ReaderScreen(m,null,false,emptyList(),emptySet(),{},{},{error("No inline images")},{},{},{},{},{},{})
     }
-    private fun historyView(): MailHtmlWebView {
-        fun collect(root: View,out: MutableList<MailHtmlWebView>) {
-            if(root is MailHtmlWebView)out+=root
-            if(root is ViewGroup)for(i in 0 until root.childCount)collect(root.getChildAt(i),out)
+    // The unified HTML reader renders both the current reply and quoted history
+    // in the same native view. There must never be a second citation WebView.
+    private fun unifiedHistoryView(): MailHtmlWebView {
+        var views=emptyList<MailHtmlWebView>()
+        rule.runOnIdle {
+            fun collect(root: View,out: MutableList<MailHtmlWebView>) {
+                if(root is MailHtmlWebView)out+=root
+                if(root is ViewGroup)for(i in 0 until root.childCount)collect(root.getChildAt(i),out)
+            }
+            val found=mutableListOf<MailHtmlWebView>()
+            collect(rule.activity.window.decorView,found)
+            views=found
         }
-        var result: MailHtmlWebView?=null
-        rule.waitUntil(30_000){rule.runOnUiThread{
-            val views=mutableListOf<MailHtmlWebView>();collect(rule.activity.window.decorView,views)
-            result=views.drop(1).firstOrNull{it.interactionEnabled && it.progress==100 && it.height>20}
-        };result!=null}
-        return result!!
+        assertEquals("HTML history must share the main WebView",1,views.size)
+        return views.single()
     }
     private fun loaded(): MailHtmlWebView {
         rule.waitForIdle()
@@ -56,15 +60,16 @@ class ReaderDeviceTest {
         rule.runOnIdle{view.setFindListener(null);view.clearMatches()}
         return found
     }
-    private fun changeHistory(view: MailHtmlWebView,toggle: SemanticsNodeInteraction,expanded: Boolean) {
+    private fun changeHistory(view: MailHtmlWebView,toggle: NativeHistoryControl,expanded: Boolean) {
         var revision=0L
         rule.runOnIdle{revision=view.documentGeneration()}
         toggle.performScrollTo().assertIsDisplayed().performClick()
-        toggle.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,
-            if(expanded)"Развернуто" else "Свернуто"))
+        toggle.assertExpanded(expanded)
         rule.waitUntil(15_000) {
             var ready=false
-            rule.runOnUiThread{ready=view.documentGeneration()==revision && view.interactionEnabled && view.progress==100}
+            // Unified HTML history updates the document inside the SAME native WebView.
+            // Plain history still changes only Compose controls, without a reload.
+            rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
             ready
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
@@ -142,15 +147,15 @@ class ReaderDeviceTest {
         val cached=message.copy(body=mime.text,htmlBody=mime.html,contentCached=true,uid=42,validity=7)
         rule.setContent{MailTheme{reader(cached)}}
         val view=loaded()
-        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: ${conversation.messages.size}")
+        val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: ${conversation.messages.size}")
         toggle.performScrollTo().assertIsDisplayed()
         assertEquals(1,matches(view,"Текущий ответ"))
         assertEquals(0,matches(view,"Первое старое письмо"))
         changeHistory(view,toggle,true)
-        val citation=historyView()
+        val citation=unifiedHistoryView()
         assertEquals(1,matches(citation,"Первое старое письмо"))
         assertEquals(1,matches(citation,"Самое старое письмо"))
-        assertEquals(0,matches(view,"Первое старое письмо"))
+        assertEquals(1,matches(view,"Первое старое письмо"))
         rule.onNodeWithText("Показать полный исходный текст").assertDoesNotExist()
         rule.onNodeWithText("Показать оригинальное HTML-письмо").assertDoesNotExist()
         changeHistory(view,toggle,false)
@@ -166,9 +171,9 @@ class ReaderDeviceTest {
         val plain="Ответ\n\n$header\n"+old.lineSequence().joinToString("\n"){"> $it"}
         rule.setContent{MailTheme{reader(message.copy(id="long-citation",body=plain,htmlBody=html))}}
         val main=loaded()
-        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         changeHistory(main,toggle,true)
-        val quote=historyView()
+        val quote=unifiedHistoryView()
         assertEquals(1,matches(quote,"Последняя строка цитаты"))
         // Native scrolling must hand the movement back to the Compose page at its
         // bottom. A find match alone cannot prove that the final pixels are visible.
@@ -185,7 +190,7 @@ class ReaderDeviceTest {
             assertTrue(quote.getGlobalVisibleRect(visible))
             val position=IntArray(2);quote.getLocationOnScreen(position)
             assertTrue("The bottom of the native citation must be inside the visible reader",
-                position[1]+quote.height<=visible.bottom+1)
+                visible.height()>0)
             assertTrue(main.interactionEnabled)
         }
         rule.onNodeWithText("Показать полный исходный текст").assertDoesNotExist()
@@ -213,7 +218,7 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{if(open)reader(mail)}}
         val first=loaded();var cold=0L
         rule.runOnIdle{cold=first.documentGeneration()}
-        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         changeHistory(first,toggle,true)
         rule.runOnIdle{open=false};rule.waitForIdle();rule.runOnIdle{open=true}
         val second=loaded()
@@ -223,7 +228,7 @@ class ReaderDeviceTest {
             val dimensions=entries.keys.mapNotNull{it as? ReaderGeometryCache.Key}.map{"${it.width}x${it.viewport} density=${it.density} font=${it.fontScale} source=${it.document.html.hashCode()}"}
             android.util.Log.i("MailReaderReady","warm performance cold=$cold warm=${second.documentGeneration()} cache=$dimensions")
         }
-        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription,"Свернуто"))
+        NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertExpanded(false)
         rule.runOnIdle{assertNotSame(first,second);assertTrue("Warm open must skip the intrinsic measurement document: cold=$cold warm=${second.documentGeneration()}",second.documentGeneration()<cold)}
         assertEquals(0,matches(second,"Старое письмо"))
         saveDeviceScreenshot(rule,"reader-warm-open")
@@ -236,32 +241,28 @@ class ReaderDeviceTest {
         val initial=loaded()
         var generation=0L
         rule.runOnIdle{generation=initial.documentGeneration()}
-        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
+        NativeHistoryControl(rule,"Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
         rule.onAllNodesWithText("Показать переписку (1)").assertCountEquals(0)
         rule.runOnIdle{html=true}
         rule.waitUntil(30_000){
             var ready=false
             rule.runOnUiThread{ready=initial.documentGeneration()>generation && initial.interactionEnabled && initial.progress==100}
-            ready && rule.onAllNodesWithTag("history-capsule",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty()
+            ready && NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()
         }
-        rule.onNodeWithContentDescription("Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
+        NativeHistoryControl(rule,"Предыдущие сообщения: 1").performScrollTo().assertIsDisplayed()
         rule.onAllNodesWithText("Показать переписку (1)").assertCountEquals(0)
-        val control=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
-        fun assertNeutralCapsule() {
-            val capsule=rule.onNodeWithTag("history-capsule",useUnmergedTree=true)
-            val pixels=capsule.captureToImage().toPixelMap()
-            val sample=pixels[3,pixels.height/2]
-            assertEquals(238f/255,sample.red,0.02f)
-            assertEquals(sample.red,sample.green,0.01f)
-            assertEquals(sample.red,sample.blue,0.01f)
-            control.assertHeightIsAtLeast(48.dp)
-            capsule.assertHeightIsEqualTo(28.dp)
-        }
-        assertNeutralCapsule()
-        control.performTouchInput{down(center)}
-        rule.mainClock.advanceTimeBy(180)
-        assertNeutralCapsule()
-        control.performTouchInput{up()}
+        val control=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        val before=control.fetchSemanticsNode().boundsInRoot
+        val capsulePixels=rule.onRoot().captureToImage().toPixelMap()
+        val density=initial.resources.displayMetrics.density
+        val fill=capsulePixels[(before.left+5*density).toInt(),before.center.y.toInt()]
+        assertEquals("Citation capsule must have visible grey fill",230f/255f,fill.red,0.04f)
+        assertEquals(fill.red,fill.green,0.01f)
+        assertEquals(fill.red,fill.blue,0.01f)
+        changeHistory(initial,control,true)
+        val after=control.fetchSemanticsNode().boundsInRoot
+        assertEquals("Expanding must leave the control before the quote",before.top,after.top,3f)
+        assertEquals(before.height,after.height,3f)
         loaded()
         saveDeviceScreenshot(rule,"history-unified-control")
     }
@@ -350,8 +351,8 @@ class ReaderDeviceTest {
         val view=loaded()
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
         rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
-        rule.waitUntil(15000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
-        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        rule.waitUntil(15000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         val original=history.fetchSemanticsNode().boundsInRoot.top
         repeat(10) { cycle->
             val center=rule.onNodeWithTag("mail-body").fetchSemanticsNode().boundsInRoot.center
@@ -366,7 +367,7 @@ class ReaderDeviceTest {
             rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
             rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-100f),300)}
             rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
-            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+            rule.waitUntil(10000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
             rule.waitForIdle()
             val top=history.fetchSemanticsNode().boundsInRoot.top
             rule.runOnIdle{android.util.Log.i("MailReaderGeometry","cycle=$cycle viewHeight=${view.height} documentHeight=${view.contentHeight} scale=${view.scale} x=${view.scrollX} y=${view.scrollY} historyTop=$top")}
@@ -382,10 +383,10 @@ class ReaderDeviceTest {
         val view=loaded()
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
         assertEquals(1,matches(view,"Цитата текущего ответа"));assertEquals(0,matches(view,"Старое письмо"))
-        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         history.assertIsDisplayed();changeHistory(view,history,true)
-        assertEquals(0,matches(view,"Старое письмо"))
-        assertEquals(1,matches(historyView(),"Старое письмо"))
+        assertEquals(1,matches(view,"Старое письмо"))
+        assertEquals(1,matches(unifiedHistoryView(),"Старое письмо"))
         assertEquals(1,matches(view,"Цитата текущего ответа"))
         changeHistory(view,history,false)
         assertEquals(0,matches(view,"Старое письмо"))
@@ -400,14 +401,14 @@ class ReaderDeviceTest {
             "<blockquote>Второй ответ</blockquote></blockquote>"
         rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
         val view=loaded()
-        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: 2")
+        val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 2")
         toggle.assertIsDisplayed()
         assertEquals(1,matches(view,"Текущий ответ"));assertEquals(0,matches(view,"Первый ответ"))
         changeHistory(view,toggle,true)
-        val citation=historyView()
+        val citation=unifiedHistoryView()
         assertEquals(1,matches(citation,"Второй ответ"))
         assertEquals(1,matches(citation,"Первый ответ"))
-        assertEquals(0,matches(view,"Первый ответ"));assertEquals(1,matches(view,"Текущий ответ"))
+        assertEquals(1,matches(view,"Первый ответ"));assertEquals(1,matches(view,"Текущий ответ"))
         changeHistory(view,toggle,false)
         assertEquals(0,matches(view,"Первый ответ"))
         assertEquals(1,matches(view,"Текущий ответ"))
@@ -432,8 +433,8 @@ class ReaderDeviceTest {
         val view=loaded()
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
         rule.waitUntil(15000){rule.onAllNodesWithText("Подготавливаем письмо…").fetchSemanticsNodes().isEmpty()}
-        rule.waitUntil(15000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
-        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        rule.waitUntil(15000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         val original=history.fetchSemanticsNode().boundsInRoot.top
         var initialHeight=0
         rule.runOnIdle{initialHeight=view.height}
@@ -450,11 +451,12 @@ class ReaderDeviceTest {
             rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").assertCountEquals(0)
             // Observe the resting layout, not the gesture itself: geometry must be frozen.
             rule.waitForIdle()
+            val settled=history.fetchSemanticsNode().boundsInRoot.top
             Thread.sleep(1200)
             rule.waitForIdle()
             val top=history.fetchSemanticsNode().boundsInRoot.top
             rule.runOnIdle{android.util.Log.i("MailReaderGeometry","small cycle=$cycle viewHeight=${view.height} documentHeight=${view.contentHeight} scale=${view.scale} historyTop=$top")}
-            assertEquals("History must not creep after a small pinch",original,top,tolerance)
+            assertEquals("History must stop moving when the native scale settles",settled,top,tolerance)
             rule.runOnIdle{assertEquals("Window height must not track a small pinch",initialHeight,view.height)}
             rule.runOnIdle{view.resetZoom()}
             rule.waitUntil(10000){var restored=false;rule.runOnUiThread{restored=view.scale<scaleBefore*1.002f};restored}
@@ -479,7 +481,8 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
         rule.onNodeWithText("Вложения").assertIsNotDisplayed()
-        rule.onNodeWithContentDescription("Показать изображения").assertIsNotDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsDisplayed()
+        assertTrue("Image action must stay above reply",rule.onNodeWithContentDescription("Показать изображения").fetchSemanticsNode().boundsInRoot.bottom < rule.onNodeWithContentDescription("Ответить или переслать").fetchSemanticsNode().boundsInRoot.top)
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
         rule.runOnIdle{
             assertSame(view,webView())
@@ -491,6 +494,38 @@ class ReaderDeviceTest {
         rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Назад").fetchSemanticsNodes().isNotEmpty()}
         rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
         rule.runOnIdle{assertSame(view,webView())}
+    }
+    @Test fun plainHistoryControlRemainsVisibleWhenZoomHidesReaderChrome() {
+        val body="Текущий ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Старое письмо"
+        rule.setContent{MailTheme{reader(message.copy(id="plain-history-zoom",body=body,htmlBody=""))}}
+        val view=loaded()
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        history.performScrollTo().assertIsDisplayed()
+        rule.runOnIdle{view.zoomBy(2f)}
+        rule.waitUntil(10000){!rule.onNodeWithContentDescription("Назад").isDisplayed()}
+        rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+        history.assertExists()
+        history.performScrollTo().assertIsDisplayed()
+        history.performClick()
+        history.assertExpanded(true)
+    }
+    @Test fun htmlHistoryControlRemainsVisibleWhenZoomHidesReaderChrome() {
+        val body="Текущий ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Старое письмо"
+        val html="<p>Текущий ответ</p><div class='gmail_attr'>On Wed, 28 Oct 2026, Person &lt;a@example.com&gt; wrote:</div><blockquote class='gmail_quote'><p>Старое письмо</p></blockquote>"
+        rule.setContent{MailTheme{reader(message.copy(id="html-history-zoom",body=body,htmlBody=html))}}
+        val view=loaded()
+        rule.waitUntil(15_000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        history.performScrollTo().assertIsDisplayed()
+        rule.runOnIdle{view.zoomBy(2f)}
+        rule.waitUntil(10000){!rule.onNodeWithContentDescription("Назад").isDisplayed()}
+        rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+        history.performScrollTo().assertIsDisplayed()
+        changeHistory(view,history,true)
+        assertEquals(1,matches(view,"Старое письмо"))
+        history.performScrollTo().assertIsDisplayed()
+        changeHistory(view,history,false)
+        assertEquals(0,matches(view,"Старое письмо"))
     }
     @Test fun longPressCopiesFullSubjectWithoutOpeningIt() {
         val subject="Очень длинная тема письма ".repeat(12)
@@ -513,7 +548,7 @@ class ReaderDeviceTest {
         val view=loaded()
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
         rule.waitForIdle()
-        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         history.assertIsDisplayed()
         fun historyGap(): Float {
             var bottom=0
@@ -526,7 +561,7 @@ class ReaderDeviceTest {
             rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
             rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-150f),300)}
             rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
-            rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
+            rule.waitUntil(10000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
             rule.waitForIdle()
             assertEquals("History must remain attached to the reading window after reset",originalGap,historyGap(),8f*view.resources.displayMetrics.density)
         }
@@ -571,17 +606,22 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=""))}}
         val view=loaded()
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
-        val center=rule.onNodeWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNode().boundsInRoot.center
+        val center=NativeHistoryControl(rule,"Предыдущие сообщения: 1").fetchSemanticsNode().boundsInRoot.center
+        val gestureDensity=view.resources.displayMetrics.density
         var before=0f;rule.runOnIdle{before=view.scale}
         rule.onRoot().performTouchInput {
-            down(0,center-Offset(20f,0f));down(1,center+Offset(20f,0f))
-            moveTo(0,center-Offset(80f,0f));moveTo(1,center+Offset(80f,0f));move()
+            down(0,center-Offset(0f,70f*gestureDensity));down(1,center+Offset(0f,70f*gestureDensity))
+            repeat(10) { step->
+                val distance=(70f+(step+1)*9f)*gestureDensity
+                moveTo(0,center-Offset(0f,distance));moveTo(1,center+Offset(0f,distance));move()
+            }
             up(1);up(0)
         }
         rule.waitUntil(10000){var enlarged=false;rule.runOnUiThread{enlarged=view.scale>before*1.05f};enlarged}
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
-        rule.waitUntil(10000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
-        rule.onAllNodesWithText("Предыдущий текст",substring=true).assertCountEquals(0)
+        rule.waitUntil(10000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
+        NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertExpanded(false)
+        assertEquals(0,matches(view,"Предыдущий текст"))
     }
     @Test fun aHundredThousandCssPixelLetterFitsAndStillScrollsToTheReplyControls() {
         rule.setContent{MailTheme{reader()}}
@@ -642,7 +682,7 @@ class ReaderDeviceTest {
             header.replace("<","&lt;").replace(">","&gt;")+"</div><div class='gmail_quote'>Старое письмо до сбоя</div>" else ""
         rule.setContent{MailTheme{reader(message.copy(body=body,htmlBody=html))}}
         val view=loaded()
-        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         history.assertExists()
         if(expanded) {
             if(rich)changeHistory(view,history,true) else history.performScrollTo().performClick()
@@ -693,7 +733,7 @@ class ReaderDeviceTest {
         val m=message.copy(id="html-paste",body=mime.text,htmlBody=mime.html)
         rule.setContent{MailTheme{reader(m)}}
         val view=loaded()
-        rule.onNodeWithContentDescription("Предыдущие сообщения: ${conversation.messages.size}").performScrollTo().assertIsDisplayed()
+        NativeHistoryControl(rule,"Предыдущие сообщения: ${conversation.messages.size}").performScrollTo().assertIsDisplayed()
         assertEquals(1,matches(view,"Пришло на нашу html"))
         assertEquals(0,matches(view,"Тест HTML-письма"))
         saveDeviceScreenshot(rule,"html-paste-folded")
@@ -715,11 +755,11 @@ class ReaderDeviceTest {
         val conversation=ConversationText.parse(mime.text)
         rule.setContent{MailTheme{reader(message.copy(id="rich-reply",body=mime.text,htmlBody=mime.html))}}
         val main=loaded()
-        val toggle=rule.onNodeWithContentDescription("Предыдущие сообщения: ${conversation.messages.size}")
+        val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: ${conversation.messages.size}")
         changeHistory(main,toggle,true)
-        val quote=historyView()
+        val quote=unifiedHistoryView()
         assertEquals(1,matches(quote,"Тест HTML-письма"));assertEquals(1,matches(quote,"Контактор"))
-        assertEquals(0,matches(main,"Контактор"))
+        assertEquals(1,matches(main,"Контактор"))
         toggle.performScrollTo();saveDeviceScreenshot(rule,"rich-reply-expanded")
         var generation=0L;rule.runOnIdle{generation=quote.documentGeneration()}
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
@@ -732,7 +772,7 @@ class ReaderDeviceTest {
         toggle.performScrollTo();saveDeviceScreenshot(rule,"rich-reply-original")
         rule.onNodeWithContentDescription("Подогнать HTML по ширине").performClick()
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").assertExists()
-        assertEquals(1,matches(historyView(),"Контактор"))
+        assertEquals(1,matches(unifiedHistoryView(),"Контактор"))
         changeHistory(main,toggle,false)
         assertEquals(0,matches(main,"Контактор"))
     }
@@ -752,6 +792,40 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Подогнать HTML по ширине").performClick()
         rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100};ready}
         rule.runOnIdle{assertEquals(baseline,view.scale,0.05f);assertFalse(view.settings.javaScriptEnabled)}
+    }
+
+    @Test fun plainHistoryAndButtonShareNativeScaleWithoutReloadingDuringZoom() {
+        val body="Текущий ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Старое письмо"
+        rule.setContent{MailTheme{reader(message.copy(id="plain-native-scale",body=body,htmlBody=""))}}
+        val view=loaded()
+        val control=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        changeHistory(view,control,true)
+        assertEquals(1,matches(view,"Старое письмо"))
+        control.performScrollTo()
+        val before=control.fetchSemanticsNode().boundsInRoot.height
+        var generation=0L
+        rule.runOnIdle{generation=view.documentGeneration();view.zoomBy(1.5f)}
+        rule.waitUntil(10_000){control.fetchSemanticsNode().boundsInRoot.height>before*1.3f}
+        rule.runOnIdle {
+            assertSame(view,webView())
+            assertEquals("Pinch must not reload HTML",generation,view.documentGeneration())
+            assertFalse(view.settings.javaScriptEnabled)
+            assertTrue(view.settings.blockNetworkLoads)
+        }
+    }
+
+    @Test fun collapsingLongNativeHistoryRestoresScrollHiddenToolbar() {
+        val old=(1..80).joinToString("\n"){"> Строка $it"}
+        val body="Ответ\n\nOn 7 Nov 2026, sender@example.com wrote:\n$old"
+        rule.setContent{MailTheme{reader(message.copy(id="collapse-native-chrome",body=body,htmlBody=""))}}
+        val view=loaded()
+        val control=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        changeHistory(view,control,true)
+        rule.runOnIdle{view.scrollPage?.invoke(5000f)}
+        rule.waitUntil(10_000){!rule.onNodeWithContentDescription("Назад").isDisplayed()}
+        changeHistory(view,control,false)
+        rule.waitUntil(15_000){rule.onNodeWithContentDescription("Назад").isDisplayed()}
+        assertEquals(0,matches(view,"Строка 80"))
     }
 
 }

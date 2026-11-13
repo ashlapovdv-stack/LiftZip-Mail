@@ -389,9 +389,11 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
 // resize between MOVE events and produces the observed 2104 -> 2517 -> 2104 content jumps.
 internal fun readerBodyHeight(normal: Int): Int=normal
 
-@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false,onContentReady: (() -> Unit)?=null,parentScroll: ReaderScroll?=null,afterContent: @Composable ()->Unit={}) {
+@Composable fun MailHtmlBody(message: MailItem,plain: String,history: HtmlMail.HistoryAnalysis,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,scroll: ReaderScroll?=null,zoomed: Boolean=false,header: @Composable ()->Unit={},onZoomChanged: (Float)->Unit={},onPinchChanged: (Boolean)->Unit={},rendererFailed: MutableState<Boolean> = remember(message.id,message.contentVersion){mutableStateOf(false)},originalScale: Boolean=false,onContentReady: (() -> Unit)?=null,parentScroll: ReaderScroll?=null,afterContent: @Composable ()->Unit={},externalImageState: MutableState<Boolean>?=null,onImageAvailability: (Boolean)->Unit={},showImageControl: Boolean=true) {
     val context=LocalContext.current;val density=LocalDensity.current
-    var external by rememberSaveable(message.id){mutableStateOf(false)}
+    var localExternal by rememberSaveable(message.id){mutableStateOf(false)}
+    val external=externalImageState?.value?:localExternal
+    val toggleExternal: ()->Unit={if(externalImageState!=null)externalImageState.value=!external else localExternal=!external}
     var failed by rendererFailed
     var web by remember(message.id,message.contentVersion){mutableStateOf<MailHtmlWebView?>(null)}
     // Rich mail retains a light default canvas; sender-defined dark tables keep their own colors.
@@ -410,6 +412,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
         }
     }}
     val document=cachedDocument?:preparedDocument
+    val latestAvailability by rememberUpdatedState(onImageAvailability)
+    LaunchedEffect(document?.externalImages){latestAvailability(document?.externalImages==true)}
     val latestInline by rememberUpdatedState(onInline)
     val latestLink by rememberUpdatedState(onLink)
     val latestZoom by rememberUpdatedState(onZoomChanged)
@@ -434,7 +438,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var prepared by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(cachedGeometry!=null)}
     var nativeCommit by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(0)}
     var rendered by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
-    var followingContentPublished by remember(message.id,message.contentVersion,message.htmlBody,plain){mutableStateOf(false)}
+    var followingContentPublished by remember(message.id,message.contentVersion){mutableStateOf(false)}
     SideEffect{if(rendered || failed)followingContentPublished=true}
     val latestContentReady by rememberUpdatedState(onContentReady)
     LaunchedEffect(rendered,failed){if(rendered || failed)latestContentReady?.invoke()}
@@ -512,8 +516,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
             .readerChrome(scroll?.toolbar?.zoomProgress?:0f,scroll?.headerOffset?:0f).testTag("reader-message-header")
             .background(androidx.compose.ui.graphics.Color.White)) {
             header()
-            if(document?.externalImages==true)Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.End) {
-                IconButton(onClick={external=!external}) {
+            if(showImageControl && document?.externalImages==true)Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.End) {
+                IconButton(onClick=toggleExternal) {
                     Icon(if(external) Icons.Outlined.HideImage else Icons.Outlined.Image,
                         contentDescription=if(external) "Скрыть внешние изображения" else "Показать изображения",
                         tint=MaterialTheme.colorScheme.primary)

@@ -74,4 +74,8 @@ class ReaderToolbarState(private val zoom: ()->Float={0f}) {
     fun scroll(consumedPixels: Float) {
         if(consumedPixels.isFinite())scrollHiddenPixels=(scrollHiddenPixels+consumedPixels).coerceIn(0f,height.toFloat())
     }
+    /** Collapsing a long quote changes the scrollable extent without a scroll event. */
+    fun onHistoryCollapsed() {
+        scrollHiddenPixels=0f
+    }
 }
