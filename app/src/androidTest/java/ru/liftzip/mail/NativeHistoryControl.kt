@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Rect as ComposeRect
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -30,6 +31,22 @@ internal class NativeHistoryControl(
     fun assertExists()=apply { rule.waitUntil(15_000){exists()} }
     fun assertIsDisplayed()=apply { assertExists();assertTrue(node()!!.isVisibleToUser) }
     fun performScrollTo()=apply {
+        if(!exists()) {
+            // Chromium exposes only nearby virtual nodes. Find scrolls the real
+            // document to this text before requesting its accessibility action.
+            var view: MailHtmlWebView?=null
+            rule.runOnUiThread {
+                fun find(v: View): MailHtmlWebView? {
+                    if(v is MailHtmlWebView)return v
+                    if(v is ViewGroup)for(i in 0 until v.childCount)find(v.getChildAt(i))?.let{return it}
+                    return null
+                }
+                view=find(rule.activity.window.decorView)
+                view?.findAllAsync("••• "+label.substringAfterLast(": "))
+            }
+            assertExists()
+            rule.runOnUiThread{view?.clearMatches()}
+        }
         assertExists()
         node()!!.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)
         rule.waitForIdle()
@@ -44,7 +61,8 @@ internal class NativeHistoryControl(
         assertExists()
         val r=Rect();node()!!.getBoundsInScreen(r)
         val origin=IntArray(2);rule.runOnUiThread{rule.activity.window.decorView.getLocationOnScreen(origin)}
-        return Bounds(ComposeRect((r.left-origin[0]).toFloat(),(r.top-origin[1]).toFloat(),(r.right-origin[0]).toFloat(),(r.bottom-origin[1]).toFloat()))
+        val root=rule.onRoot().fetchSemanticsNode().boundsInWindow
+        return Bounds(ComposeRect(r.left-origin[0]-root.left,r.top-origin[1]-root.top,r.right-origin[0]-root.left,r.bottom-origin[1]-root.top))
     }
     fun assertExpanded(expanded: Boolean)=apply {
         rule.waitUntil(15_000) {
