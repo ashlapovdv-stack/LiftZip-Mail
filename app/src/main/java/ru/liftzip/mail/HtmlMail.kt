@@ -84,7 +84,7 @@ object HtmlMail {
         return out.toString()
     }
     private fun safelist()=Safelist.relaxed().addTags("style","section","article","header","footer","main","hr","s","strike","center","font").addAttributes("font","color","face","size")
-        .addAttributes(":all","style","class","id","dir","align","valign","width","height","bgcolor","border","cellpadding","cellspacing","role")
+        .addAttributes(":all","style","class","id","dir","align","valign","width","height","bgcolor","border","cellpadding","cellspacing","role","aria-label","aria-expanded")
         .addProtocols("img","src","cid","data").removeProtocols("a","href","ftp")
     fun link(raw: String): String? {
         val value=raw.trim()

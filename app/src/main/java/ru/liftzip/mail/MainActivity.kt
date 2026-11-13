@@ -921,43 +921,29 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 val source=prepared.message
                 val parsed=prepared.conversation
                 val history=prepared.history
-                // A single native WebView owns the entire HTML reading surface.
-                // Plain-text history continues to use the existing Compose fallback.
-                val unifiedHistory=source.htmlBody.isNotBlank() && history.separateHistory && history.quotedHtml.isNotBlank() && parsed.messages.isNotEmpty()
-                val unifiedHtml=if(unifiedHistory) UnifiedReaderDocument.assemble(
-                    history.currentHtml,history.quotedHtml,historyExpanded
-                ) else source.htmlBody
-                val readingSource=if(unifiedHistory)source.copy(htmlBody=unifiedHtml)else source
-                val readingHistory=if(unifiedHistory)HtmlMail.noHistory(unifiedHtml)else history
-                MailHtmlBody(readingSource,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},readingHistory,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                // All source formats share one native scale and document order.
+                val unifiedHistory=parsed.messages.isNotEmpty()
+                val unifiedHtml=remember(source.htmlBody,history,parsed,historyExpanded) {
+                    if(unifiedHistory) UnifiedReaderDocument.assemble(
+                        if(source.htmlBody.isNotBlank())history.currentHtml else HtmlMail.plain(parsed.current),
+                        history.quotedHtml.ifBlank { HtmlMail.plain(parsed.quotedBody.orEmpty()) },
+                        historyExpanded,parsed.messages.size
+                    ) else source.htmlBody
+                }
+                val readingSource=remember(source,unifiedHtml){if(unifiedHistory)source.copy(htmlBody=unifiedHtml)else source}
+                val readingHistory=remember(unifiedHtml,history){if(unifiedHistory)HtmlMail.noHistory(unifiedHtml)else history}
+                val readerLink: (String)->Unit={url->
+                    if(unifiedHistory && url==UnifiedReaderDocument.TOGGLE_URL) {
+                        if(historyExpanded)scroll.toolbar.onHistoryCollapsed()
+                        historyExpanded=!historyExpanded
+                    } else onLink(url)
+                }
+                MailHtmlBody(readingSource,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},readingHistory,onInline,readerLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
-                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true},afterContent={
-                // Keep the scroll extent unchanged by zoom. Removing these nodes during a
-                // gesture can clamp outer.value and move the WebView even with a frozen header.
-                if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)) {
-                    HistoryToggle(parsed.messages.size,historyExpanded,{
-                        if(historyExpanded)scroll.toolbar.onHistoryCollapsed()
-                        historyExpanded=!historyExpanded
-                    })
-                    if(historyExpanded && !unifiedHistory) {
-                        DisposableEffect(m.id){onDispose{expandedHistoryBounds=null}}
-                        Column(Modifier.fillMaxWidth().onGloballyPositioned{coordinates->
-                            expandedHistoryBounds=androidx.compose.ui.geometry.Rect(coordinates.positionInWindow(),androidx.compose.ui.geometry.Size(coordinates.size.width.toFloat(),coordinates.size.height.toFloat()))
-                        }) {
-                        if(history.quotedHtml.isNotBlank()) {
-                            val quoted=source.copy(id=source.id+":quoted-html",htmlBody=history.quotedHtml,body=parsed.quotedBody.orEmpty())
-                            MailHtmlBody(quoted,quoted.body,HtmlMail.noHistory(quoted.htmlBody),onInline,onLink,onPinchChanged=updatePinch,
-                                originalScale=originalHtmlScale,parentScroll=scroll)
-                        } else {
-                            QuotedHistoryContent(parsed)
-                        }
-                        }
-                    }
-                }
-                })
+                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true})
             }
             Spacer(Modifier.height(100.dp))
         }

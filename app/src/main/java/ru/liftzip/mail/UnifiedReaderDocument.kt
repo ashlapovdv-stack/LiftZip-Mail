@@ -4,23 +4,29 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 /**
- * Experimental one-WebView body builder. Both fragments go through the production
+ * One-WebView body builder. Both fragments go through the production
  * sanitizer. The resulting markup is DATA, never executable script.
- *
- * This does not control the live WebView yet. It is a testable boundary for
- * the subsequent reader integration.
  */
 internal object UnifiedReaderDocument {
     const val CURRENT_ID = "mail-current-message"
     const val HISTORY_ID = "mail-quoted-history"
 
-    fun assemble(currentHtml: String, quotedHtml: String, historyExpanded: Boolean): String {
+    const val TOGGLE_URL = "https://mail.liftzip.invalid/reader/toggle-history"
+
+    fun assemble(currentHtml: String, quotedHtml: String, historyExpanded: Boolean, count: Int = 1): String {
         val doc = Jsoup.parseBodyFragment("")
         doc.outputSettings().prettyPrint(false)
         val current = Element("section").attr("id", CURRENT_ID)
         current.append(HtmlMail.cleanSource(currentHtml))
         doc.body().appendChild(current)
         if (quotedHtml.isNotBlank()) {
+            val control = Element("a").attr("href", TOGGLE_URL)
+                .attr("role", "button")
+                .attr("aria-label", "Предыдущие сообщения: $count")
+                .attr("aria-expanded", historyExpanded.toString())
+                .attr("style", "display:inline-block!important;position:static!important;margin:12px 0!important;padding:3px 10px!important;border-radius:16px!important;background:#eee!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important")
+                .text("••• $count")
+            doc.body().appendChild(control)
             val history = Element("section").attr("id", HISTORY_ID)
             // HTML's hidden attribute is removed by HtmlMail's Safelist.
             // Use a style understood by the renderer without enabling JavaScript.

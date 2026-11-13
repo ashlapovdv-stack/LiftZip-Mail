@@ -76,6 +76,6 @@ class ReaderToolbarState(private val zoom: ()->Float={0f}) {
     }
     /** Collapsing a long quote changes the scrollable extent without a scroll event. */
     fun onHistoryCollapsed() {
-        if(zoomProgress<=0.001f)scrollHiddenPixels=0f
+        scrollHiddenPixels=0f
     }
 }

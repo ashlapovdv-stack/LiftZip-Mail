@@ -18,7 +18,7 @@ class ReaderZoomGeometryTest {
         toolbar.onHistoryCollapsed()
         assertEquals(100f,toolbar.hiddenPixels,0.001f)
         zoom=0f
-        assertEquals(100f,toolbar.hiddenPixels,0.001f)
+        assertEquals(0f,toolbar.hiddenPixels,0.001f)
     }
 
     @Test fun headerInsetUsesFittedCssScaleInsteadOfDeclaredPageWidth() {

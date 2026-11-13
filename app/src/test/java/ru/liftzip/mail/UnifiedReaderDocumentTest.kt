@@ -90,4 +90,19 @@ class UnifiedReaderDocumentTest {
         assertSame(prepare(collapsed), prepare(collapsed))
     }
 
+    @Test fun nativeControlPrecedesHistoryInBothStatesAndSurvivesSanitization() {
+        for(expanded in listOf(false,true)) {
+            val html=UnifiedReaderDocument.assemble(HtmlMail.plain("New\nanswer"),HtmlMail.plain("Old\nanswer"),expanded,2)
+            val rendered=HtmlMail.document(html,"",emptyList(),HtmlMail.noHistory(html))
+            val body=Jsoup.parse(rendered.html).body()
+            val control=body.selectFirst("a[aria-expanded]")!!
+            assertEquals(UnifiedReaderDocument.TOGGLE_URL,control.attr("href"))
+            assertEquals("Предыдущие сообщения: 2",control.attr("aria-label"))
+            assertEquals(expanded.toString(),control.attr("aria-expanded"))
+            assertEquals(UnifiedReaderDocument.HISTORY_ID,control.nextElementSibling()!!.id())
+            assertEquals(2,body.select(".mail-plain").size)
+            assertTrue(body.select("script,iframe").isEmpty())
+        }
+    }
+
 }
