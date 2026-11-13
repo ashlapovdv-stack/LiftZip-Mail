@@ -498,6 +498,21 @@ class ReaderDeviceTest {
         rule.onNodeWithText("Длинное письмо").assertIsDisplayed()
         rule.runOnIdle{assertSame(view,webView())}
     }
+    @Test fun plainHistoryControlRemainsVisibleWhenZoomHidesReaderChrome() {
+        val body="Текущий ответ\\n\\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\\n> Старое письмо"
+        rule.setContent{MailTheme{reader(message.copy(id="plain-history-zoom",body=body,htmlBody=""))}}
+        val view=loaded()
+        val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
+        history.performScrollTo().assertIsDisplayed()
+        rule.runOnIdle{view.zoomBy(2f)}
+        rule.waitUntil(10000){!rule.onNodeWithContentDescription("Назад").isDisplayed()}
+        rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+        history.assertExists()
+        history.performScrollTo().assertIsDisplayed()
+        history.performClick()
+        history.assert(androidx.compose.ui.test.SemanticsMatcher.expectValue(
+            androidx.compose.ui.semantics.SemanticsProperties.StateDescription,"Развернуто"))
+    }
     @Test fun longPressCopiesFullSubjectWithoutOpeningIt() {
         val subject="Очень длинная тема письма ".repeat(12)
         rule.setContent{MailTheme{reader(message.copy(subject=subject,htmlBody="<p>Письмо</p>"))}}
