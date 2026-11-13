@@ -938,7 +938,10 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 // Keep the scroll extent unchanged by zoom. Removing these nodes during a
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
                 if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.padding(horizontal=22.dp)) {
-                    HistoryToggle(parsed.messages.size,historyExpanded,{historyExpanded=!historyExpanded})
+                    HistoryToggle(parsed.messages.size,historyExpanded,{
+                        if(historyExpanded)scroll.toolbar.onHistoryCollapsed()
+                        historyExpanded=!historyExpanded
+                    })
                     if(historyExpanded && !unifiedHistory) {
                         DisposableEffect(m.id){onDispose{expandedHistoryBounds=null}}
                         Column(Modifier.fillMaxWidth().onGloballyPositioned{coordinates->
