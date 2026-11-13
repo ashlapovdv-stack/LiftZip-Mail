@@ -25,7 +25,6 @@ internal object UnifiedReaderDocument {
                 .attr("role", "button")
                 .attr("aria-label", "Предыдущие сообщения: $count")
                 .attr("aria-expanded", historyExpanded.toString())
-                .attr("style", "display:inline-block!important;position:static!important;margin:12px 0!important;padding:3px 10px!important;border-radius:16px!important;background:#eee!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important")
                 .text("⋯ $count")
             doc.body().appendChild(control)
             val history = Element("section").attr("id", HISTORY_ID)

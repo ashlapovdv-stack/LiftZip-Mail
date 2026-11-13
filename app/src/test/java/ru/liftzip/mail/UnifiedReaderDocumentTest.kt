@@ -117,6 +117,7 @@ class UnifiedReaderDocumentTest {
             assertTrue(rendered.html.contains("#mail-history-toggle{display:inline-flex"))
             assertTrue(rendered.html.contains("background:#e6e6e6!important"))
             assertEquals("⋯ 1",body.selectFirst("#mail-history-toggle")!!.text())
+            assertFalse(body.selectFirst("#mail-history-toggle")!!.hasAttr("style"))
         }
     }
 
