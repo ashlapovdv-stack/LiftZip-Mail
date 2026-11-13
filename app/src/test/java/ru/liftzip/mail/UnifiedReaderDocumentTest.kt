@@ -36,4 +36,33 @@ class UnifiedReaderDocumentTest {
         assertEquals("Safe", doc.select("#mail-current-message").text())
         assertEquals("Quote", doc.select("#mail-quoted-history").text())
     }
+    @Test fun wideTableRemainsInsideQuotedSection() {
+        val html = UnifiedReaderDocument.assemble(
+            "<p>Reply</p>",
+            "<blockquote><table width='900'><tr><td>Quoted table</td></tr></table></blockquote>",
+            true
+        )
+        val doc = Jsoup.parseBodyFragment(html)
+        assertEquals("900", doc.selectFirst("#mail-quoted-history table")!!.attr("width"))
+        assertEquals(1, doc.select("#mail-quoted-history blockquote").size)
+        assertTrue(doc.select("#mail-current-message table").isEmpty())
+    }
+
+    @Test fun emptyQuoteDoesNotCreateSecondSection() {
+        val html = UnifiedReaderDocument.assemble("<p>Only reply</p>", "", true)
+        val doc = Jsoup.parseBodyFragment(html)
+        assertTrue(doc.select("#mail-quoted-history").isEmpty())
+        assertEquals("Only reply", doc.select("#mail-current-message").text())
+    }
+
+    @Test fun collapsedQuoteRetainsItsContentForReopening() {
+        val collapsed = UnifiedReaderDocument.assemble("Reply", "<p>Old reply</p>", false)
+        val expanded = UnifiedReaderDocument.assemble("Reply", "<p>Old reply</p>", true)
+        val hidden = Jsoup.parseBodyFragment(collapsed).selectFirst("#mail-quoted-history")!!
+        val shown = Jsoup.parseBodyFragment(expanded).selectFirst("#mail-quoted-history")!!
+        assertEquals("display:none", hidden.attr("style"))
+        assertFalse(shown.hasAttr("style"))
+        assertEquals(hidden.text(), shown.text())
+    }
+
 }
