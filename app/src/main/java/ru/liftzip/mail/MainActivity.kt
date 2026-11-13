@@ -923,7 +923,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 val history=prepared.history
                 // A single native WebView owns the entire HTML reading surface.
                 // Plain-text history continues to use the existing Compose fallback.
-                val unifiedHistory=history.quotedHtml.isNotBlank() && parsed.messages.isNotEmpty()
+                val unifiedHistory=source.htmlBody.isNotBlank() && history.separateHistory && history.quotedHtml.isNotBlank() && parsed.messages.isNotEmpty()
                 val unifiedHtml=if(unifiedHistory) UnifiedReaderDocument.assemble(
                     history.currentHtml,history.quotedHtml,historyExpanded
                 ) else source.htmlBody
