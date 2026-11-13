@@ -935,7 +935,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 val unifiedHtml=remember(source.htmlBody,history,parsed,historyExpanded) {
                     if(unifiedHistory) UnifiedReaderDocument.assemble(
                         if(source.htmlBody.isNotBlank())history.currentHtml else HtmlMail.plain(parsed.current),
-                        history.quotedHtml.ifBlank { "<blockquote style=\"margin:0;padding-left:12px;border-left:2px solid #a58ac7\">"+HtmlMail.plain(parsed.quotedBody.orEmpty())+"</blockquote>" },
+                        QuoteDisplay.nested(history.quotedHtml,parsed.messages).ifBlank { "<blockquote style=\"margin:0;padding-left:12px;border-left:2px solid #a58ac7\">"+HtmlMail.plain(parsed.quotedBody.orEmpty())+"</blockquote>" },
                         historyExpanded,parsed.messages.size
                     ) else source.htmlBody
                 }

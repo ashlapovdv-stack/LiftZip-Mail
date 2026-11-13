@@ -436,7 +436,7 @@ object HtmlMail {
             $adaptation
             $imageSizing a{color:#526b45;text-decoration:underline}
             .mail-plain,.mail-plain *{white-space:pre-wrap!important}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
-            #mail-history-toggle{display:inline-flex!important;align-items:center!important;gap:5px!important;box-sizing:border-box!important;min-width:52px!important;height:28px!important;margin:12px 0!important;padding:3px 10px!important;border:0!important;border-radius:999px!important;background:#eee!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important;white-space:nowrap!important}
+            #mail-history-toggle{display:inline-flex!important;align-items:center!important;gap:5px!important;box-sizing:border-box!important;min-width:52px!important;height:28px!important;margin:12px 0!important;padding:3px 10px!important;border:1px solid #b8b8b8!important;border-radius:999px!important;background:#e6e6e6!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important;white-space:nowrap!important}
             </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
         return MailHtmlDocument(wrapped,resources,hasExternal,layout,external,originalScale)
     }

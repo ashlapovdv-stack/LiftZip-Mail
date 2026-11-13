@@ -115,7 +115,7 @@ class UnifiedReaderDocumentTest {
             assertTrue(reply.attr("style").contains("margin-bottom:0!important"))
             val rendered=HtmlMail.document(html,"",emptyList(),HtmlMail.noHistory(html))
             assertTrue(rendered.html.contains("#mail-history-toggle{display:inline-flex"))
-            assertTrue(rendered.html.contains("background:#eee!important"))
+            assertTrue(rendered.html.contains("background:#e6e6e6!important"))
             assertEquals("⋯ 1",body.selectFirst("#mail-history-toggle")!!.text())
         }
     }
