@@ -515,9 +515,10 @@ class ReaderDeviceTest {
     }
     @Test fun htmlHistoryControlRemainsVisibleWhenZoomHidesReaderChrome() {
         val body="Текущий ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Старое письмо"
-        val html="<p>Текущий ответ</p><div class='gmail_attr'>On Wed, 28 Oct 2026, Person wrote:</div><div class='gmail_quote'>Старое письмо</div>"
+        val html="<p>Текущий ответ</p><div class='gmail_attr'>On Wed, 28 Oct 2026, Person &lt;a@example.com&gt; wrote:</div><blockquote class='gmail_quote'><p>Старое письмо</p></blockquote>"
         rule.setContent{MailTheme{reader(message.copy(id="html-history-zoom",body=body,htmlBody=html))}}
         val view=loaded()
+        rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Предыдущие сообщения: 1").fetchSemanticsNodes().isNotEmpty()}
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
         history.performScrollTo().assertIsDisplayed()
         rule.runOnIdle{view.zoomBy(2f)}
