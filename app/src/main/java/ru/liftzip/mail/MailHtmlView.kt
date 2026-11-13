@@ -434,7 +434,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     var prepared by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(cachedGeometry!=null)}
     var nativeCommit by remember(message.id,message.contentVersion,ready,geometryKey){mutableIntStateOf(0)}
     var rendered by remember(message.id,message.contentVersion,ready,geometryKey){mutableStateOf(false)}
-    var followingContentPublished by remember(message.id,message.contentVersion,message.htmlBody,plain){mutableStateOf(false)}
+    var followingContentPublished by remember(message.id,message.contentVersion){mutableStateOf(false)}
     SideEffect{if(rendered || failed)followingContentPublished=true}
     val latestContentReady by rememberUpdatedState(onContentReady)
     LaunchedEffect(rendered,failed){if(rendered || failed)latestContentReady?.invoke()}
