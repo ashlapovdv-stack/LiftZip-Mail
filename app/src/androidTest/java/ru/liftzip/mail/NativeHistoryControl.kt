@@ -25,7 +25,11 @@ internal class NativeHistoryControl(
             for(i in 0 until root.childCount)find(root.getChild(i))?.let{return it}
             return null
         }
-        return find(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow)
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        // Native page replacement invalidates Chromium virtual node IDs. Query a
+        // fresh accessibility snapshot rather than a cached pre-navigation tree.
+        if(android.os.Build.VERSION.SDK_INT>=34)automation.clearCache()
+        return find(automation.rootInActiveWindow)
     }
     fun exists() = node()!=null
     fun assertExists()=apply { rule.waitUntil(15_000){exists()} }
