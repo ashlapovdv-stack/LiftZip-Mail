@@ -5,6 +5,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderZoomGeometryTest {
+    @Test fun collapsingHistoryRestoresScrollHiddenChromeWithoutOverridingZoom() {
+        var zoom=0f
+        val toolbar=ReaderToolbarState{zoom}
+        toolbar.height=100
+        toolbar.scroll(100f)
+        assertEquals(100f,toolbar.hiddenPixels,0.001f)
+        toolbar.onHistoryCollapsed()
+        assertEquals(0f,toolbar.hiddenPixels,0.001f)
+        toolbar.scroll(100f)
+        zoom=1f
+        toolbar.onHistoryCollapsed()
+        assertEquals(100f,toolbar.hiddenPixels,0.001f)
+        zoom=0f
+        assertEquals(100f,toolbar.hiddenPixels,0.001f)
+    }
+
     @Test fun headerInsetUsesFittedCssScaleInsteadOfDeclaredPageWidth() {
         val document=MailHtmlDocument("<html><head></head><body>Letter</body></html>",emptyMap(),false)
         val prepared=document.withReaderInset(600,1080,0.5f).withReaderCanvas(2200,1080,0.5f)
