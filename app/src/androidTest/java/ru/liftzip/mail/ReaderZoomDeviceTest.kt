@@ -185,7 +185,8 @@ class ReaderZoomDeviceTest {
         assertTrue("Pinch must reach the fully hidden chrome state",samples.any{it.progress>=0.999f})
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
-        rule.onNodeWithContentDescription("Показать изображения").assertIsNotDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsDisplayed()
+        assertTrue("Image action must stay above reply",rule.onNodeWithContentDescription("Показать изображения").fetchSemanticsNode().boundsInRoot.bottom < rule.onNodeWithContentDescription("Ответить или переслать").fetchSemanticsNode().boundsInRoot.top)
         screenshot("reader-zoom-hidden")
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
         rule.waitUntil(10_000){var initial=false;rule.runOnUiThread{initial=view.atInitialScale()};initial}

@@ -475,7 +475,8 @@ class ReaderDeviceTest {
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
         rule.onNodeWithText("Длинное письмо").assertIsNotDisplayed()
         rule.onNodeWithText("Вложения").assertIsNotDisplayed()
-        rule.onNodeWithContentDescription("Показать изображения").assertIsNotDisplayed()
+        rule.onNodeWithContentDescription("Показать изображения").assertIsDisplayed()
+        assertTrue("Image action must stay above reply",rule.onNodeWithContentDescription("Показать изображения").fetchSemanticsNode().boundsInRoot.bottom < rule.onNodeWithContentDescription("Ответить или переслать").fetchSemanticsNode().boundsInRoot.top)
         rule.onNodeWithContentDescription("Ответить или переслать").assertIsDisplayed()
         rule.runOnIdle{
             assertSame(view,webView())
