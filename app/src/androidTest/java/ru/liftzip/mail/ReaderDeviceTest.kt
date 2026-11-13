@@ -253,6 +253,12 @@ class ReaderDeviceTest {
         rule.onAllNodesWithText("Показать переписку (1)").assertCountEquals(0)
         val control=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         val before=control.fetchSemanticsNode().boundsInRoot
+        val capsulePixels=rule.onRoot().captureToImage().toPixelMap()
+        val density=initial.resources.displayMetrics.density
+        val fill=capsulePixels[(before.left+5*density).toInt(),before.center.y.toInt()]
+        assertEquals("Citation capsule must have visible grey fill",230f/255f,fill.red,0.04f)
+        assertEquals(fill.red,fill.green,0.01f)
+        assertEquals(fill.red,fill.blue,0.01f)
         changeHistory(initial,control,true)
         val after=control.fetchSemanticsNode().boundsInRoot
         assertEquals("Expanding must leave the control before the quote",before.top,after.top,3f)
