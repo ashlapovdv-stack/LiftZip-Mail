@@ -921,7 +921,15 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 val source=prepared.message
                 val parsed=prepared.conversation
                 val history=prepared.history
-                MailHtmlBody(source,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},history,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
+                // A single native WebView owns the entire HTML reading surface.
+                // Plain-text history continues to use the existing Compose fallback.
+                val unifiedHistory=history.quotedHtml.isNotBlank() && parsed.messages.isNotEmpty()
+                val unifiedHtml=if(unifiedHistory) UnifiedReaderDocument.assemble(
+                    history.currentHtml,history.quotedHtml,historyExpanded
+                ) else source.htmlBody
+                val readingSource=if(unifiedHistory)source.copy(htmlBody=unifiedHtml)else source
+                val readingHistory=if(unifiedHistory)HtmlMail.noHistory(unifiedHtml)else history
+                MailHtmlBody(readingSource,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},readingHistory,onInline,onLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
@@ -931,7 +939,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 // gesture can clamp outer.value and move the WebView even with a frozen header.
                 if(!rendererFailed.value && parsed.messages.isNotEmpty())Column(Modifier.readerChrome(scroll.toolbar.zoomProgress).padding(horizontal=22.dp)) {
                     HistoryToggle(parsed.messages.size,historyExpanded,{historyExpanded=!historyExpanded})
-                    if(historyExpanded) {
+                    if(historyExpanded && !unifiedHistory) {
                         DisposableEffect(m.id){onDispose{expandedHistoryBounds=null}}
                         Column(Modifier.fillMaxWidth().onGloballyPositioned{coordinates->
                             expandedHistoryBounds=androidx.compose.ui.geometry.Rect(coordinates.positionInWindow(),androidx.compose.ui.geometry.Size(coordinates.size.width.toFloat(),coordinates.size.height.toFloat()))
