@@ -8,7 +8,7 @@ data class ForwardFile(
     val key: String, val name: String, val mime: String, val size: Long,
     val path: String? = null, val sourceUri: String? = null,
     val status: ForwardStatus = ForwardStatus.WAITING, val bytes: Long = 0,
-    val prepared: OutgoingFile? = null, val error: String = ""
+    val prepared: OutgoingFile? = null, val error: String = "", val contentId: String=""
 ) : Serializable
 
 /** Only source identifiers are persisted; no credentials or message bodies are copied here. */
@@ -22,16 +22,20 @@ data class ForwardPlan(
         sender="", senderEmail="", recipients="", subject="", body="", date=0)
 }
 
-fun ComposeDraft.filesToSend() = attachments + forwarding?.files.orEmpty().mapNotNull { it.prepared }
+private fun ComposeDraft.needsInline() = (quote!=null && quoteIncluded) || bodyHtml?.contains("cid:",ignoreCase=true)==true
+fun ComposeDraft.selectedForwardFiles() = forwarding?.files.orEmpty().filter{it.contentId.isBlank() || needsInline()}
+fun ComposeDraft.resourcesReady() = selectedForwardFiles().all{it.status==ForwardStatus.READY && it.prepared!=null}
+fun ComposeDraft.filesToSend() = (attachments + selectedForwardFiles().mapNotNull { it.prepared }).filter{it.contentId.isBlank() || needsInline()}
 
 object ForwardRules {
     fun sourceKey(account: MailAccount)=listOf(account.imapHost.lowercase(),account.imapPort.toString(),account.imapStartTls.toString(),account.username).joinToString("|")
-    fun plan(message: MailItem,account: MailAccount?=null): ForwardPlan? {
-        val remote = message.attachments.mapIndexed { index, a ->
-            ForwardFile("remote-$index", a.name, a.mime, a.size.toLong(), path=a.path)
+    fun plan(message: MailItem,account: MailAccount?=null,includeOrdinary: Boolean=true,restoreDraft: Boolean=false): ForwardPlan? {
+        fun cid(value: String)=if(restoreDraft)message.composer?.resourceAliases?.get(value)?:value else value
+        val remote = (if(message.uid>0)message.attachments else emptyList()).filter{a->message.outgoing.none{it.uri==a.path}}.filter{includeOrdinary || it.contentId.isNotBlank()}.mapIndexed { index, a ->
+            ForwardFile("remote-$index", a.name, a.mime, a.size.toLong(), path=a.path,contentId=cid(a.contentId))
         }
-        val local = message.outgoing.mapIndexed { index, a ->
-            ForwardFile("local-$index", a.name, a.mime, a.size, sourceUri=a.uri)
+        val local = message.outgoing.filter{includeOrdinary || it.contentId.isNotBlank()}.mapIndexed { index, a ->
+            ForwardFile("local-$index", a.name, a.mime, a.size, sourceUri=a.uri,contentId=if(!restoreDraft && a.contentId.isNotBlank())message.composer?.resourceAliases?.entries?.firstOrNull{it.value==a.contentId}?.key?:a.contentId else cid(a.contentId))
         }
         return (remote + local).takeIf { it.isNotEmpty() }?.let {
             ForwardPlan(message.accountId, message.id, message.uid, message.validity, message.remoteFolder, it,account?.let(::sourceKey).orEmpty())
@@ -40,7 +44,7 @@ object ForwardRules {
     /** Editor text and sender win; worker-owned progress is always taken from storage. */
     fun mergeEditor(editor: ComposeDraft, stored: ForwardPlan?) = editor.copy(forwarding=stored)
     fun sending(draft: ComposeDraft): ComposeDraft {
-        require(draft.forwarding?.ready != false) { "Вложения ещё не подготовлены." }
+        require(draft.resourcesReady()) { "Вложения ещё не подготовлены." }
         return draft.copy(attachments=draft.filesToSend(), forwarding=null)
     }
 }

@@ -7,7 +7,6 @@ import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -17,10 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 
@@ -35,8 +32,8 @@ fun ComponentActivity.edgeMailWindow() {
     val density=LocalDensity.current
     val top=with(density){WindowInsets.safeDrawing.getTop(density).toDp()}
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-        if(style!=MailStyle.STANDARD)Box(Modifier.fillMaxWidth().height(140.dp+top)) {
-            Image(painterResource(style.artwork),null,Modifier.fillMaxSize(),contentScale=ContentScale.Crop)
+        if(style!=MailStyle.STANDARD)Box(Modifier.fillMaxWidth().height(112.dp+top)) {
+            DecorativeArtwork(style,Modifier.fillMaxSize())
             // Keep the shared artwork visible while protecting dark clock/icons over foliage.
             Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(top+24.dp)
                 .background(Brush.verticalGradient(listOf(Color.White.copy(alpha=0.7f),Color.Transparent))))
@@ -48,9 +45,9 @@ fun ComponentActivity.edgeMailWindow() {
 }
 
 /** The visible screen owns bar appearance, including when the drawer covers the header. */
-@Composable fun SystemBarIcons(decorativeStatus: Boolean=false) {
+@Composable fun SystemBarIcons(decorativeStatus: Boolean=false,forceLightSurface: Boolean=false) {
     val activity=LocalContext.current.activity()?:return
-    val lightNavigation=!isSystemInDarkTheme()
+    val lightNavigation=forceLightSurface || LocalMailStyle.current.lightNature || !isSystemInDarkTheme()
     val lightStatus=decorativeStatus || lightNavigation
     val controller=remember(activity){WindowCompat.getInsetsController(activity.window,activity.window.decorView)}
     SideEffect {

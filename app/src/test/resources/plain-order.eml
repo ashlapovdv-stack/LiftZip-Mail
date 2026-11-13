@@ -1,0 +1,31 @@
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=plain-order
+
+--plain-order
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Вы получили заказ.
+
+№ заказа: 123
+Дата заказа: 12.11.2026
+Состояние заказа: Pending
+
+Товары
+
+1x Деталь А - 100 ₽
+1x Деталь Б - 200 ₽
+
+Итого
+
+Сумма: 300 ₽
+Доставка: 5 ₽
+Итого: 305 ₽
+
+
+Комментарий к Вашему заказу
+
+Доставить после 18:00.
+Позвонить перед приездом.
+
+--plain-order--

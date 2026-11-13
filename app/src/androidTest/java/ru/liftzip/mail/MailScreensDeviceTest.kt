@@ -88,3 +88,19 @@ internal fun saveDeviceBitmap(bitmap: Bitmap,name: String) {
     ParcelFileDescriptor.AutoCloseInputStream(pipes[0]).use{it.readBytes()}
 
 }
+
+/** Preserve the actual focus owner on failure without changing any test timeout or assertion. */
+internal fun waitForTestWindowFocus(rule: androidx.compose.ui.test.junit4.ComposeContentTestRule,
+    timeoutMillis: Long,focused: ()->Boolean) {
+    try {rule.waitUntil(timeoutMillis,focused)}
+    catch(e: androidx.compose.ui.test.ComposeTimeoutException) {
+        runCatching {
+            val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+            val dump=ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("dumpsys window windows"))
+                .bufferedReader().use{it.readText()}
+            val focus=dump.lineSequence().filter{line->listOf("mCurrentFocus","mFocusedApp","mFocusedWindow","mTopFocusedDisplayId").any{it in line}}.joinToString("\n")
+            android.util.Log.e("MailTestFocus",focus.ifBlank{"No focused window in dumpsys"})
+        }
+        throw e
+    }
+}

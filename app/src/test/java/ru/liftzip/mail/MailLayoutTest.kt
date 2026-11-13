@@ -8,14 +8,16 @@ class MailLayoutTest {
         assertEquals(MailStyle.STANDARD,MailStyle.fromKey(null));assertEquals(MailStyle.STANDARD,MailStyle.fromKey("missing"))
         MailStyle.entries.forEach{assertEquals(it,MailStyle.fromKey(it.key))}
     }
-    @Test fun fixedDesktopTablesRetainTheirWidthAndAllowAutomaticOverview() {
+    @Test fun fixedTablesKeepTheirSourceWidthInsideAnIndependentScrollRegion() {
         val doc=HtmlMail.document("<table width='720'><tr><td>Backend checks</td><td>All jobs have passed</td></tr></table>","",emptyList())
-        assertEquals(720,doc.layoutWidth);assertTrue(doc.html.contains("content=\"width=720\""))
-        assertFalse(doc.html.contains("initial-scale=1"));assertFalse(doc.html.contains("overflow-wrap:anywhere"))
-        assertFalse(doc.html.contains("table{max-width:100%"));assertTrue(doc.html.contains("width=\"720\""))
+        assertEquals(0,doc.layoutWidth);assertEquals("width=device-width",org.jsoup.Jsoup.parse(doc.html).selectFirst("meta[name=viewport]")!!.attr("content").substringBefore(","))
+        assertFalse(doc.html.contains("initial-scale=1"));assertTrue(doc.html.contains("overflow-wrap:anywhere"))
+        assertTrue(doc.html.contains(".mail-table-scroll{max-width:100%;overflow-x:auto}"));assertTrue(doc.html.contains("width=\"720\""))
     }
-    @Test fun denseTablesHaveEnoughSpaceForColumnsInsteadOfOneLetterLines() {
-        assertEquals(640,HtmlMail.layoutWidth("<table width='100%'><tr><th>Status</th><th>Job</th><th>Annotations</th></tr></table>"))
+    @Test fun adaptiveTablesDoNotShrinkJustBecauseTheyHaveManyColumns() {
+        // 0.5.19: the column count alone must not force a 640px desktop viewport.
+        assertEquals(0,HtmlMail.layoutWidth("<table width='100%'><tr><th>Status</th><th>Job</th><th>Annotations</th></tr></table>"))
+        // A row whose cells really are fixed keeps its summed width.
         assertEquals(840,HtmlMail.layoutWidth("<table><tr><td width='120'>Passed</td><td width='720'>Job</td></tr></table>"))
     }
     @Test fun responsiveTextAndLargeImagesDoNotForceDesktopScaling() {
@@ -27,5 +29,7 @@ class MailLayoutTest {
         assertEquals(680,HtmlMail.layoutWidth("<style>.content{width:680px;}@media(max-width:900px){p{margin:0}}</style><div>Body</div>"))
         assertEquals(800,HtmlMail.layoutWidth("<div style='min-width:800px'>Body</div>"))
         assertEquals(0,HtmlMail.layoutWidth("<style>@media(max-width:900px){p{margin:0}}</style><p>Body</p>"))
+        // A fixed width that only applies inside a conditional block must not set the viewport.
+        assertEquals(0,HtmlMail.layoutWidth("<style>@media(max-width:900px){.wide{width:800px}}</style><p>Body</p>"))
     }
 }
