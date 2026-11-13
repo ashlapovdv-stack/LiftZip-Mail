@@ -64,7 +64,9 @@ class ReaderDeviceTest {
             if(expanded)"Развернуто" else "Свернуто"))
         rule.waitUntil(15_000) {
             var ready=false
-            rule.runOnUiThread{ready=view.documentGeneration()==revision && view.interactionEnabled && view.progress==100}
+            // Unified HTML history updates the document inside the SAME native WebView.
+            // Plain history still changes only Compose controls, without a reload.
+            rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
             ready
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
