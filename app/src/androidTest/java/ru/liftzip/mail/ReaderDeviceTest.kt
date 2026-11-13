@@ -499,7 +499,7 @@ class ReaderDeviceTest {
         rule.runOnIdle{assertSame(view,webView())}
     }
     @Test fun plainHistoryControlRemainsVisibleWhenZoomHidesReaderChrome() {
-        val body="Текущий ответ\\n\\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\\n> Старое письмо"
+        val body="Текущий ответ\n\nOn Wed, 28 Oct 2026, Person <a@example.com> wrote:\n> Старое письмо"
         rule.setContent{MailTheme{reader(message.copy(id="plain-history-zoom",body=body,htmlBody=""))}}
         val view=loaded()
         val history=rule.onNodeWithContentDescription("Предыдущие сообщения: 1")
