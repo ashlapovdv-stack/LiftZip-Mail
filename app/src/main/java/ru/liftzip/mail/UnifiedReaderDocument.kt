@@ -18,14 +18,15 @@ internal object UnifiedReaderDocument {
         doc.outputSettings().prettyPrint(false)
         val current = Element("section").attr("id", CURRENT_ID)
         current.append(HtmlMail.cleanSource(currentHtml))
+        CollapsedReplyBoundary.normalize(current)
         doc.body().appendChild(current)
         if (quotedHtml.isNotBlank()) {
-            val control = Element("a").attr("href", TOGGLE_URL)
+            val control = Element("a").attr("id", "mail-history-toggle").attr("href", TOGGLE_URL)
                 .attr("role", "button")
                 .attr("aria-label", "Предыдущие сообщения: $count")
                 .attr("aria-expanded", historyExpanded.toString())
                 .attr("style", "display:inline-block!important;position:static!important;margin:12px 0!important;padding:3px 10px!important;border-radius:16px!important;background:#eee!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important")
-                .text("••• $count")
+                .text("⋯ $count")
             doc.body().appendChild(control)
             val history = Element("section").attr("id", HISTORY_ID)
             // HTML's hidden attribute is removed by HtmlMail's Safelist.

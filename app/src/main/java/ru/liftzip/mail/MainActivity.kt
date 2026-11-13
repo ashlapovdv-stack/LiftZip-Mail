@@ -784,6 +784,8 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     var actionsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
+    val externalImageState=rememberSaveable(m.id){mutableStateOf(false)}
+    var hasExternalImages by remember(m.id){mutableStateOf(false)}
     var originalHtmlScale by rememberSaveable(m.id){mutableStateOf(false)}
     var expandedHistoryBounds by remember(m.id){mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)}
     var htmlZoomed by remember(m.id){mutableStateOf(false)}
@@ -864,8 +866,15 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             Icon(if(originalHtmlScale)Icons.Outlined.FitScreen else Icons.Outlined.AspectRatio,null)
         }
         if(htmlZoomed)SmallFloatingActionButton(onClick={scroll.view?.resetZoom()},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White,modifier=Modifier.semantics{contentDescription="Вернуть исходный масштаб"}) {Icon(Icons.Outlined.ZoomOutMap,null)}
+        Column(horizontalAlignment=Alignment.End,verticalArrangement=Arrangement.spacedBy(12.dp)) {
+        if(hasExternalImages && !rendererFailed.value)SmallFloatingActionButton(
+            onClick={externalImageState.value=!externalImageState.value},shape=CircleShape,containerColor=readerColors.primary,contentColor=Color.White) {
+            Icon(if(externalImageState.value)Icons.Outlined.HideImage else Icons.Outlined.Image,
+                if(externalImageState.value)"Скрыть внешние изображения"else "Показать изображения")
+        }
         ReaderActions(expanded=actionsExpanded,canReply=!FolderRules.sent(m),enabled=!busy,
             onExpand={actionsExpanded=true},onReply={actionsExpanded=false;onReply()},onForward={actionsExpanded=false;onForward()})
+        }
         }
     }) { padding->
         Box(Modifier.padding(padding).fillMaxSize().clipToBounds().onGloballyPositioned{readerOrigin=it.positionInWindow();MailZoomDiagnostics.record {"readerContainer top=${readerOrigin.y} height=${it.size.height}"}}.pointerInput(scroll) {
@@ -926,7 +935,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 val unifiedHtml=remember(source.htmlBody,history,parsed,historyExpanded) {
                     if(unifiedHistory) UnifiedReaderDocument.assemble(
                         if(source.htmlBody.isNotBlank())history.currentHtml else HtmlMail.plain(parsed.current),
-                        history.quotedHtml.ifBlank { HtmlMail.plain(parsed.quotedBody.orEmpty()) },
+                        history.quotedHtml.ifBlank { "<blockquote style=\"margin:0;padding-left:12px;border-left:2px solid #a58ac7\">"+HtmlMail.plain(parsed.quotedBody.orEmpty())+"</blockquote>" },
                         historyExpanded,parsed.messages.size
                     ) else source.htmlBody
                 }
@@ -943,7 +952,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                     scroll.zoomProgress=progress
                     val zoomed=progress>0.001f
                     htmlZoomed=zoomed
-                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true})
+                },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true},externalImageState=externalImageState,onImageAvailability={hasExternalImages=it},showImageControl=false)
             }
             Spacer(Modifier.height(100.dp))
         }

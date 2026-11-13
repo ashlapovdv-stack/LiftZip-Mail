@@ -43,7 +43,7 @@ internal class NativeHistoryControl(
                 }
                 view=find(rule.activity.window.decorView)
                 view?.setFindListener{_,total,done->if(done && total>0){view?.setFindListener(null);view?.findNext(true)}}
-                view?.findAllAsync("••• "+label.substringAfterLast(": "))
+                view?.findAllAsync("⋯ "+label.substringAfterLast(": "))
             }
             assertExists()
             rule.runOnUiThread{view?.setFindListener(null);view?.clearMatches()}

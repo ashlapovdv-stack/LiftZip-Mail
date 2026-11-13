@@ -105,4 +105,19 @@ class UnifiedReaderDocumentTest {
         }
     }
 
+    @Test fun currentTailIsNormalizedBeforeNativeHistoryControl() {
+        for(current in listOf(HtmlMail.plain("Answer\n\n\n"),"<div style='padding-bottom:40px;margin-bottom:24px'><p>Answer</p><div><br></div></div>")) {
+            val html=UnifiedReaderDocument.assemble(current,"<p>Old</p>",false)
+            val body=Jsoup.parseBodyFragment(html).body()
+            val reply=body.selectFirst("#mail-current-message")!!
+            assertEquals("Answer",reply.text())
+            assertTrue(reply.select("br").isEmpty())
+            assertTrue(reply.attr("style").contains("margin-bottom:0!important"))
+            val rendered=HtmlMail.document(html,"",emptyList(),HtmlMail.noHistory(html))
+            assertTrue(rendered.html.contains("#mail-history-toggle{display:inline-flex"))
+            assertTrue(rendered.html.contains("background:#eee!important"))
+            assertEquals("⋯ 1",body.selectFirst("#mail-history-toggle")!!.text())
+        }
+    }
+
 }
