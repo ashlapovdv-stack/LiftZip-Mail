@@ -100,7 +100,7 @@ class InboxDeviceTest {
         rule.onNodeWithTag("letters").assertIsDisplayed()
     }
 
-    @Test fun partialPanelsNeverMixTheirTextWithTheLettersBehindThem() {
+    @Test fun partiallyHiddenPanelShowsLettersThroughItsBackground() {
         val progress=mutableFloatStateOf(0.5f)
         var density=1f
         rule.setContent {
@@ -122,7 +122,7 @@ class InboxDeviceTest {
         val gap=pixels[pixels.width/2,(90*density).toInt()]
         assertEquals(1f,gap.red,0.04f);assertEquals(1f,gap.green,0.04f);assertEquals(1f,gap.blue,0.04f)
         val bottom=pixels[pixels.width/2,pixels.height-(40*density).toInt()]
-        assertEquals(0.5f,bottom.red,0.04f);assertEquals(1f,bottom.green,0.04f);assertEquals(0.5f,bottom.blue,0.04f)
+        assertEquals(0.5f,bottom.red,0.04f);assertEquals(0.5f,bottom.green,0.04f);assertEquals(0f,bottom.blue,0.04f)
         saveDeviceScreenshot(rule,"partial-panels")
         rule.runOnIdle{progress.floatValue=0f};rule.waitForIdle()
         val hidden=rule.onRoot().captureToImage().toPixelMap()

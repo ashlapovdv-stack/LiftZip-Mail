@@ -8,6 +8,10 @@ import org.junit.Test
 import java.util.Properties
 
 class HeaderTextTest {
+    @Test fun senderDisplayRemovesTransportEscapesButKeepsQuotes() {
+        assertEquals("\"АКСИОН-ХОЛДИНГ, Михаил\"",HeaderText.displayName("\\\"АКСИОН-ХОЛДИНГ, Михаил\\\""))
+        assertEquals("Обычное имя",HeaderText.displayName("Обычное имя"))
+    }
     @Test fun decodesTheEncodedRecipientReportedOnPhone() {
         val header="=?UTF-8?B?0JTQvNC40YLRgNC40Lk=?= <sales@example.com>"
         assertEquals("Дмитрий <sales@example.com>",HeaderText.recipients(header))

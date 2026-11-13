@@ -9,7 +9,9 @@ object MailContent {
     fun snippet(body: String)=imageLabels.replace(body,"").replace("\uFFFC","").replace(whitespace," ").trim()
     fun bytes(message: MailItem)=message.body.toByteArray(Charsets.UTF_8).size.toLong()+message.htmlBody.toByteArray(Charsets.UTF_8).size
     fun needsRenderUpdate(message: MailItem)=message.contentCached && FolderRules.remote(message) && message.contentVersion<FORMAT_VERSION
-    fun preview(message: MailItem): MailItem = if(message.previewOnly)message.copy(htmlBody="")else message.copy(body=message.body.take(PREVIEW_LENGTH),htmlBody="",previewOnly=true,cacheBytes=if(message.contentCached)bytes(message)else message.cacheBytes)
+    /** Completeness controls reading; an older format can still refresh in the background. */
+    fun canDisplay(message: MailItem)=message.contentCached && !message.previewOnly
+    fun preview(message: MailItem): MailItem = if(message.previewOnly)message.copy(composer=null,htmlBody="")else message.copy(composer=null,body=message.body.take(PREVIEW_LENGTH),htmlBody="",previewOnly=true,cacheBytes=if(message.contentCached)bytes(message)else message.cacheBytes)
     fun matches(message: MailItem,terms: List<String>): Boolean {
         if(terms.isEmpty())return true
         val text="${message.sender} ${message.senderEmail} ${message.subject} ${message.body}".lowercase()

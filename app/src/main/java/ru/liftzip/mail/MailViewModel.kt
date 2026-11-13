@@ -17,7 +17,8 @@ data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = e
     val background: BackgroundCheck=BackgroundCheck(),val backgroundRuntime: BackgroundRuntime=BackgroundRuntime(),val notificationAccess: NotificationAccess=NotificationAccess(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
     val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: ServiceNotice?=null,
-    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus(),val fastMail: FastMailStatus=FastMailStatus(),val style: MailStyle=MailStyle.STANDARD)
+    val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus(),val fastMail: FastMailStatus=FastMailStatus(),val style: MailStyle=MailStyle.STANDARD,
+    val openingError: Pair<String,String>?=null)
 
 private data class UnreadScope(val enabled: Boolean=false,val accountId: String?=null)
 
@@ -98,21 +99,20 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun showUnread(enabled: Boolean,accountId: String?){unreadScope.value=UnreadScope(enabled,accountId)}
     fun openMessage(id: String) {
         opening?.cancel()
-        if(mutable.value.opened?.id!=id)mutable.update{it.copy(opened=null)}
+        mutable.update{it.copy(opened=it.opened?.takeIf{message->message.id==id && MailContent.canDisplay(message)},openingError=null)}
         opening=viewModelScope.launch {
             try {
                 // Show offline content before waiting for content coordination, legacy refresh or LRU writes.
-                val cached=repo.cachedMessage(id)?.takeIf{it.contentCached}
-                if(cached!=null && !MailContent.needsRenderUpdate(cached))mutable.update{it.copy(opened=cached)}
-                // Give the full formatted version a short head start. If the network is slow,
-                // keep the existing offline text available instead of blocking the reader.
-                val fallback=if(cached!=null && MailContent.needsRenderUpdate(cached))launch {
-                    delay(800);mutable.update{if(it.opened?.id==id)it else it.copy(opened=cached)}
-                }else null
-                val message=try{repo.message(id)?:error("Письмо не найдено.")}finally{fallback?.cancel()}
+                val cached=repo.cachedMessage(id)?.takeIf(MailContent::canDisplay)
+                if(cached!=null)mutable.update{it.copy(opened=cached)}
+                val message=repo.message(id)?:error("Письмо не найдено.")
                 mutable.update{it.copy(opened=message)}
                 read(message)
-            }catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
+            }catch(e: CancellationException){throw e}catch(e: Exception){
+                val reason=friendlyError(e)
+                mutable.update{it.copy(openingError=id to reason)}
+                notice(reason,error=true)
+            }
         }
     }
     fun openDraft(id: String,onReady: (ComposeDraft)->Unit)=work{onReady(repo.draftForEditing(id))}
@@ -255,6 +255,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     fun resumeHistory()=startHistory(mutable.value.historyDownload.accountIds)
     fun pauseHistory()=work{repo.pauseHistory();HistoryWorker.cancel(getApplication());notice("Загрузка приостановлена. Полученные письма сохранены.")}
     fun setDefaultAccount(id: String?)=work{repo.setDefaultAccount(id);notice("Ящик отправителя по умолчанию сохранён")}
+    fun reply(message: MailItem,onReady: (ComposeDraft)->Unit)=work{onReady(repo.reply(message))}
     fun forward(message: MailItem,senderId: String,onReady: (ComposeDraft)->Unit)=work{onReady(repo.forward(message,senderId))}
     fun retryForward(id: String){viewModelScope.launch{try{repo.retryForward(id)}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}
     fun removeForwardFile(id: String,key: String){viewModelScope.launch{try{repo.removeForwardFile(id,key)}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}
@@ -297,6 +298,14 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         viewModelScope.launch{
             try{action()}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
             finally{mutable.update{it.copy(attachmentBusy=it.attachmentBusy-key)}}
+        }
+    }
+    fun saveOriginal(m: MailItem,uri: Uri) {
+        viewModelScope.launch {
+            notice("Сохраняем оригинал письма…")
+            try{repo.saveOriginal(m,uri);notice("Оригинал письма сохранён")}
+            catch(e: CancellationException){throw e}
+            catch(e: Exception){notice(friendlyError(e),error=true)}
         }
     }
     fun download(m: MailItem,file: Attachment,uri: Uri)=attachmentWork(m,file){repo.download(m,file,uri);notice("Вложение сохранено")}

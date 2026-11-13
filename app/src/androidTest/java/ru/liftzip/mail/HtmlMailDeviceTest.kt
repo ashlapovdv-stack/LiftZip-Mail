@@ -74,6 +74,30 @@ class HtmlMailDeviceTest {
         rule.waitUntil(5000){var fit=false;rule.runOnUiThread{fit=kotlin.math.abs(view.scale-scale)<scale*0.05f};fit}
         rule.runOnIdle{assertFalse(view.canScrollHorizontally(1))}
     }
+    @Test fun replacingDocumentIgnoresOldReadinessAndKeepsTheNewBody() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicInteger()
+        val first=HtmlMail.document("<p>Старый документ</p>","",emptyList(),identity="old")
+        val second=HtmlMail.document("<p>Новый документ</p>","",emptyList(),identity="new")
+        lateinit var view: MailHtmlWebView
+        rule.setContent {AndroidView(factory={MailHtmlWebView(c,{null},{},{},{ready.incrementAndGet()}).also{
+            view=it;it.show(first);it.show(second)
+        }},modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+        rule.waitUntil(15000){ready.get()>0}
+        assertEquals(1,matches(view,"Новый документ"));assertEquals(0,matches(view,"Старый документ"))
+        assertEquals("Only the current document may report readiness",1,ready.get())
+    }
+    @Test fun delayedInlineImageDoesNotBlockInitialDocumentReadiness() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicBoolean();val entered=AtomicBoolean()
+        val release=java.util.concurrent.CountDownLatch(1)
+        val attachment=Attachment("1","chart.png","image/png",100,"slow")
+        val doc=HtmlMail.document("<p>Текст доступен сразу</p><img src='cid:slow' width='40' height='40'>","",listOf(attachment))
+        try {
+            rule.setContent {AndroidView(factory={MailHtmlWebView(c,{entered.set(true);release.await();image()},{},{},{ready.set(true)}).also{it.show(doc)}},
+                modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+            rule.waitUntil(15000){entered.get()}
+            rule.waitUntil(15000){ready.get()}
+        }finally{release.countDown()}
+    }
     @Test fun newsletterCssIsHiddenInlineImageIsDrawnAndALinkOpensOnlyThroughTheApp() {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val loaded=AtomicBoolean();val clicks=AtomicReference<String?>(null);val images=AtomicInteger();val png=image()
@@ -106,6 +130,21 @@ class HtmlMailDeviceTest {
         rule.waitUntil(15_000){loaded.get()};assertEquals(1,images.get())
         rule.waitUntil(10_000){greenPixels()>50};saveDeviceScreenshot(rule,"html-remote")
     }
+    @Test fun permittingImagesRetainsZoomAndReadingPosition() {
+        val c=ApplicationProvider.getApplicationContext<Context>();val ready=AtomicInteger()
+        val source="<p>Начало</p><div style='height:1600px'>Текст</div><img src='https://images.example.com/chart.png' width='40' height='40'>"
+        val blocked=HtmlMail.document(source,"",emptyList(),identity="toggle")
+        val allowed=HtmlMail.document(source,"",emptyList(),external=true,identity="toggle")
+        lateinit var view: MailHtmlWebView;var base=0f
+        rule.setContent {AndroidView(factory={MailHtmlWebView(c,{image()},{},{},{ready.incrementAndGet()}).also{view=it;it.show(blocked)}},modifier=Modifier.fillMaxWidth().height(300.dp),onRelease={it.release()})}
+        rule.waitUntil(15000){ready.get()==1}
+        rule.runOnIdle{base=view.scale;view.zoomBy(2f)}
+        rule.waitUntil(10000){var value=false;rule.runOnUiThread{value=view.scale>base*1.4f};value}
+        var beforeScale=0f;var beforeY=0
+        rule.runOnIdle{view.scrollTo(0,200);beforeScale=view.scale;beforeY=view.scrollY;view.show(allowed)}
+        rule.waitUntil(15000){ready.get()>=2}
+        rule.runOnIdle{assertEquals(beforeScale,view.scale,beforeScale*0.1f);assertTrue(kotlin.math.abs(beforeY-view.scrollY)<=20)}
+    }
     @Test fun lightHtmlCanvasMatchesTheSelectedTheme() {
         val c=ApplicationProvider.getApplicationContext<Context>();val png=image();val requests=AtomicInteger()
         val file=File(c.cacheDir,"theme-inline.png").apply{writeBytes(png.bytes)}
@@ -113,7 +152,7 @@ class HtmlMailDeviceTest {
         val message=MailItem("theme-html","a",sender="S",senderEmail="s@example.com",recipients="r@example.com",subject="Test",body="Текст",date=1,htmlBody="<p>Текст</p><img src='cid:chart'>",contentVersion=MailContent.FORMAT_VERSION,attachments=listOf(attachment))
         try {
             rule.setContent {MaterialTheme(colorScheme=lightColorScheme(surface=Color(0xFFFFF8EF))) {Column(Modifier.fillMaxSize().background(Color(0xFFFFF8EF)).verticalScroll(rememberScrollState())) {
-                MailHtmlBody(message,message.body,false,onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
+                MailHtmlBody(message,message.body,HtmlMail.noHistory(message.htmlBody),onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
             }}}
             rule.waitUntil(15_000){requests.get()==1};rule.waitUntil(10_000){greenPixels()>50}
             val pixels=rule.onRoot().captureToImage().toPixelMap()
@@ -130,13 +169,15 @@ class HtmlMailDeviceTest {
             htmlBody="<p>Аналитики поделились прогнозом на Q4</p><img src='cid:chart' width='40' height='40'>",contentVersion=MailContent.FORMAT_VERSION,attachments=listOf(attachment))
         try {
             rule.setContent {MaterialTheme(colorScheme=darkColorScheme(surface=Color(0xFF171B16),onSurface=Color.White)) {Column(Modifier.fillMaxSize().background(Color(0xFF171B16)).verticalScroll(rememberScrollState())) {
-                MailHtmlBody(message,message.body,false,onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
+                MailHtmlBody(message,message.body,HtmlMail.noHistory(message.htmlBody),onInline={requests.incrementAndGet();OpenedAttachment(Uri.fromFile(file).toString(),"chart.png","image/png")},onLink={})
             }}}
             rule.waitUntil(15_000){requests.get()==1}
+            rule.waitUntil(15_000){rule.onAllNodesWithTag("mail-body").fetchSemanticsNodes().isNotEmpty()}
             rule.waitUntil(10_000){greenPixels()>50}
-            rule.onNodeWithText("Показать изображения").assertDoesNotExist()
+            rule.onNodeWithContentDescription("Показать изображения").assertDoesNotExist()
             val pixels=rule.onRoot().captureToImage().toPixelMap()
-            val canvas=pixels[pixels.width-2,(40*c.resources.displayMetrics.density).toInt()]
+            // Sample the document canvas inside the native scrollbar gutter.
+            val canvas=pixels[pixels.width-(8*c.resources.displayMetrics.density).toInt(),(40*c.resources.displayMetrics.density).toInt()]
             assertTrue("Rich mail must keep a readable light canvas in a dark app",canvas.red>0.9f && canvas.green>0.9f && canvas.blue>0.9f)
             saveDeviceScreenshot(rule,"html-inline")
         }finally{file.delete()}
