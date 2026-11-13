@@ -600,11 +600,12 @@ class ReaderDeviceTest {
         val view=loaded()
         rule.waitUntil(15000){var ready=false;rule.runOnUiThread{ready=view.progress==100};ready}
         val center=NativeHistoryControl(rule,"Предыдущие сообщения: 1").fetchSemanticsNode().boundsInRoot.center
+        val gestureDensity=view.resources.displayMetrics.density
         var before=0f;rule.runOnIdle{before=view.scale}
         rule.onRoot().performTouchInput {
-            down(0,center-Offset(0f,20f));down(1,center+Offset(0f,20f))
+            down(0,center-Offset(0f,70f*gestureDensity));down(1,center+Offset(0f,70f*gestureDensity))
             repeat(10) { step->
-                val distance=20f+(step+1)*8f
+                val distance=(70f+(step+1)*9f)*gestureDensity
                 moveTo(0,center-Offset(0f,distance));moveTo(1,center+Offset(0f,distance));move()
             }
             up(1);up(0)
