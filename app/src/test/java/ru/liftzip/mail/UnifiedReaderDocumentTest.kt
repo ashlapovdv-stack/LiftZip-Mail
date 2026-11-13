@@ -65,4 +65,29 @@ class UnifiedReaderDocumentTest {
         assertEquals(hidden.text(), shown.text())
     }
 
+    @Test fun unifiedDocumentUsesProductionImagePolicy() {
+        val combined = UnifiedReaderDocument.assemble(
+            "<p>Current</p>",
+            "<p>Quote</p><img src='https://images.example/quote.png' alt='quote image'>",
+            true
+        )
+        val blocked = HtmlMail.document(combined, "Current", emptyList(), HtmlMail.noHistory(combined))
+        val allowed = HtmlMail.document(combined, "Current", emptyList(), HtmlMail.noHistory(combined), external = true)
+        assertTrue(blocked.images.isEmpty())
+        assertEquals(1, allowed.images.size)
+        assertTrue(allowed.html.contains("mail-quoted-history"))
+    }
+
+    @Test fun collapsedAndExpandedHistoryAreDistinctCachedDocuments() {
+        val collapsed = UnifiedReaderDocument.assemble("Current", "<p>Quote</p>", false)
+        val expanded = UnifiedReaderDocument.assemble("Current", "<p>Quote</p>", true)
+        val cache = ReaderDocumentCache()
+        fun prepare(html: String) = cache.prepare(
+            ReaderDocumentCache.Key("test:1", html, "Current", emptyList(),
+                HtmlMail.noHistory(html), false, "#20241f", "#ffffff")
+        )
+        assertNotSame(prepare(collapsed), prepare(expanded))
+        assertSame(prepare(collapsed), prepare(collapsed))
+    }
+
 }
