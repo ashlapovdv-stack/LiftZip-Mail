@@ -21,7 +21,7 @@ class UnifiedReaderDocumentTest {
     @Test fun collapsedHistoryRetainsMarkup() {
         val html = UnifiedReaderDocument.assemble("Current", "<b>Previous</b>", false)
         val history = Jsoup.parseBodyFragment(html).selectFirst("#mail-quoted-history")!!
-        assertTrue(history.hasAttr("hidden"))
+        assertEquals("display:none", history.attr("style"))
         assertEquals("Previous", history.selectFirst("b")!!.text())
     }
 
