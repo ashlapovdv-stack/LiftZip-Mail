@@ -545,9 +545,9 @@ class ReaderZoomDeviceTest {
             rule.runOnUiThread{view.afterVisualLayout{committed.set(true)}}
             rule.waitUntil(15_000){committed.get()}
             rule.runOnIdle{android.util.Log.i("MailReaderReady","painted reset cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
             screenshot("reader-shrink-reset-$cycle")
             assertTrue("Reset $cycle left a blank viewport instead of the painted table",paintedRows()>30)
-            rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
             if(cycle>0)NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertExpanded(true)
         }
     }
@@ -570,14 +570,28 @@ class ReaderZoomDeviceTest {
             switchHtmlMode(view,mode)
             rule.runOnIdle{view.scrollContent(5000-view.scrollY)}
             for(targetHalf in listOf(40f,160f,40f)) {
+                var canReduce=false
+                rule.runOnIdle{canReduce=view.canZoomOut()}
+                if(mode=="Оригинальный масштаб HTML" && targetHalf<100f)
+                    assertTrue("Original long fixture must allow reduction",canReduce)
                 val pinch=Pinch(center(),100f*density)
                 pinch.down()
                 for(step in 1..24)pinch.move((100f+(targetHalf-100f)*step/24)*density)
                 pinch.up()
+                rule.runOnIdle{android.util.Log.i("MailReaderReady","long pinch mode=$mode target=$targetHalf canReduce=$canReduce ratio=${view.relativeScale()} scroll=${view.scrollX},${view.scrollY}")}
+                if(targetHalf<100f && !canReduce) {
+                    // Chromium can clamp fitted pages to their overview minimum.
+                    // A rejected reduction must keep the content and reset state.
+                    rule.runOnIdle{assertEquals("A clamped fitted pinch changed the reading content",1f,view.relativeScale(),0.03f)}
+                    rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
+                    assertTrue("Clamped pinch hid the long letter",visibleRows().isNotEmpty())
+                    continue
+                }
                 rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
                 // A band just below the clipped first row identifies actual painted
                 // content near the reading edge, independently of scroll arithmetic.
-                val landmark=visibleRows().drop(1).firstOrNull()
+                val painted=visibleRows()
+                val landmark=(if(targetHalf>100f)painted.drop(painted.size/2)else painted.drop(1)).firstOrNull()
                     ?:throw AssertionError("No painted reading landmark before reset in $mode")
                 rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
                 rule.waitUntil(15_000){var initial=false;rule.runOnUiThread{initial=abs(view.relativeScale()-1f)<0.03f};initial}
