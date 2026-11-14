@@ -66,6 +66,23 @@ class OutgoingMimeTest {
         assertTrue(decoded.html.contains("cid:$cid"));assertEquals(2,decoded.attachments.size)
         assertFalse(decoded.html.contains("private://"));assertFalse(decoded.html.contains("mail.liftzip.invalid"))
     }
+    @Test fun cameraInlineCidSurvivesServerDraftAndSendWithoutEmbeddingBase64() {
+        val file=OutgoingFile("private://camera","camera.jpg","image/jpeg",450_000,"camera-1")
+        val d=ComposeDraft(id="camera-draft",accountId="a",to="client@example.com",
+            subject="Фото",bodyHtml="<p>Снимок</p><img src='cid:camera-1'>",
+            attachments=listOf(file))
+        val draftMail=wire(builder.build(session,account,d,MimePurpose.DRAFT,1).message)
+        val restored=MimeReader().read(draftMail)
+        assertTrue(restored.html.contains("cid:"))
+        assertFalse(restored.html.contains("data:image"))
+        assertEquals(1,restored.attachments.size)
+        assertTrue(restored.composer!!.bodyHtml!!.contains("cid:camera-1"))
+        val sent=wire(builder.build(session,account,d).message)
+        val decoded=MimeReader().read(sent)
+        assertTrue(decoded.html.contains("cid:"))
+        assertFalse(decoded.html.contains("data:image"))
+        assertEquals(1,decoded.attachments.size)
+    }
     @Test fun serverDraftCidAliasesRestoreOriginalQuoteAndResolvableResources() {
         val d=draft(source("<p><img src='cid:picture'></p>")).copy(attachments=listOf(OutgoingFile("owned","picture.png","image/png",10,"picture")))
         val decoded=MimeReader().read(wire(builder.build(session,account,d,MimePurpose.DRAFT,1).message))
