@@ -256,7 +256,8 @@ object HtmlMail {
     }
     /** Recognition only: retain the original HTML as the expanded representation.
      *  A plain projection corroborates a boundary but never replaces the rich history. */
-    fun analyzeHistory(html: String,conversation: QuotedConversation): HistoryAnalysis {
+    fun analyzeHistory(html: String,conversation: QuotedConversation): HistoryAnalysis = analyzeHistory(html,conversation,0)
+    private fun analyzeHistory(html: String,conversation: QuotedConversation,nesting: Int): HistoryAnalysis {
         fun keep(reason: HistoryReason)=HistoryAnalysis(html,false,reason)
         if(html.isBlank())return HistoryAnalysis(html,conversation.messages.isNotEmpty(),HistoryReason.NO_HTML)
         if(conversation.messages.isEmpty())return keep(HistoryReason.NO_PLAIN_HISTORY)
@@ -324,7 +325,23 @@ object HtmlMail {
                 conversation.quotedBody?.let{plain->QuotePresentation.matches(plain,boundary,::attributionHeader){element->
                     genericQuoteBoundary(element) || element.hasClass("gmail_quote") || element.hasClass("yahoo_quoted") || element.hasClass("protonmail_quote")
                 }}==true
-            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured && !flattenedProvider && !presentation)continue
+            // A subsequent reply can wrap a provider message whose own plain
+            // alternative had already flattened document blockquotes. Corroborate
+            // that older message with the same rules, then verify the remaining
+            // current segment independently. Never flatten the entire outer chain.
+            val nestedProvider=!single && !completeChain && !structured && !flattenedProvider && !presentation &&
+                nesting<12 && units.size>1 && boundary in providerRoots &&
+                attribution!=null && attributionMatches(units.first()) &&
+                conversation.quotedBody?.let{plain->
+                    val nestedConversation=ConversationText.parse(plain)
+                    if(nestedConversation.current.isBlank() || nestedConversation.messages.isEmpty())false
+                    else {
+                        val nested=analyzeHistory(boundary.html(),nestedConversation,nesting+1)
+                        nested.separateHistory &&
+                            presentationText(nestedConversation.current)==presentationText(historyText(nested.currentHtml))
+                    }
+                }==true
+            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured && !flattenedProvider && !nestedProvider && !presentation)continue
             // Generic citations need an attribution, not merely identical quoted words.
             if(providers.isEmpty() && attribution==null &&
                 !attributionHeader(historyText(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue

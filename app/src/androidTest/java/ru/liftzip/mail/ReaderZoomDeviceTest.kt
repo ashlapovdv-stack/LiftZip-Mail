@@ -140,6 +140,48 @@ class ReaderZoomDeviceTest {
         rule.waitForIdle()
     }
 
+    @Test fun zoomResetAppearsWhenPinchingBelowInitialScale() {
+        // Fit-width can already be at WebView's minimum scale. Start at the
+        // original HTML scale so a genuine zoom-out gesture is possible.
+        val wide=message.copy(htmlBody="<div style='width:960px'><p>Ответ</p></div>" +
+            "<div style='height:100000px'></div><p>Конец письма</p>")
+        rule.setContent{MailTheme{reader(wide)}}
+        val view=loaded()
+        var generation=0L
+        rule.runOnUiThread{generation=view.documentGeneration()}
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000){
+            var ready=false
+            rule.runOnUiThread{// A requested generation can change before Chromium commits its scale.
+            // Assert the mode's observable scale before testing a pinch below it.
+            ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100 &&
+                abs(view.scale-view.resources.displayMetrics.density)<0.05f}
+            ready
+        }
+        var base=0f
+        var canReduce=false
+        rule.runOnUiThread{base=view.scale;canReduce=view.canZoomOut()}
+        assertTrue("Original-scale fixture must permit zoom-out; base=$base",canReduce)
+        val focus=center()
+        val density=view.resources.displayMetrics.density
+        val pinch=Pinch(focus,90f*density)
+        pinch.down()
+        for(step in 1..24)pinch.move((90f-65f*step/24)*density)
+        pinch.up()
+        rule.waitUntil(15_000){
+            var reduced=false
+            rule.runOnUiThread{reduced=view.scale<base*0.95f}
+            reduced
+        }
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertExists().performClick()
+        rule.waitUntil(15_000){
+            var reset=false
+            rule.runOnUiThread{reset=abs(view.relativeScale()-1f)<0.04f}
+            reset
+        }
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
+    }
+
     @Test fun scrollControlsToolbarAtBaseScaleAndZoomTakesPriorityAfterPinch() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
@@ -381,4 +423,51 @@ class ReaderZoomDeviceTest {
             rule.runOnIdle{assertSame(view,webView())}
         }
     }
+    @Test fun shrinkingOriginalHtmlThenResetKeepsPaintedLetterVisible() {
+        val wide=message.copy(id="painted-original-reset",subject="Видимое содержимое после сброса",
+            htmlBody="<table width='1200' style='background:#00ff00'><tr><td style='height:60px'>Контрольный текст широкой таблицы</td></tr></table><div class='gmail_quote'><p>Предыдущий текст</p></div>")
+        rule.setContent{MailTheme{reader(wide)}}
+        val view=loaded()
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        history.performScrollTo().assertIsDisplayed().performClick()
+        history.assertExpanded(true)
+        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100};ready}
+        var generation=0L
+        rule.runOnIdle{generation=view.documentGeneration()}
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100};ready}
+        val density=view.resources.displayMetrics.density
+        fun paintedRows(): Int {
+            val bitmap=rule.onRoot().captureToImage().asAndroidBitmap()
+            val row=IntArray(bitmap.width)
+            return (0 until bitmap.height).count{y->
+                bitmap.getPixels(row,0,bitmap.width,0,y,bitmap.width,1)
+                row.count{Color.green(it)>220 && Color.red(it)<35 && Color.blue(it)<35}>bitmap.width/4
+            }
+        }
+        assertTrue("Fixture's table must be painted before pinch",paintedRows()>30)
+        repeat(3){cycle->
+            rule.runOnIdle{android.util.Log.i("MailReaderReady","painted before cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
+            val pinch=Pinch(center(),100f*density)
+            pinch.down()
+            for(step in 1..24)pinch.move((100f-60f*step/24)*density)
+            pinch.up()
+            rule.waitUntil(15_000){var shrunk=false;rule.runOnUiThread{shrunk=view.relativeScale()<0.9f};shrunk}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertIsDisplayed()
+            assertTrue("Table must remain painted before reset $cycle",paintedRows()>15)
+            rule.runOnIdle{android.util.Log.i("MailReaderReady","painted shrunk cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+            rule.waitUntil(15_000){var initial=false;rule.runOnUiThread{initial=abs(view.relativeScale()-1f)<0.03f};initial}
+            // Synchronize with the actual renderer, then inspect pixels, not just scale/scroll.
+            val committed=java.util.concurrent.atomic.AtomicBoolean(false)
+            rule.runOnUiThread{view.afterVisualLayout{committed.set(true)}}
+            rule.waitUntil(15_000){committed.get()}
+            rule.runOnIdle{android.util.Log.i("MailReaderReady","painted reset cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
+            screenshot("reader-shrink-reset-$cycle")
+            assertTrue("Reset $cycle left a blank viewport instead of the painted table",paintedRows()>30)
+            history.assertExpanded(true)
+        }
+    }
+
 }

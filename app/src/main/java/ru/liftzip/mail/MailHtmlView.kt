@@ -64,7 +64,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var layoutRevision=0L
     private var layoutPending=false
     private var awaitingInitialLayout=false
-    private data class ReadingAnchor(val relativeScale: Float,val cssX: Float,val cssY: Float)
+    private data class ReadingAnchor(val relativeScale: Float,val cssX: Float,val cssY: Float,
+        val viewportX: Float=0f,val viewportY: Float=0f)
     private var pendingAnchor: ReadingAnchor?=null
     private var deferredAnchor: ReadingAnchor?=null
     @Volatile private var live=true
@@ -173,9 +174,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                                 if(anchor!=null && kotlin.math.abs(anchor.relativeScale-1f)>0.03f){
                                     zoomBy(anchor.relativeScale.coerceIn(0.01f,100f))
                                     postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(restoreRequest: Long){
-                                        if(live && restoreRequest==documentRevision){scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
+                                        if(live && restoreRequest==documentRevision){restoreReadingAnchor(anchor);publishHeight();ready()}
                                     }})
-                                }else {if(anchor!=null)scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());awaitingInitialLayout=true;publishHeight()}
+                                }else {if(anchor!=null)restoreReadingAnchor(anchor);awaitingInitialLayout=true;publishHeight()}
                             }
                         }})
                     }else {awaitingInitialLayout=true;publishHeight()}
@@ -183,6 +184,17 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             }
         }
     }
+    private fun restoreReadingAnchor(anchor: ReadingAnchor) {
+        // A mode change can shrink the native extent below the saved zoomed
+        // position. View.scrollTo does not enforce document bounds: restoring
+        // that coordinate would scroll the header past an unscrollable letter.
+        // Clamp only after this revision's scale and layout have committed.
+        val maxX=(computeHorizontalScrollRange()-width).coerceAtLeast(0)
+        val maxY=(contentHeight.toDouble()*renderScale-height).toInt().coerceAtLeast(0)
+        scrollTo((anchor.cssX*renderScale-anchor.viewportX).roundToInt().coerceIn(0,maxX),
+            (anchor.cssY*renderScale-anchor.viewportY).roundToInt().coerceIn(0,maxY))
+    }
+
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
         if(!live)return
         val zoom=(fontScale*100).toInt().coerceIn(50,300)
@@ -218,7 +230,25 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     fun resetZoom() {
         val base=initialScale?:return
-        if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
+        if(!live || renderScale<=0f)return
+        val ratio=base/renderScale
+        if(!ratio.isFinite() || kotlin.math.abs(ratio-1f)<0.001f)return
+        // The native window stays screen-sized even for a short letter. Its
+        // centre can be empty canvas: preserving it moves the actual letter
+        // above/left of the viewport when resetting from a smaller scale.
+        // Restoring a reduced page crops the visible text: keep its reading edge.
+        // Zooming back out retains the established centre focal point instead.
+        val viewportX=if(renderScale<base)0f else width/2f
+        val viewportY=if(renderScale<base)0f else height/2f
+        val anchor=ReadingAnchor(1f,(scrollX+viewportX)/renderScale,(scrollY+viewportY)/renderScale,viewportX,viewportY)
+        val revision=documentRevision
+        zoomBy(ratio.coerceIn(0.01f,100f))
+        postVisualStateCallback(revision,object: WebView.VisualStateCallback(){
+            override fun onComplete(requestId: Long) {
+                if(!live || requestId!=documentRevision || width<=0 || height<=0)return
+                restoreReadingAnchor(anchor)
+            }
+        })
     }
     internal fun fittedScale(): Float=initialScale?:renderScale
     internal fun documentGeneration(): Long=documentRevision

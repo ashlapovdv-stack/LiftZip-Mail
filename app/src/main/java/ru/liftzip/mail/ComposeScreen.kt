@@ -3,6 +3,11 @@ package ru.liftzip.mail
 
 import android.content.ClipData
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.core.content.FileProvider
+import androidx.compose.runtime.saveable.rememberSaveable
+import java.io.ByteArrayOutputStream
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,6 +28,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
@@ -38,11 +45,17 @@ import androidx.compose.ui.unit.dp
     fun save()=session.flush(d){onChange(it);onBack(it)}
     fun send()=session.flush(d){onChange(it);onSend(it)}
     val context=LocalContext.current
+    val contactStore=remember(context.applicationContext){ContactStore(context.applicationContext)}
+    var showContacts by remember { mutableStateOf(false) }
+    var knownContacts by remember { mutableStateOf(contactStore.all()) }
+    var recipientEditing by remember { mutableStateOf(false) }
     var senderMenu by remember(d.id){mutableStateOf(false)}
     var more by remember(d.id){mutableStateOf(false)}
     var copies by remember(d.id){mutableStateOf(d.cc.isNotBlank() || d.bcc.isNotBlank())}
     var attachmentError by remember(d.id){mutableStateOf<String?>(null)}
     var confirmResend by remember(d.id){mutableStateOf(false)}
+    var attachmentMenu by remember(d.id){mutableStateOf(false)}
+    var pendingCameraPath by rememberSaveable(d.id){mutableStateOf<String?>(null)}
     val colors=MaterialTheme.colorScheme.copy(surface=Color.White,background=Color.White,onBackground=Color(0xFF303030),onSurface=Color(0xFF303030),onSurfaceVariant=Color(0xFF777777),surfaceContainer=Color.White)
     MaterialTheme(colorScheme=colors) {
     SystemBarIcons(forceLightSurface=true)
@@ -60,11 +73,96 @@ import androidx.compose.ui.unit.dp
         else if(files.any{it.size>20L*1024*1024}||(d.filesToSend()+files).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
         else {attachmentError=null;onChange(d.copy(attachments=(d.attachments+files).distinctBy{it.uri}))}
     }
+    val pickGallery=rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)){uris->
+        val photos=uris.mapNotNull { uri->runCatching {
+            var name="Фото";var size=-1L
+            context.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE),null,null,null)?.use { cursor->
+                if(cursor.moveToFirst()){name=cursor.getString(0)?:name;if(!cursor.isNull(1))size=cursor.getLong(1)}
+            }
+            OutgoingFile(uri.toString(),name,context.contentResolver.getType(uri)?:"image/jpeg",size)
+        }.getOrNull() }
+        if(photos.size!=uris.size)attachmentError="Не удалось прочитать некоторые фотографии"
+        else if(photos.any{it.size>20L*1024*1024}||(d.filesToSend()+photos).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
+        else if(photos.isNotEmpty()){attachmentError=null;onChange(d.copy(attachments=(d.attachments+photos).distinctBy{it.uri}))}
+    }
+    val capturePhoto=rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()){success->
+        val path=pendingCameraPath
+        pendingCameraPath=null
+        if(success && path!=null) {
+            runCatching {
+                val file=java.io.File(path)
+                val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+                BitmapFactory.decodeFile(path,bounds)
+                require(bounds.outWidth>0 && bounds.outHeight>0) { "Снимок не сохранён" }
+                var sample=1
+                while(maxOf(bounds.outWidth,bounds.outHeight)/sample>1600)sample*=2
+                val options=BitmapFactory.Options().apply { inSampleSize=sample }
+                val decoded=BitmapFactory.decodeFile(path,options)?:error("Не удалось прочитать снимок")
+                val bitmap=try {
+                    val maxSide=maxOf(decoded.width,decoded.height)
+                    if(maxSide>1600) {
+                        val scale=1600f/maxSide
+                        Bitmap.createScaledBitmap(decoded,(decoded.width*scale).toInt().coerceAtLeast(1),
+                            (decoded.height*scale).toInt().coerceAtLeast(1),true)
+                    } else decoded
+                } finally { if(decoded.isRecycled.not() && maxOf(decoded.width,decoded.height)>1600) decoded.recycle() }
+                val output=ByteArrayOutputStream()
+                try {
+                    var quality=85
+                    do {
+                        output.reset()
+                        check(bitmap.compress(Bitmap.CompressFormat.JPEG,quality,output))
+                        quality-=5
+                    } while(output.size()>900_000 && quality>=55)
+                } finally { bitmap.recycle() }
+                require(output.size()<=1_000_000) { "Не удалось уменьшить фото до 1 МБ" }
+                val cid="camera-"+java.util.UUID.randomUUID().toString()+"@liftzip.mail"
+                val dir=java.io.File(context.filesDir,"inline-photos").apply{mkdirs()}
+                val stored=java.io.File(dir,java.util.UUID.randomUUID().toString()+".jpg")
+                stored.outputStream().use{it.write(output.toByteArray())}
+                val uri=FileProvider.getUriForFile(context,context.packageName+".attachments",stored)
+                val attachment=OutgoingFile(uri.toString(),"photo.jpg","image/jpeg",stored.length(),cid)
+                onChange(d.copy(attachments=d.attachments+attachment))
+                session.appendImage(uri.toString(),cid)
+                file.delete()
+            }.onFailure { attachmentError="Не удалось вставить фото: "+(it.message?:"ошибка чтения") }
+        } else if(path!=null) java.io.File(path).delete()
+    }
+    fun openCamera() {
+        runCatching {
+            val dir=java.io.File(context.cacheDir,"attachments").apply{mkdirs()}
+            val photo=java.io.File.createTempFile("camera_",".jpg",dir)
+            pendingCameraPath=photo.absolutePath
+            val uri=FileProvider.getUriForFile(context,context.packageName+".attachments",photo)
+            capturePhoto.launch(uri)
+        }.onFailure { attachmentError="Не удалось открыть камеру";pendingCameraPath=null }
+    }
+    if(showContacts) androidx.compose.ui.window.Dialog(onDismissRequest={showContacts=false},properties=androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth=false)) {
+        Surface(Modifier.fillMaxSize(),color=Color.White) {
+            ContactPicker(contactStore,onChoose={address->
+                val previous=d.to.trim()
+                onChange(d.copy(to=if(previous.isEmpty())address else previous.trimEnd(',', ';', ' ')+", "+address))
+                showContacts=false
+                knownContacts=contactStore.all()
+            },onClose={showContacts=false;knownContacts=contactStore.all()})
+        }
+    }
     Scaffold(containerColor=Color.White,modifier=Modifier.testTag("compose-screen"),topBar={
         TopAppBar(title={},colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White),navigationIcon={
             IconButton(onClick={save()},enabled=!s.busy){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Сохранить черновик и закрыть")}
         },actions={
-            IconButton(onClick={addFiles.launch(arrayOf("*/*"))},enabled=!s.busy){Icon(Icons.Outlined.AttachFile,"Добавить вложения")}
+            Box {
+                IconButton(onClick={attachmentMenu=true},enabled=!s.busy){Icon(Icons.Outlined.AttachFile,"Добавить вложения")}
+                DropdownMenu(expanded=attachmentMenu,onDismissRequest={attachmentMenu=false},
+                    modifier=Modifier.width(210.dp)) {
+                    DropdownMenuItem(text={Text("Фото")},leadingIcon={Icon(Icons.Outlined.PhotoLibrary,null)},
+                        onClick={attachmentMenu=false;pickGallery.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))})
+                    DropdownMenuItem(text={Text("Камера")},leadingIcon={Icon(Icons.Outlined.PhotoCamera,null)},
+                        onClick={attachmentMenu=false;openCamera()})
+                    DropdownMenuItem(text={Text("Файлы")},leadingIcon={Icon(Icons.Outlined.InsertDriveFile,null)},
+                        onClick={attachmentMenu=false;addFiles.launch(arrayOf("*/*"))})
+                }
+            }
             IconButton(onClick={if(d.previousDeliveryUncertain)confirmResend=true else send()},enabled=!s.busy && d.resourcesReady()){
                 Icon(Icons.AutoMirrored.Outlined.Send,"Отправить письмо")
             }
@@ -93,11 +191,64 @@ import androidx.compose.ui.unit.dp
                 }}
             }
             ComposeDivider()
-            ComposeField("Кому",d.to,{onChange(d.copy(to=it))},!s.busy,email=true,trailing={
-                IconButton(onClick={copies=!copies},enabled=!s.busy,modifier=Modifier.semantics{stateDescription=if(copies)"Развернуто"else "Свернуто"}) {
-                    Icon(if(copies)Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,"Копия и скрытая копия")
+            val suggestions=remember(d.to,knownContacts,s.messages,recipientEditing) {
+                if(recipientEditing) RecipientSuggestions.search(knownContacts,s.messages,d.to).take(3) else emptyList()
+            }
+            var recipientRowHeight by remember { mutableIntStateOf(0) }
+            Box(Modifier.fillMaxWidth().onSizeChanged { recipientRowHeight=it.height }) {
+                ComposeField("Кому",d.to,{onChange(d.copy(to=it));recipientEditing=true},!s.busy,email=true,trailing={
+                    IconButton(onClick={showContacts=true;recipientEditing=false},enabled=!s.busy){Icon(Icons.Outlined.Contacts,"Адресная книга")}
+                    IconButton(onClick={copies=!copies},enabled=!s.busy,modifier=Modifier.semantics{stateDescription=if(copies)"Развернуто"else "Свернуто"}) {
+                        Icon(if(copies)Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,"Копия и скрытая копия")
+                    }
+                })
+                if(suggestions.isNotEmpty() && recipientRowHeight>0) {
+                    androidx.compose.ui.window.Popup(
+                        alignment=Alignment.TopStart,
+                        offset=IntOffset(0,recipientRowHeight),
+                        onDismissRequest={recipientEditing=false},
+                        properties=androidx.compose.ui.window.PopupProperties(focusable=false)
+                    ) {
+                        Surface(
+                            modifier=Modifier.padding(horizontal=16.dp).widthIn(min=280.dp,max=360.dp),
+                            shape=RoundedCornerShape(8.dp),
+                            color=Color.White,
+                            shadowElevation=8.dp
+                        ) {
+                            androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max=240.dp)) {
+                                items(suggestions.size) { index ->
+                                    val suggestion=suggestions[index]
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable {
+                                            onChange(d.copy(to=RecipientSuggestions.replaceToken(d.to,suggestion.email)))
+                                            recipientEditing=false
+                                        }.heightIn(min=68.dp).padding(horizontal=16.dp,vertical=6.dp),
+                                        verticalAlignment=Alignment.CenterVertically
+                                    ) {
+                                        Surface(
+                                            shape=androidx.compose.foundation.shape.CircleShape,
+                                            color=if(suggestion.saved) Color(0xFFE6EFE6) else Color(0xFFF1F1F1),
+                                            modifier=Modifier.size(46.dp)
+                                        ) {
+                                            Box(contentAlignment=Alignment.Center) {
+                                                Text(suggestion.label.take(1).uppercase(),style=MaterialTheme.typography.titleMedium,
+                                                    color=Color(0xFF6E7970))
+                                            }
+                                        }
+                                        Column(Modifier.padding(start=14.dp).weight(1f)) {
+                                            Text(suggestion.label,style=MaterialTheme.typography.bodyLarge,
+                                                maxLines=1,overflow=TextOverflow.Ellipsis)
+                                            Text(suggestion.email,style=MaterialTheme.typography.bodyMedium,
+                                                color=Color(0xFF929292),maxLines=1,overflow=TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-            })
+            }
+            ComposeDivider()
             if(copies) {
                 ComposeField("Копия",d.cc,{onChange(d.copy(cc=it))},!s.busy,email=true)
                 ComposeField("Скр. копия",d.bcc,{onChange(d.copy(bcc=it))},!s.busy,email=true)

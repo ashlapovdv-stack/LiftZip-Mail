@@ -19,6 +19,17 @@ internal class NativeHistoryControl(
     private val label: String
 ) {
     private fun node(): AccessibilityNodeInfo? {
+        // Chromium's provider is lazy and may auto-disable when UiAutomation
+        // is the only service. Query the real provider on its owning thread
+        // before traversing the framework tree, just as an Android service does.
+        rule.runOnUiThread {
+            fun locate(view: View): MailHtmlWebView? {
+                if(view is MailHtmlWebView)return view
+                if(view is ViewGroup)for(i in 0 until view.childCount)locate(view.getChildAt(i))?.let{return it}
+                return null
+            }
+            locate(rule.activity.window.decorView)?.accessibilityNodeProvider
+        }
         fun find(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
             root ?: return null
             if(root.contentDescription?.toString()==label || root.text?.toString()==label)return root
@@ -32,7 +43,59 @@ internal class NativeHistoryControl(
         return find(automation.rootInActiveWindow)
     }
     fun exists() = node()!=null
-    fun assertExists()=apply { rule.waitUntil(15_000){exists()} }
+    fun assertExists()=apply {
+        try {
+            rule.waitUntil(15_000){exists()}
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            // Distinguish missing HTML from a Chromium accessibility bridge failure.
+            rule.runOnUiThread {
+                fun locate(v: View): MailHtmlWebView? {
+                    if(v is MailHtmlWebView)return v
+                    if(v is ViewGroup)for(i in 0 until v.childCount)locate(v.getChildAt(i))?.let{return it}
+                    return null
+                }
+                val view=locate(rule.activity.window.decorView)
+                val document=runCatching {
+                    val field=MailHtmlWebView::class.java.getDeclaredField("document").apply{isAccessible=true}
+                    field.get(view) as? MailHtmlDocument
+                }.getOrNull()
+                val html=document?.html.orEmpty()
+                if(view!=null) {
+                    val visible=Rect()
+                    val shown=view.getGlobalVisibleRect(visible)
+                    val chain=mutableListOf<String>()
+                    var ancestor: View?=view
+                    while(ancestor!=null) {
+                        val location=IntArray(2);ancestor.getLocationOnScreen(location)
+                        chain+="${ancestor.javaClass.simpleName}(shown=${ancestor.isShown},visibility=${ancestor.visibility},alpha=${ancestor.alpha},xy=${location.joinToString()},size=${ancestor.width}x${ancestor.height},scroll=${ancestor.scrollX},${ancestor.scrollY})"
+                        ancestor=ancestor.parent as? View
+                    }
+                    android.util.Log.e("MailHistoryDiagnosis","visible=$shown rect=$visible focus=${view.hasWindowFocus()} scale=${view.scale} relative=${view.relativeScale()} ancestors=${chain.joinToString(" -> ")}")
+                }
+                android.util.Log.e("MailHistoryDiagnosis",
+                    "label=$label webView=${view!=null} attached=${view?.isAttachedToWindow} " +
+                    "progress=${view?.progress} enabled=${view?.interactionEnabled} " +
+                    "generation=${view?.documentGeneration()} htmlLength=${html.length} " +
+                    "labelInHtml=${html.contains(label)} historyLinks=${org.jsoup.Jsoup.parse(html).select("a[aria-expanded]").size}")
+            }
+            val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+            if(android.os.Build.VERSION.SDK_INT>=34)automation.clearCache()
+            val root=automation.rootInActiveWindow
+            val descriptions=mutableListOf<String>()
+            fun collect(node: AccessibilityNodeInfo?,depth: Int) {
+                if(node==null || depth>12 || descriptions.size>=80)return
+                val value=node.contentDescription?.toString() ?: node.text?.toString()
+                if(!value.isNullOrBlank())descriptions+=value.take(90)
+                for(i in 0 until node.childCount)collect(node.getChild(i),depth+1)
+            }
+            collect(root,0)
+            android.util.Log.e("MailHistoryDiagnosis","accessibilityRoot=${root!=null} labels=${descriptions.joinToString(" | ")}")
+            runCatching {
+                automation.takeScreenshot()?.let{saveDeviceBitmap(it,"history-accessibility-timeout")}
+            }.onFailure{android.util.Log.e("MailHistoryDiagnosis","Could not capture failure screen",it)}
+            throw failure
+        }
+    }
     fun assertIsDisplayed()=apply { assertExists();assertTrue(node()!!.isVisibleToUser) }
     fun performScrollTo()=apply {
         if(!exists()) {
@@ -46,7 +109,10 @@ internal class NativeHistoryControl(
                     return null
                 }
                 view=find(rule.activity.window.decorView)
-                view?.setFindListener{_,total,done->if(done && total>0){view?.setFindListener(null);view?.findNext(true)}}
+                view?.setFindListener{active,total,done->
+                    android.util.Log.e("MailHistoryDiagnosis","findCallback active=$active total=$total done=$done")
+                    if(done && total>0){view?.setFindListener(null);view?.findNext(true)}
+                }
                 view?.findAllAsync("⋯ "+label.substringAfterLast(": "))
             }
             assertExists()

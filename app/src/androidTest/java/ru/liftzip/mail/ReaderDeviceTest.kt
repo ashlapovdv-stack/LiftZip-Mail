@@ -25,7 +25,15 @@ class ReaderDeviceTest {
     @org.junit.Before fun connectNativeAccessibilityBeforeCreatingWebView() {
         // UiAutomation connects lazily. Connect before setContent creates Chromium's
         // accessibility bridge, including when this class is run in isolation.
-        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+        val automation=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation
+        // Request the full native/Chromium accessibility hierarchy rather than
+        // only the important Compose nodes exposed by the default test service.
+        val serviceInfo=automation.serviceInfo
+        serviceInfo.flags=serviceInfo.flags or
+            android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+            android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        automation.serviceInfo=serviceInfo
+        automation.rootInActiveWindow
     }
     private val message=MailItem("reader-regression","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Длинное письмо",body="Начало письма. Последняя строка письма.",date=1,
         htmlBody="<p>Начало письма</p><div style='height:100000px'></div><p>Последняя строка письма</p>",contentVersion=MailContent.FORMAT_VERSION)
@@ -68,14 +76,25 @@ class ReaderDeviceTest {
     private fun changeHistory(view: MailHtmlWebView,toggle: NativeHistoryControl,expanded: Boolean) {
         var revision=0L
         rule.runOnIdle{revision=view.documentGeneration()}
-        toggle.performScrollTo().assertIsDisplayed().performClick()
-        toggle.assertExpanded(expanded)
-        rule.waitUntil(15_000) {
-            var ready=false
-            // Unified HTML history updates the document inside the SAME native WebView.
-            // Plain history still changes only Compose controls, without a reload.
-            rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
-            ready
+        var stage="locate and click history control"
+        try {
+            toggle.performScrollTo().assertIsDisplayed().performClick()
+            stage="wait for aria-expanded=$expanded"
+            toggle.assertExpanded(expanded)
+            stage="wait for reader readiness"
+            rule.waitUntil(15_000) {
+                var ready=false
+                // Unified HTML history updates the document inside the SAME native WebView.
+                // Plain history still changes only Compose controls, without a reload.
+                rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
+                ready
+            }
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            var state="unavailable"
+            rule.runOnUiThread {
+                state="generation=${view.documentGeneration()} previous=$revision enabled=${view.interactionEnabled} progress=${view.progress} attached=${view.isAttachedToWindow} height=${view.contentHeight} url=${view.url}"
+            }
+            throw AssertionError("History transition timeout: expanded=$expanded stage=$stage $state",failure)
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
     }
@@ -167,6 +186,26 @@ class ReaderDeviceTest {
         assertEquals(0,matches(view,"Первое старое письмо"))
         assertEquals(1,matches(view,"Текущий ответ"))
         saveDeviceScreenshot(rule,"linked-mime-history")
+    }
+    @Test fun replyingAgainKeepsTheHistoryButtonForAFlattenedProviderAlternative() {
+        val older="On Mon, 9 Nov 2026, Original <original@example.com> wrote:"
+        val recent="On Tue, 10 Nov 2026, Reply <reply@example.com> wrote:"
+        fun encoded(header: String)=header.replace("<","&lt;").replace(">","&gt;")
+        val originalPlain="*Исходное письмо*\nЦитата документа\nВложенная цитата"
+        val originalHtml="<b>Исходное письмо</b><blockquote>Цитата документа<blockquote>Вложенная цитата</blockquote></blockquote>"
+        val firstPlain="Первый ответ\n\n$older\n"+originalPlain.lineSequence().joinToString("\n"){"> $it"}
+        val body="Второй ответ\n\n$recent\n"+firstPlain.lineSequence().joinToString("\n"){"> $it"}
+        val html="<p>Второй ответ</p><div class='gmail_attr'>${encoded(recent)}</div><blockquote class='gmail_quote'>"+
+            "<p>Первый ответ</p><div class='gmail_attr'>${encoded(older)}</div><blockquote class='gmail_quote'>$originalHtml</blockquote></blockquote>"
+        rule.setContent{MailTheme{reader(message.copy(id="nested-flattened-provider",body=body,htmlBody=html))}}
+        val view=loaded()
+        val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 2")
+        toggle.performScrollTo().assertIsDisplayed()
+        assertEquals(0,matches(view,"Вложенная цитата"))
+        changeHistory(view,toggle,true)
+        assertEquals(1,matches(view,"Вложенная цитата"))
+        changeHistory(view,toggle,false)
+        assertEquals(0,matches(view,"Вложенная цитата"))
     }
     @Test fun longHtmlCitationSharesScrollingAndRevealsItsFinalLine() {
         val header="On 7 Nov 2026, sender@example.com wrote:"
@@ -519,7 +558,7 @@ class ReaderDeviceTest {
         val html="<p>Текущий ответ</p><div class='gmail_attr'>On Wed, 28 Oct 2026, Person &lt;a@example.com&gt; wrote:</div><blockquote class='gmail_quote'><p>Старое письмо</p></blockquote>"
         rule.setContent{MailTheme{reader(message.copy(id="html-history-zoom",body=body,htmlBody=html))}}
         val view=loaded()
-        rule.waitUntil(15_000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
+        NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertExists()
         val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         history.performScrollTo().assertIsDisplayed()
         rule.runOnIdle{view.zoomBy(2f)}
