@@ -136,8 +136,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -no-metrics
           script: |
             bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderDeviceTest#reopeningUsesWarmGeometryAndStartsWithCollapsedHistory -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
-            trap 'mkdir -p ui-checks; for image in reader-shrink-reset-0 reader-shrink-reset-1 reader-shrink-reset-2; do if adb shell test -f /data/local/tmp/liftzip-ui-checks/$image.png; then adb exec-out cat /data/local/tmp/liftzip-ui-checks/$image.png > ui-checks/$image.png; fi; done' EXIT
-            bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderZoomDeviceTest -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
+            bash scripts/reader-zoom-tests.sh
             mkdir -p ui-checks
             for image in reader-initial reader-zoom-hidden reader-reset reader-partial-no-overlap reader-fitted-base; do adb exec-out cat /data/local/tmp/liftzip-ui-checks/$image.png > ui-checks/$image.png; done
       - name: Review reader screenshots
