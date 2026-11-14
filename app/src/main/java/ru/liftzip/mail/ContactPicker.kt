@@ -1,6 +1,11 @@
 package ru.liftzip.mail
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,29 +32,54 @@ internal fun ContactPicker(
     val shown = if (query.isBlank()) contacts else ContactAddresses.suggestions(contacts, query)
 
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = onClose) { Text("Закрыть") }
-            Text("Адресная книга", style = MaterialTheme.typography.titleLarge)
-            IconButton(onClick = { editing = null; creating = true }) {
-                Icon(Icons.Outlined.Add, "Добавить контакт")
+        Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal=12.dp),
+            verticalAlignment=Alignment.CenterVertically) {
+            IconButton(onClick=onClose) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад",tint=MaterialTheme.colorScheme.primary)
+            }
+            Text("Контакты",Modifier.weight(1f).padding(start=8.dp),
+                style=MaterialTheme.typography.headlineSmall)
+            IconButton(onClick={editing=null;creating=true}) {
+                Icon(Icons.Outlined.Add,"Добавить контакт")
             }
         }
-        OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            label = { Text("Поиск по имени или адресу") }, singleLine = true)
-        if (shown.isEmpty()) {
-            Text("Контактов нет", Modifier.padding(16.dp))
-        }
-        LazyColumn {
-            items(shown, key = { it.id }) { contact ->
-                ListItem(
-                    headlineContent = { Text(contact.name) },
-                    supportingContent = { Text(contact.emails.joinToString(", ")) },
-                    modifier = Modifier.clickable { editing = contact; creating = false },
-                    trailingContent = {
-                        TextButton(onClick = { if(contact.emails.size==1) onChoose(contact.emails.first()) else choosing=contact }) { Text("Выбрать") }
+        OutlinedTextField(query,{query=it},Modifier.fillMaxWidth().padding(horizontal=20.dp),
+            label={Text("Поиск контактов")},singleLine=true)
+        Spacer(Modifier.height(12.dp))
+        LazyColumn(Modifier.fillMaxSize()) {
+            if(query.isBlank()) {
+                item {
+                    Text("Популярные",Modifier.padding(start=20.dp,top=16.dp,bottom=8.dp),
+                        style=MaterialTheme.typography.titleMedium)
+                }
+            }
+            items(shown,key={it.id}) { contact ->
+                Row(
+                    Modifier.fillMaxWidth().clickable {
+                        if(contact.emails.size==1) onChoose(contact.emails.first())
+                        else choosing=contact
+                    }.heightIn(min=90.dp).padding(horizontal=20.dp,vertical=12.dp),
+                    verticalAlignment=Alignment.CenterVertically
+                ) {
+                    Surface(Modifier.size(58.dp),shape=CircleShape,
+                        color=Color(0xFFEDEDED)) {
+                        Box(contentAlignment=Alignment.Center) {
+                            Text(contact.name.take(1).uppercase(),
+                                style=MaterialTheme.typography.headlineSmall,color=Color(0xFF777777))
+                        }
                     }
-                )
-                HorizontalDivider()
+                    Column(Modifier.padding(start=18.dp).weight(1f)) {
+                        Text(contact.name,style=MaterialTheme.typography.titleMedium,
+                            maxLines=1,overflow=TextOverflow.Ellipsis)
+                        Text(contact.emails.firstOrNull().orEmpty(),
+                            style=MaterialTheme.typography.bodyLarge,color=Color(0xFF929292),
+                            maxLines=1,overflow=TextOverflow.Ellipsis)
+                    }
+                    TextButton(onClick={editing=contact}) { Text("Изменить") }
+                }
+            }
+            if(shown.isEmpty()) item {
+                Text("Контактов нет",Modifier.padding(24.dp))
             }
         }
     }
