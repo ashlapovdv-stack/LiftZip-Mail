@@ -293,6 +293,10 @@ class ReaderZoomDeviceTest {
         // At the unzoomed native scale, Compose must no longer retain the
         // hidden chrome state from the preceding pinch gesture.
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        val subject=rule.onNodeWithText(rich.subject).fetchSemanticsNode()
+        val header=rule.onNodeWithTag("reader-message-header").fetchSemanticsNode()
+        val viewport=rule.onNodeWithTag("reader-viewport").fetchSemanticsNode()
+        android.util.Log.i("MailZoomRegression","after original scale: subject=${subject.boundsInRoot} header=${header.boundsInRoot} viewport=${viewport.boundsInRoot} nativeScroll=${view.scrollY} relativeScale=${view.relativeScale()}")
         rule.onNodeWithText(rich.subject).assertIsDisplayed()
         history.assertExpanded(true)
     }
