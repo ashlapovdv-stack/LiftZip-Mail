@@ -36,6 +36,7 @@ internal class ComposeEditorSession {
     fun focus(){view?.let{it.requestFocus();it.evaluateJavascript("document.getElementById('editor').focus()",null)}}
     fun replaceText(text: String){view?.let{editor->if(editor.ready)editor.evaluateJavascript("window.LiftZipEditor.selectAll();window.LiftZipEditor.insert("+JSONObject.quote(ComposeContent.escaped(text).replace("\n","<br>"))+")",null)}}
     fun insertText(text: String){view?.insertHtml(ComposeContent.escaped(text).replace("\n","<br>"))}
+    fun appendImage(dataUri: String){view?.appendImage(dataUri)}
     fun attach(editor: ComposeEditorWebView){view=editor}
     fun detach(editor: ComposeEditorWebView){if(view===editor)view=null}
     fun flush(draft: ComposeDraft,done: (ComposeDraft)->Unit) {
@@ -103,6 +104,7 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
               html:()=>editor.innerHTML,
               enabled:value=>editor.contentEditable=String(value),
               insert:html=>{const saved=range&&range.cloneRange();editor.focus();const s=getSelection();s.removeAllRanges();if(saved && editor.contains(saved.commonAncestorContainer))s.addRange(saved);else{const r=document.createRange();r.selectNodeContents(editor);r.collapse(false);s.addRange(r);}const r=s.getRangeAt(0);r.deleteContents();const fragment=r.createContextualFragment(html);const last=fragment.lastChild;r.insertNode(fragment);if(last)r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);range=r.cloneRange();editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertFromPaste'}));},
+              appendImage:src=>{const img=document.createElement("img");img.src=src;img.alt="Фото";editor.appendChild(document.createElement("br"));editor.appendChild(img);editor.appendChild(document.createElement("br"));editor.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertFromPaste"}));},
               selectAll:()=>{editor.focus();const r=document.createRange();r.selectNodeContents(editor);const s=getSelection();s.removeAllRanges();s.addRange(r);range=r;}
             };
             new ResizeObserver(()=>EditorBridge.height(Math.ceil(editor.scrollHeight))).observe(editor);
@@ -111,6 +113,7 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
     }
     fun setEditable(value: Boolean){if(value!=editingEnabled){editingEnabled=value;if(ready)applyEditable()}}
     private fun applyEditable(){evaluateJavascript("window.LiftZipEditor.enabled($editingEnabled)",null)}
+    fun appendImage(dataUri: String){if(ready)evaluateJavascript("window.LiftZipEditor.appendImage(${JSONObject.quote(dataUri)})",null)}
     fun insertHtml(html: String){if(ready)evaluateJavascript("window.LiftZipEditor.insert(${JSONObject.quote(ComposerHtml.clean(html))})",null)}
     fun pasteClipboard(plain: Boolean=false): Boolean {
         val clip=(context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?:return false
