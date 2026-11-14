@@ -506,4 +506,19 @@ class ReaderZoomDeviceTest {
             rule.runOnIdle{assertSame(view,webView())}
         }
     }
+    @Test fun shrinkingOriginalHtmlShowsResetControlAndResetHidesIt() {
+        val wide=message.copy(id="original-pinch-in-reset",htmlBody="<div style='width:1200px'><table width='1200'><tr><td>Wide table</td></tr></table></div>")
+        rule.setContent{MailTheme{reader(wide)}}
+        val view=loaded()
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100 && abs(view.scale-view.resources.displayMetrics.density)<0.05f};ready}
+        rule.runOnIdle{view.zoomBy(0.7f)}
+        rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+        rule.runOnIdle{assertTrue("The document must actually shrink",view.relativeScale()<0.9f)}
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+        rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isEmpty()}
+        rule.runOnIdle{assertEquals(1f,view.relativeScale(),0.04f)}
+    }
+
+
 }
