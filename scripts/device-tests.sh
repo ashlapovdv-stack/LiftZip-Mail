@@ -11,6 +11,14 @@ if [ "$device_test_status" -ne 0 ]; then
     echo "Device test failure: Android runtime and renderer diagnostics saved to device-timeout.txt"
     grep -E 'FATAL EXCEPTION|Process .* has died|onRenderProcessGone|chromium|TestRunner' device-timeout.txt | tail -n 80 || true
 fi
+# Instrumentation can finish while adb briefly reports the emulator offline.
+# Wait for transport recovery before collecting mandatory screenshot evidence.
+if [ "$device_test_status" -eq 0 ]; then
+    if ! timeout 60s adb wait-for-device || ! timeout 20s adb shell true; then
+        echo "Device unavailable after successful instrumentation; cannot collect UI evidence" >&2
+        device_test_status=1
+    fi
+fi
 mkdir -p ui-checks || exit 1
 for image in selection-hidden-inbox citation-final-line collapsed-gap-plain collapsed-gap-author-brs collapsed-gap-paragraph-brs collapsed-gap-wrapper-padding style-forest style-frost style-emerald style-meadow business-artwork-ratios quote-spacing-plain quote-spacing-html quote-spacing-padded selection-standard-before selection-standard-active selection-cozy-before selection-cozy-active selection-business-before selection-business-active plain-order plain-order-comment rich-reply-expanded rich-reply-original compose-rich-paste html-paste-folded html-paste-responsive compose-new compose-copies compose-reply inbox drawer queue partial-panels hidden-panels mail-partial single-unread html-newsletter html-remote html-inline html-long html-fallback html-return style-cozy style-business appearance html-fit edge-standard-buttons edge-cozy-buttons edge-business-buttons edge-standard-gestures edge-cozy-gestures edge-business-gestures edge-hidden-standard-buttons edge-hidden-cozy-buttons edge-hidden-business-buttons edge-hidden-standard-gestures edge-hidden-cozy-gestures edge-hidden-business-gestures row-boundary hide-row-boundary spam-actions compact-attachments expanded-history image-thumbnails html-warm-theme reader-warm-open history-unified-control linked-mime-history; do
     remote_image="/data/local/tmp/liftzip-ui-checks/$image.png"
