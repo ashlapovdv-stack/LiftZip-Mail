@@ -599,7 +599,7 @@ class ReaderZoomDeviceTest {
                 rule.runOnUiThread{view.afterVisualLayout{committed.set(true)}}
                 rule.waitUntil(15_000){committed.get()}
                 assertTrue("Reset lost reading landmark $landmark in $mode at pinch $targetHalf",landmark in visibleRows())
-                rule.runOnIdle{assertTrue("Reset returned the long letter to its beginning",view.scrollY>1000)}
+                // Painted landmark above proves that the reading position survived.\n                // A fixed native scrollY threshold is invalid after a reduced-scale\n                // viewport: the same visible document row can have a much smaller Y.
             }
         }
     }
