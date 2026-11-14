@@ -23,6 +23,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
@@ -110,47 +112,57 @@ import androidx.compose.ui.unit.dp
             val suggestions=remember(d.to,knownContacts,s.messages,recipientEditing) {
                 if(recipientEditing) RecipientSuggestions.search(knownContacts,s.messages,d.to) else emptyList()
             }
-            Box(Modifier.fillMaxWidth()) {
+            var recipientRowHeight by remember { mutableIntStateOf(0) }
+            Box(Modifier.fillMaxWidth().onSizeChanged { recipientRowHeight=it.height }) {
                 ComposeField("Кому",d.to,{onChange(d.copy(to=it));recipientEditing=true},!s.busy,email=true,trailing={
                     IconButton(onClick={showContacts=true;recipientEditing=false},enabled=!s.busy){Icon(Icons.Outlined.Contacts,"Адресная книга")}
                     IconButton(onClick={copies=!copies},enabled=!s.busy,modifier=Modifier.semantics{stateDescription=if(copies)"Развернуто"else "Свернуто"}) {
                         Icon(if(copies)Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,"Копия и скрытая копия")
                     }
                 })
-                DropdownMenu(
-                    expanded=suggestions.isNotEmpty(),
-                    onDismissRequest={recipientEditing=false},
-                    modifier=Modifier.widthIn(min=280.dp,max=360.dp).heightIn(max=330.dp),
-                    properties=androidx.compose.ui.window.PopupProperties(focusable=false)
-                ) {
-                    suggestions.forEach { suggestion ->
-                        DropdownMenuItem(
-                            onClick={
-                                onChange(d.copy(to=RecipientSuggestions.replaceToken(d.to,suggestion.email)))
-                                recipientEditing=false
-                            },
-                            text={
-                                Row(verticalAlignment=Alignment.CenterVertically,modifier=Modifier.fillMaxWidth()) {
-                                    Surface(
-                                        shape=androidx.compose.foundation.shape.CircleShape,
-                                        color=if(suggestion.saved) Color(0xFFE6EFE6) else Color(0xFFF1F1F1),
-                                        modifier=Modifier.size(46.dp)
+                if(suggestions.isNotEmpty() && recipientRowHeight>0) {
+                    androidx.compose.ui.window.Popup(
+                        alignment=Alignment.TopStart,
+                        offset=IntOffset(0,recipientRowHeight),
+                        onDismissRequest={recipientEditing=false},
+                        properties=androidx.compose.ui.window.PopupProperties(focusable=false)
+                    ) {
+                        Surface(
+                            modifier=Modifier.padding(horizontal=16.dp).widthIn(min=280.dp,max=360.dp),
+                            shape=RoundedCornerShape(8.dp),
+                            color=Color.White,
+                            shadowElevation=8.dp
+                        ) {
+                            androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max=330.dp)) {
+                                items(suggestions.size) { index ->
+                                    val suggestion=suggestions[index]
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable {
+                                            onChange(d.copy(to=RecipientSuggestions.replaceToken(d.to,suggestion.email)))
+                                            recipientEditing=false
+                                        }.heightIn(min=78.dp).padding(horizontal=16.dp,vertical=10.dp),
+                                        verticalAlignment=Alignment.CenterVertically
                                     ) {
-                                        Box(contentAlignment=Alignment.Center) {
-                                            Text(suggestion.label.take(1).uppercase(),style=MaterialTheme.typography.titleMedium,
-                                                color=Color(0xFF6E7970))
+                                        Surface(
+                                            shape=androidx.compose.foundation.shape.CircleShape,
+                                            color=if(suggestion.saved) Color(0xFFE6EFE6) else Color(0xFFF1F1F1),
+                                            modifier=Modifier.size(46.dp)
+                                        ) {
+                                            Box(contentAlignment=Alignment.Center) {
+                                                Text(suggestion.label.take(1).uppercase(),style=MaterialTheme.typography.titleMedium,
+                                                    color=Color(0xFF6E7970))
+                                            }
+                                        }
+                                        Column(Modifier.padding(start=14.dp).weight(1f)) {
+                                            Text(suggestion.label,style=MaterialTheme.typography.bodyLarge,
+                                                maxLines=1,overflow=TextOverflow.Ellipsis)
+                                            Text(suggestion.email,style=MaterialTheme.typography.bodyMedium,
+                                                color=Color(0xFF929292),maxLines=1,overflow=TextOverflow.Ellipsis)
                                         }
                                     }
-                                    Column(Modifier.padding(start=14.dp).weight(1f)) {
-                                        Text(suggestion.label,style=MaterialTheme.typography.bodyLarge,
-                                            maxLines=1,overflow=TextOverflow.Ellipsis)
-                                        Text(suggestion.email,style=MaterialTheme.typography.bodyMedium,
-                                            color=Color(0xFF929292),maxLines=1,overflow=TextOverflow.Ellipsis)
-                                    }
                                 }
-                            },
-                            modifier=Modifier.heightIn(min=76.dp)
-                        )
+                            }
+                        }
                     }
                 }
             }
