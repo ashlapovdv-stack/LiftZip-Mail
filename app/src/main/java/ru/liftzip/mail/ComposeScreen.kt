@@ -74,6 +74,18 @@ import androidx.compose.ui.unit.dp
         else if(files.any{it.size>20L*1024*1024}||(d.filesToSend()+files).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
         else {attachmentError=null;onChange(d.copy(attachments=(d.attachments+files).distinctBy{it.uri}))}
     }
+    val pickGallery=rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)){uris->
+        val photos=uris.mapNotNull { uri->runCatching {
+            var name="Фото";var size=-1L
+            context.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE),null,null,null)?.use { cursor->
+                if(cursor.moveToFirst()){name=cursor.getString(0)?:name;if(!cursor.isNull(1))size=cursor.getLong(1)}
+            }
+            OutgoingFile(uri.toString(),name,context.contentResolver.getType(uri)?:"image/jpeg",size)
+        }.getOrNull() }
+        if(photos.size!=uris.size)attachmentError="Не удалось прочитать некоторые фотографии"
+        else if(photos.any{it.size>20L*1024*1024}||(d.filesToSend()+photos).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
+        else if(photos.isNotEmpty()){attachmentError=null;onChange(d.copy(attachments=(d.attachments+photos).distinctBy{it.uri}))}
+    }
     val capturePhoto=rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()){success->
         val path=pendingCameraPath
         pendingCameraPath=null
@@ -145,7 +157,7 @@ import androidx.compose.ui.unit.dp
                 DropdownMenu(expanded=attachmentMenu,onDismissRequest={attachmentMenu=false},
                     modifier=Modifier.width(210.dp)) {
                     DropdownMenuItem(text={Text("Фото")},leadingIcon={Icon(Icons.Outlined.PhotoLibrary,null)},
-                        onClick={attachmentMenu=false;addFiles.launch(arrayOf("image/*"))})
+                        onClick={attachmentMenu=false;pickGallery.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))})
                     DropdownMenuItem(text={Text("Камера")},leadingIcon={Icon(Icons.Outlined.PhotoCamera,null)},
                         onClick={attachmentMenu=false;openCamera()})
                     DropdownMenuItem(text={Text("Файлы")},leadingIcon={Icon(Icons.Outlined.InsertDriveFile,null)},
@@ -181,7 +193,7 @@ import androidx.compose.ui.unit.dp
             }
             ComposeDivider()
             val suggestions=remember(d.to,knownContacts,s.messages,recipientEditing) {
-                if(recipientEditing) RecipientSuggestions.search(knownContacts,s.messages,d.to) else emptyList()
+                if(recipientEditing) RecipientSuggestions.search(knownContacts,s.messages,d.to).take(3) else emptyList()
             }
             var recipientRowHeight by remember { mutableIntStateOf(0) }
             Box(Modifier.fillMaxWidth().onSizeChanged { recipientRowHeight=it.height }) {
@@ -204,14 +216,14 @@ import androidx.compose.ui.unit.dp
                             color=Color.White,
                             shadowElevation=8.dp
                         ) {
-                            androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max=330.dp)) {
+                            androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max=240.dp)) {
                                 items(suggestions.size) { index ->
                                     val suggestion=suggestions[index]
                                     Row(
                                         Modifier.fillMaxWidth().clickable {
                                             onChange(d.copy(to=RecipientSuggestions.replaceToken(d.to,suggestion.email)))
                                             recipientEditing=false
-                                        }.heightIn(min=78.dp).padding(horizontal=16.dp,vertical=10.dp),
+                                        }.heightIn(min=68.dp).padding(horizontal=16.dp,vertical=6.dp),
                                         verticalAlignment=Alignment.CenterVertically
                                     ) {
                                         Surface(
