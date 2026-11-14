@@ -78,6 +78,8 @@ jobs:
       fail-fast: false
       matrix:
         test:
+          - pinchOnHistoryDoesNotOpenIt
+          - htmlHistoryControlRemainsVisibleWhenZoomHidesReaderChrome
           - smallPinchBelowZoomThresholdKeepsHistoryAndGeometryStable
           - receivedRichReplyExpandsAsHtmlAndBothPresentationsCanBeToggled
           - longHtmlCitationSharesScrollingAndRevealsItsFinalLine

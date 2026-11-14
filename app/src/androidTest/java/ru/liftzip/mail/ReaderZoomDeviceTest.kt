@@ -152,7 +152,10 @@ class ReaderZoomDeviceTest {
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
         rule.waitUntil(30_000){
             var ready=false
-            rule.runOnUiThread{ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100}
+            rule.runOnUiThread{// A requested generation can change before Chromium commits its scale.
+            // Assert the mode's observable scale before testing a pinch below it.
+            ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100 &&
+                abs(view.scale-view.resources.displayMetrics.density)<0.05f}
             ready
         }
         var base=0f
