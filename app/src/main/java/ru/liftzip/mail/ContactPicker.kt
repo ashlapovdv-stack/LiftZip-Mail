@@ -23,6 +23,7 @@ internal fun ContactPicker(
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<MailContact?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var choosing by remember { mutableStateOf<MailContact?>(null) }
     val shown = if (query.isBlank()) contacts else ContactAddresses.suggestions(contacts, query)
 
     Column(Modifier.fillMaxSize()) {
@@ -45,12 +46,18 @@ internal fun ContactPicker(
                     supportingContent = { Text(contact.emails.joinToString(", ")) },
                     modifier = Modifier.clickable { editing = contact; creating = false },
                     trailingContent = {
-                        TextButton(onClick = { onChoose(contact.emails.first()) }) { Text("Выбрать") }
+                        TextButton(onClick = { if(contact.emails.size==1) onChoose(contact.emails.first()) else choosing=contact }) { Text("Выбрать") }
                     }
                 )
                 HorizontalDivider()
             }
         }
+    }
+    choosing?.let { contact ->
+        AlertDialog(onDismissRequest={choosing=null},title={Text(contact.name)},
+            text={Column { contact.emails.forEach { email ->
+                TextButton(onClick={choosing=null;onChoose(email)}) { Text(email) }
+            } }},confirmButton={TextButton(onClick={choosing=null}){Text("Закрыть")}})
     }
     if (creating || editing != null) {
         val original = editing
