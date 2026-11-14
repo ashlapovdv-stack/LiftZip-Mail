@@ -49,6 +49,18 @@ internal class NativeHistoryControl(
                     field.get(view) as? MailHtmlDocument
                 }.getOrNull()
                 val html=document?.html.orEmpty()
+                if(view!=null) {
+                    val visible=Rect()
+                    val shown=view.getGlobalVisibleRect(visible)
+                    val chain=mutableListOf<String>()
+                    var ancestor: View?=view
+                    while(ancestor!=null) {
+                        val location=IntArray(2);ancestor.getLocationOnScreen(location)
+                        chain+="${ancestor.javaClass.simpleName}(shown=${ancestor.isShown},visibility=${ancestor.visibility},alpha=${ancestor.alpha},xy=${location.joinToString()},size=${ancestor.width}x${ancestor.height},scroll=${ancestor.scrollX},${ancestor.scrollY})"
+                        ancestor=ancestor.parent as? View
+                    }
+                    android.util.Log.e("MailHistoryDiagnosis","visible=$shown rect=$visible focus=${view.hasWindowFocus()} scale=${view.scale} relative=${view.relativeScale()} ancestors=${chain.joinToString(" -> ")}")
+                }
                 android.util.Log.e("MailHistoryDiagnosis",
                     "label=$label webView=${view!=null} attached=${view?.isAttachedToWindow} " +
                     "progress=${view?.progress} enabled=${view?.interactionEnabled} " +
@@ -67,6 +79,9 @@ internal class NativeHistoryControl(
             }
             collect(root,0)
             android.util.Log.e("MailHistoryDiagnosis","accessibilityRoot=${root!=null} labels=${descriptions.joinToString(" | ")}")
+            runCatching {
+                automation.takeScreenshot()?.let{saveDeviceBitmap(it,"history-accessibility-timeout")}
+            }.onFailure{android.util.Log.e("MailHistoryDiagnosis","Could not capture failure screen",it)}
             throw failure
         }
     }
