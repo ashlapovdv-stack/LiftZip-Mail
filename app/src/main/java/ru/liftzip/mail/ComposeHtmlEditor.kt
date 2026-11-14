@@ -36,7 +36,7 @@ internal class ComposeEditorSession {
     fun focus(){view?.let{it.requestFocus();it.evaluateJavascript("document.getElementById('editor').focus()",null)}}
     fun replaceText(text: String){view?.let{editor->if(editor.ready)editor.evaluateJavascript("window.LiftZipEditor.selectAll();window.LiftZipEditor.insert("+JSONObject.quote(ComposeContent.escaped(text).replace("\n","<br>"))+")",null)}}
     fun insertText(text: String){view?.insertHtml(ComposeContent.escaped(text).replace("\n","<br>"))}
-    fun appendImage(dataUri: String,cid: String){view?.appendImage(dataUri,cid)}
+    fun appendImage(uri: String,cid: String){view?.appendImage(uri,cid)}
     fun attach(editor: ComposeEditorWebView){view=editor}
     fun detach(editor: ComposeEditorWebView){if(view===editor)view=null}
     fun flush(draft: ComposeDraft,done: (ComposeDraft)->Unit) {
@@ -58,6 +58,12 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
     var ready=false;private set
     @Volatile private var alive=true
     private val pendingImages=mutableListOf<Pair<String,String>>()
+    private val imageSources=java.util.concurrent.ConcurrentHashMap<String,String>()
+    private fun imageUrl(uri: String): String {
+        val token=UUID.randomUUID().toString()
+        imageSources[token]=uri
+        return "https://compose.liftzip.invalid/inline/"+token
+    }
     init {
         session.accept(draftId,initial)
         setBackgroundColor(Color.WHITE)
@@ -81,7 +87,16 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
         },"EditorBridge")
         webViewClient=object: WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView,request: WebResourceRequest)=true
-            override fun shouldInterceptRequest(view: WebView,request: WebResourceRequest)=WebResourceResponse("text/plain","UTF-8",java.io.ByteArrayInputStream(ByteArray(0)))
+            override fun shouldInterceptRequest(view: WebView,request: WebResourceRequest): WebResourceResponse {
+                val url=request.url
+                val token=if(url.scheme=="https" && url.host=="compose.liftzip.invalid" && url.path?.startsWith("/inline/")==true)url.lastPathSegment else null
+                val source=token?.let { imageSources[it] }
+                if(source!=null) {
+                    val input=runCatching { context.contentResolver.openInputStream(android.net.Uri.parse(source)) }.getOrNull()
+                    if(input!=null)return WebResourceResponse("image/jpeg",null,input)
+                }
+                return WebResourceResponse("text/plain","UTF-8",java.io.ByteArrayInputStream(ByteArray(0)))
+            }
             override fun onPageFinished(view: WebView,url: String){
                 ready=true;applyEditable()
                 pendingImages.toList().also { pendingImages.clear() }.forEach { (data,cid)->appendImage(data,cid) }
@@ -91,10 +106,10 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
         val previewHtml=org.jsoup.Jsoup.parseBodyFragment(ComposerHtml.clean(initial)).also { doc->
             doc.select("img[src^=cid:]").forEach { img->
                 val cid=img.attr("src").substring(4)
-                previews[cid]?.let { data->img.attr("data-liftzip-cid",cid);img.attr("src",data) }
+                previews[cid]?.let { uri->img.attr("data-liftzip-cid",cid);img.attr("src",imageUrl(uri)) }
             }
         }.body().html()
-        val csp="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data:; frame-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'"
+        val csp="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src https://compose.liftzip.invalid/inline/; frame-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'"
         loadDataWithBaseURL("https://compose.liftzip.invalid/", """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="$csp"><style>
           html,body{margin:0;padding:0;background:white;color:#303030;font:16px/1.5 sans-serif}
           #editor{box-sizing:border-box;min-height:280px;padding:16px;outline:none;overflow-wrap:anywhere}
@@ -125,9 +140,9 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
     }
     fun setEditable(value: Boolean){if(value!=editingEnabled){editingEnabled=value;if(ready)applyEditable()}}
     private fun applyEditable(){evaluateJavascript("window.LiftZipEditor.enabled($editingEnabled)",null)}
-    fun appendImage(dataUri: String,cid: String){
-        if(!ready){pendingImages+=dataUri to cid;return}
-        evaluateJavascript("window.LiftZipEditor.appendImage(${JSONObject.quote(dataUri)},${JSONObject.quote(cid)})",null)
+    fun appendImage(uri: String,cid: String){
+        if(!ready){pendingImages+=uri to cid;return}
+        evaluateJavascript("window.LiftZipEditor.appendImage(${JSONObject.quote(imageUrl(uri))},${JSONObject.quote(cid)})",null)
     }
     fun insertHtml(html: String){if(ready)evaluateJavascript("window.LiftZipEditor.insert(${JSONObject.quote(ComposerHtml.clean(html))})",null)}
     fun pasteClipboard(plain: Boolean=false): Boolean {
@@ -172,9 +187,7 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
         AndroidView(factory={context->ComposeEditorWebView(context,draft.id,ComposerHtml.initial(draft),session,{html,plain->
             if(current.id==draft.id)change(current.copy(bodyHtml=html,body=plain))
         },{height=it},draft.filesToSend().filter{it.contentId.isNotBlank()}.mapNotNull { file->
-                runCatching { context.contentResolver.openInputStream(android.net.Uri.parse(file.uri))?.use { input->
-                    val bytes=input.readBytes();if(bytes.size<=1_000_000)file.contentId to ("data:${file.mime};base64,"+android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP)) else null
-                }}.getOrNull()
+                runCatching { file.contentId to file.uri }.getOrNull()
             }.filterNotNull().toMap()).also{view->session.attach(view);view.onFocusChangeListener=View.OnFocusChangeListener{_,focused->editorFocused=focused}}},
             update={view->view.setEditable(enabled)},
             onRelease={it.close()},
