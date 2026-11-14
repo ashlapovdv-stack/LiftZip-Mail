@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
     fun save()=session.flush(d){onChange(it);onBack(it)}
     fun send()=session.flush(d){onChange(it);onSend(it)}
     val context=LocalContext.current
+    val contactStore=remember(context.applicationContext){ContactStore(context.applicationContext)}
+    var showContacts by remember { mutableStateOf(false) }
     var senderMenu by remember(d.id){mutableStateOf(false)}
     var more by remember(d.id){mutableStateOf(false)}
     var copies by remember(d.id){mutableStateOf(d.cc.isNotBlank() || d.bcc.isNotBlank())}
@@ -59,6 +61,15 @@ import androidx.compose.ui.unit.dp
         if(files.size!=uris.size)attachmentError="Некоторые файлы недоступны. Выберите их из папки на устройстве."
         else if(files.any{it.size>20L*1024*1024}||(d.filesToSend()+files).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
         else {attachmentError=null;onChange(d.copy(attachments=(d.attachments+files).distinctBy{it.uri}))}
+    }
+    if(showContacts) androidx.compose.ui.window.Dialog(onDismissRequest={showContacts=false},properties=androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth=false)) {
+        Surface(Modifier.fillMaxSize(),color=Color.White) {
+            ContactPicker(contactStore,onChoose={address->
+                val previous=d.to.trim()
+                onChange(d.copy(to=if(previous.isEmpty())address else previous.trimEnd(',', ';', ' ')+", "+address))
+                showContacts=false
+            },onClose={showContacts=false})
+        }
     }
     Scaffold(containerColor=Color.White,modifier=Modifier.testTag("compose-screen"),topBar={
         TopAppBar(title={},colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White),navigationIcon={
@@ -94,6 +105,7 @@ import androidx.compose.ui.unit.dp
             }
             ComposeDivider()
             ComposeField("Кому",d.to,{onChange(d.copy(to=it))},!s.busy,email=true,trailing={
+                IconButton(onClick={showContacts=true},enabled=!s.busy){Icon(Icons.Outlined.Contacts,"Адресная книга")}
                 IconButton(onClick={copies=!copies},enabled=!s.busy,modifier=Modifier.semantics{stateDescription=if(copies)"Развернуто"else "Свернуто"}) {
                     Icon(if(copies)Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,"Копия и скрытая копия")
                 }
