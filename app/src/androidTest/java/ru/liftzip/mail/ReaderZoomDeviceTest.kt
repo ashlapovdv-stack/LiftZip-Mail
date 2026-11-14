@@ -254,10 +254,7 @@ class ReaderZoomDeviceTest {
         rule.setContent{MailTheme{reader(rich)}}
         val view=loaded()
         val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
-        traceChrome(view,"before history scroll")
-        history.performScrollTo()
-        traceChrome(view,"after history scroll")
-        history.assertIsDisplayed().performClick()
+        history.performScrollTo().assertIsDisplayed().performClick()
         history.assertExpanded(true)
         rule.waitUntil(15_000) {
             var ready=false
@@ -265,8 +262,9 @@ class ReaderZoomDeviceTest {
             ready
         }
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText(rich.subject).assertIsDisplayed()
+        rule.runOnIdle{assertEquals("Fixture must start at the top",0,view.scrollY)}
 
-        traceChrome(view,"before pinch")
         val focus=center()
         val density=view.resources.displayMetrics.density
         val pinch=Pinch(focus,48f*density)
@@ -280,7 +278,6 @@ class ReaderZoomDeviceTest {
         }
         rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
 
-        traceChrome(view,"after pinch")
         var generation=0L
         rule.runOnIdle{generation=view.documentGeneration()}
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
@@ -295,26 +292,80 @@ class ReaderZoomDeviceTest {
             assertSame("Switching HTML scale must retain the native reader",view,webView())
             assertEquals("Original HTML mode must use device density",density,view.scale,0.05f)
         }
-        // At the unzoomed native scale, Compose must no longer retain the
-        // hidden chrome state from the preceding pinch gesture.
+        // The short letter cannot retain a zoom-created scroll coordinate
+        // outside its base-scale extent. Both overlays must follow that extent.
         rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
-        traceChrome(view,"after original scale")
-        val subject=rule.onNodeWithText(rich.subject).fetchSemanticsNode()
-        val header=rule.onNodeWithTag("reader-message-header").fetchSemanticsNode()
-        val viewport=rule.onNodeWithTag("reader-viewport").fetchSemanticsNode()
-        android.util.Log.i("MailZoomRegression","after original scale: subject=${subject.boundsInRoot} header=${header.boundsInRoot} viewport=${viewport.boundsInRoot} nativeScroll=${view.scrollY} relativeScale=${view.relativeScale()}")
+        rule.onNodeWithText(rich.subject).assertIsDisplayed()
+        history.assertExpanded(true)
+        switchHtmlMode(view,"Подогнать HTML по ширине")
         rule.onNodeWithText(rich.subject).assertIsDisplayed()
         history.assertExpanded(true)
     }
 
-    private fun traceChrome(view: MailHtmlWebView,stage: String) {
-        val header=rule.onNodeWithTag("reader-message-header").fetchSemanticsNode()
-        val toolbar=rule.onNodeWithTag("reader-toolbar").fetchSemanticsNode()
+    @Test fun htmlModeAfterPinchWithoutHistoryRestoresHeaderAndRoundTripsAtTheTop() {
+        val short=message.copy(id="no-history-original-scale",subject="Без истории",body="Ответ",htmlBody="<p>Ответ</p>")
+        rule.setContent{MailTheme{reader(short)}}
+        val view=loaded()
+        rule.onNodeWithText(short.subject).assertIsDisplayed()
+        enlarge(view)
+        switchHtmlMode(view,"Оригинальный масштаб HTML")
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText(short.subject).assertIsDisplayed()
+        rule.onNodeWithText(short.senderEmail).assertIsDisplayed()
+        repeat(2) {
+            switchHtmlMode(view,"Подогнать HTML по ширине")
+            rule.onNodeWithText(short.subject).assertIsDisplayed()
+            switchHtmlMode(view,"Оригинальный масштаб HTML")
+            rule.onNodeWithText(short.subject).assertIsDisplayed()
+        }
+    }
+
+    @Test fun htmlModeAfterScrolledPinchPreservesTheReadingPointWithoutReturningToTheTop() {
+        val long=message.copy(id="scrolled-original-scale",subject="Прокрученное письмо",body="Ответ",htmlBody="<p>Ответ</p><div style='height:100000px'></div>")
+        rule.setContent{MailTheme{reader(long)}}
+        val view=loaded()
+        switchHtmlMode(view,"Оригинальный масштаб HTML")
+        rule.onNodeWithText(long.subject).assertIsDisplayed()
+        switchHtmlMode(view,"Подогнать HTML по ширине")
+        rule.onNodeWithText(long.subject).assertIsDisplayed()
+        rule.runOnIdle{view.scrollContent(5000)}
+        enlarge(view)
+        var readingPoint=0f
+        rule.runOnIdle{readingPoint=view.scrollY/view.scale}
+        repeat(2) {
+            for(label in listOf("Оригинальный масштаб HTML","Подогнать HTML по ширине")) {
+                switchHtmlMode(view,label)
+                rule.runOnIdle {
+                    assertTrue("Mode switch must not return a scrolled letter to the top",view.scrollY>1000)
+                    assertEquals("Mode switch moved the document point at the viewport top",readingPoint,view.scrollY/view.scale,3f)
+                }
+                rule.onNodeWithText(long.subject).assertIsNotDisplayed()
+            }
+        }
+    }
+
+    private fun enlarge(view: MailHtmlWebView) {
+        val density=view.resources.displayMetrics.density
+        val pinch=Pinch(center(),48f*density)
+        pinch.down()
+        for(step in 1..24)pinch.move((48f+80f*step/24)*density)
+        pinch.up()
+        rule.waitUntil(10_000){var enlarged=false;rule.runOnUiThread{enlarged=view.relativeScale()>1.5f};enlarged}
+    }
+
+    private fun switchHtmlMode(view: MailHtmlWebView,label: String) {
+        var revision=0L
+        rule.runOnIdle{revision=view.documentGeneration()}
+        rule.onNodeWithContentDescription(label).performClick()
+        rule.waitUntil(30_000){
+            var ready=false
+            rule.runOnUiThread{ready=view.documentGeneration()>revision && view.interactionEnabled && view.progress==100}
+            ready
+        }
         rule.runOnIdle {
-            val callback=MailHtmlWebView::class.java.getDeclaredField("verticalChanged").apply{isAccessible=true}.get(view)
-            val scroll=callback.javaClass.declaredFields.mapNotNull{field->field.isAccessible=true;field.get(callback) as? ReaderScroll}.single()
-            val position=IntArray(2);view.getLocationOnScreen(position)
-            android.util.Log.i("MailZoomRegression","$stage generation=${view.documentGeneration()} nativeScroll=${view.scrollY} relative=${view.relativeScale()} base=${view.fittedScale()} nativeScale=${view.scale} ownerScroll=${scroll.nativeScrollY} ownerRatio=${scroll.nativeScaleRatio} zoom=${scroll.zoomProgress} headerHeight=${scroll.headerHeight} headerOffset=${scroll.headerOffset} toolbarHidden=${scroll.toolbar.hiddenPixels} header=${header.boundsInRoot} toolbar=${toolbar.boundsInRoot} native=${position.toList()} viewport=${view.width}x${view.height}")
+            assertSame("HTML mode switch replaced the native reader",view,webView())
+            val maximum=(view.contentHeight*view.scale-view.height).coerceAtLeast(0f)
+            assertTrue("Restored scroll ${view.scrollY} exceeds the new document extent $maximum",view.scrollY<=maximum+3f)
         }
     }
 

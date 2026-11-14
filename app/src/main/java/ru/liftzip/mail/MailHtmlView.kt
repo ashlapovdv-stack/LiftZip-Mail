@@ -173,9 +173,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                                 if(anchor!=null && kotlin.math.abs(anchor.relativeScale-1f)>0.03f){
                                     zoomBy(anchor.relativeScale.coerceIn(0.01f,100f))
                                     postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(restoreRequest: Long){
-                                        if(live && restoreRequest==documentRevision){scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
+                                        if(live && restoreRequest==documentRevision){restoreReadingAnchor(anchor);publishHeight();ready()}
                                     }})
-                                }else {if(anchor!=null)scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());awaitingInitialLayout=true;publishHeight()}
+                                }else {if(anchor!=null)restoreReadingAnchor(anchor);awaitingInitialLayout=true;publishHeight()}
                             }
                         }})
                     }else {awaitingInitialLayout=true;publishHeight()}
@@ -183,6 +183,17 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             }
         }
     }
+    private fun restoreReadingAnchor(anchor: ReadingAnchor) {
+        // A mode change can shrink the native extent below the saved zoomed
+        // position. View.scrollTo does not enforce document bounds: restoring
+        // that coordinate would scroll the header past an unscrollable letter.
+        // Clamp only after this revision's scale and layout have committed.
+        val maxX=(computeHorizontalScrollRange()-width).coerceAtLeast(0)
+        val maxY=(contentHeight.toDouble()*renderScale-height).toInt().coerceAtLeast(0)
+        scrollTo((anchor.cssX*renderScale).roundToInt().coerceIn(0,maxX),
+            (anchor.cssY*renderScale).roundToInt().coerceIn(0,maxY))
+    }
+
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
         if(!live)return
         val zoom=(fontScale*100).toInt().coerceIn(50,300)
