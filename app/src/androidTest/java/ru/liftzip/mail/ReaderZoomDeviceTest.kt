@@ -244,6 +244,80 @@ class ReaderZoomDeviceTest {
         assertNoOverlap()
     }
 
+
+    @Test fun expandedHistoryPinchThenOriginalHtmlScaleRestoresChromeAtBaseScale() {
+        val rich=message.copy(
+            id="history-original-scale-chrome",
+            subject="История и исходный масштаб",
+            htmlBody="<p>Ответ</p><div class='gmail_quote'><p>Предыдущий текст</p></div>"
+        )
+        rule.setContent{MailTheme{reader(rich)}}
+        val view=loaded()
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        traceChrome(view,"before history scroll")
+        history.performScrollTo()
+        traceChrome(view,"after history scroll")
+        history.assertIsDisplayed().performClick()
+        history.assertExpanded(true)
+        rule.waitUntil(15_000) {
+            var ready=false
+            rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100}
+            ready
+        }
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+
+        traceChrome(view,"before pinch")
+        val focus=center()
+        val density=view.resources.displayMetrics.density
+        val pinch=Pinch(focus,48f*density)
+        pinch.down()
+        for(step in 1..24)pinch.move((48f+80f*step/24)*density)
+        pinch.up()
+        rule.waitUntil(10_000) {
+            var enlarged=false
+            rule.runOnUiThread{enlarged=view.relativeScale()>1.5f}
+            enlarged
+        }
+        rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+
+        traceChrome(view,"after pinch")
+        var generation=0L
+        rule.runOnIdle{generation=view.documentGeneration()}
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000) {
+            var ready=false
+            rule.runOnUiThread {
+                ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100
+            }
+            ready
+        }
+        rule.runOnIdle {
+            assertSame("Switching HTML scale must retain the native reader",view,webView())
+            assertEquals("Original HTML mode must use device density",density,view.scale,0.05f)
+        }
+        // At the unzoomed native scale, Compose must no longer retain the
+        // hidden chrome state from the preceding pinch gesture.
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        traceChrome(view,"after original scale")
+        val subject=rule.onNodeWithText(rich.subject).fetchSemanticsNode()
+        val header=rule.onNodeWithTag("reader-message-header").fetchSemanticsNode()
+        val viewport=rule.onNodeWithTag("reader-viewport").fetchSemanticsNode()
+        android.util.Log.i("MailZoomRegression","after original scale: subject=${subject.boundsInRoot} header=${header.boundsInRoot} viewport=${viewport.boundsInRoot} nativeScroll=${view.scrollY} relativeScale=${view.relativeScale()}")
+        rule.onNodeWithText(rich.subject).assertIsDisplayed()
+        history.assertExpanded(true)
+    }
+
+    private fun traceChrome(view: MailHtmlWebView,stage: String) {
+        val header=rule.onNodeWithTag("reader-message-header").fetchSemanticsNode()
+        val toolbar=rule.onNodeWithTag("reader-toolbar").fetchSemanticsNode()
+        rule.runOnIdle {
+            val callback=MailHtmlWebView::class.java.getDeclaredField("verticalChanged").apply{isAccessible=true}.get(view)
+            val scroll=callback.javaClass.declaredFields.mapNotNull{field->field.isAccessible=true;field.get(callback) as? ReaderScroll}.single()
+            val position=IntArray(2);view.getLocationOnScreen(position)
+            android.util.Log.i("MailZoomRegression","$stage generation=${view.documentGeneration()} nativeScroll=${view.scrollY} relative=${view.relativeScale()} base=${view.fittedScale()} nativeScale=${view.scale} ownerScroll=${scroll.nativeScrollY} ownerRatio=${scroll.nativeScaleRatio} zoom=${scroll.zoomProgress} headerHeight=${scroll.headerHeight} headerOffset=${scroll.headerOffset} toolbarHidden=${scroll.toolbar.hiddenPixels} header=${header.boundsInRoot} toolbar=${toolbar.boundsInRoot} native=${position.toList()} viewport=${view.width}x${view.height}")
+        }
+    }
+
     private fun assertStableViewport(samples: List<Sample>) {
         val heights=samples.map{it.height}.distinct()
         val heightChanges=samples.zipWithNext().count{it.first.height!=it.second.height}
