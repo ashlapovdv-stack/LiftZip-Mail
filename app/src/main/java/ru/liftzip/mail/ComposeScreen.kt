@@ -4,6 +4,9 @@ package ru.liftzip.mail
 import android.content.ClipData
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.core.content.FileProvider
+import androidx.compose.runtime.saveable.rememberSaveable
 import android.util.Base64
 import java.io.ByteArrayOutputStream
 import android.net.Uri
@@ -53,6 +56,7 @@ import androidx.compose.ui.unit.dp
     var attachmentError by remember(d.id){mutableStateOf<String?>(null)}
     var confirmResend by remember(d.id){mutableStateOf(false)}
     var attachmentMenu by remember(d.id){mutableStateOf(false)}
+    var pendingCameraPath by rememberSaveable(d.id){mutableStateOf<String?>(null)}
     val colors=MaterialTheme.colorScheme.copy(surface=Color.White,background=Color.White,onBackground=Color(0xFF303030),onSurface=Color(0xFF303030),onSurfaceVariant=Color(0xFF777777),surfaceContainer=Color.White)
     MaterialTheme(colorScheme=colors) {
     SystemBarIcons(forceLightSurface=true)
@@ -70,13 +74,36 @@ import androidx.compose.ui.unit.dp
         else if(files.any{it.size>20L*1024*1024}||(d.filesToSend()+files).sumOf{it.size.coerceAtLeast(0)}>25L*1024*1024)attachmentError="До 20 МБ на файл и 25 МБ суммарно."
         else {attachmentError=null;onChange(d.copy(attachments=(d.attachments+files).distinctBy{it.uri}))}
     }
-    val capturePhoto=rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()){bitmap->
-        if(bitmap!=null) {
-            val output=ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG,85,output)
-            val uri="data:image/jpeg;base64,"+Base64.encodeToString(output.toByteArray(),Base64.NO_WRAP)
-            session.appendImage(uri)
-        }
+    val capturePhoto=rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()){success->
+        val path=pendingCameraPath
+        pendingCameraPath=null
+        if(success && path!=null) {
+            runCatching {
+                val file=java.io.File(path)
+                val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+                BitmapFactory.decodeFile(path,bounds)
+                require(bounds.outWidth>0 && bounds.outHeight>0) { "Снимок не сохранён" }
+                var sample=1
+                while(maxOf(bounds.outWidth,bounds.outHeight)/sample>1600)sample*=2
+                val options=BitmapFactory.Options().apply { inSampleSize=sample }
+                val bitmap=BitmapFactory.decodeFile(path,options)?:error("Не удалось прочитать снимок")
+                val output=ByteArrayOutputStream()
+                try { check(bitmap.compress(Bitmap.CompressFormat.JPEG,82,output)) }
+                finally { bitmap.recycle() }
+                require(output.size()<=3*1024*1024) { "Фотография слишком большая" }
+                session.appendImage("data:image/jpeg;base64,"+Base64.encodeToString(output.toByteArray(),Base64.NO_WRAP))
+                file.delete()
+            }.onFailure { attachmentError="Не удалось вставить фото: "+(it.message?:"ошибка чтения") }
+        } else if(path!=null) java.io.File(path).delete()
+    }
+    fun openCamera() {
+        runCatching {
+            val dir=java.io.File(context.cacheDir,"attachments").apply{mkdirs()}
+            val photo=java.io.File.createTempFile("camera_",".jpg",dir)
+            pendingCameraPath=photo.absolutePath
+            val uri=FileProvider.getUriForFile(context,context.packageName+".attachments",photo)
+            capturePhoto.launch(uri)
+        }.onFailure { attachmentError="Не удалось открыть камеру";pendingCameraPath=null }
     }
     if(showContacts) androidx.compose.ui.window.Dialog(onDismissRequest={showContacts=false},properties=androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth=false)) {
         Surface(Modifier.fillMaxSize(),color=Color.White) {
@@ -99,7 +126,7 @@ import androidx.compose.ui.unit.dp
                     DropdownMenuItem(text={Text("Фото")},leadingIcon={Icon(Icons.Outlined.PhotoLibrary,null)},
                         onClick={attachmentMenu=false;addFiles.launch(arrayOf("image/*"))})
                     DropdownMenuItem(text={Text("Камера")},leadingIcon={Icon(Icons.Outlined.PhotoCamera,null)},
-                        onClick={attachmentMenu=false;capturePhoto.launch(null)})
+                        onClick={attachmentMenu=false;openCamera()})
                     DropdownMenuItem(text={Text("Файлы")},leadingIcon={Icon(Icons.Outlined.InsertDriveFile,null)},
                         onClick={attachmentMenu=false;addFiles.launch(arrayOf("*/*"))})
                 }
