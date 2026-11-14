@@ -83,6 +83,7 @@ jobs:
           - smallPinchBelowZoomThresholdKeepsHistoryAndGeometryStable
           - receivedRichReplyExpandsAsHtmlAndBothPresentationsCanBeToggled
           - longHtmlCitationSharesScrollingAndRevealsItsFinalLine
+          - replyingAgainKeepsTheHistoryButtonForAFlattenedProviderAlternative
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -104,13 +105,14 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -no-metrics
           script: |
-            bash -c 'status=0; bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderDeviceTest#${{ matrix.test }} -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000 || status=$?; adb logcat -d -v threadtime -s chromium:E AndroidRuntime:E TestRunner:I MailHistoryDiagnosis:E > isolated-log.txt || true; adb pull /data/local/tmp/liftzip-ui-checks isolated-ui || true; adb shell dumpsys window > isolated-window.txt || true; adb shell dumpsys activity activities > isolated-activities.txt || true; adb shell dumpsys activity processes > isolated-processes.txt || true; exit "$status"'
+            bash scripts/isolated-reader-test.sh "${{ matrix.test }}"
       - name: Preserve isolated failure evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: isolated-${{ matrix.test }}
           path: |
+            isolated-evidence/
             isolated-ui/
             isolated-log.txt
             isolated-window.txt

@@ -19,6 +19,17 @@ internal class NativeHistoryControl(
     private val label: String
 ) {
     private fun node(): AccessibilityNodeInfo? {
+        // Chromium's provider is lazy and may auto-disable when UiAutomation
+        // is the only service. Query the real provider on its owning thread
+        // before traversing the framework tree, just as an Android service does.
+        rule.runOnUiThread {
+            fun locate(view: View): MailHtmlWebView? {
+                if(view is MailHtmlWebView)return view
+                if(view is ViewGroup)for(i in 0 until view.childCount)locate(view.getChildAt(i))?.let{return it}
+                return null
+            }
+            locate(rule.activity.window.decorView)?.accessibilityNodeProvider
+        }
         fun find(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
             root ?: return null
             if(root.contentDescription?.toString()==label || root.text?.toString()==label)return root
