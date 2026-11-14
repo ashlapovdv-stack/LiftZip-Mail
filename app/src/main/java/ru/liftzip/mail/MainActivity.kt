@@ -950,7 +950,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 MailHtmlBody(readingSource,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},readingHistory,onInline,readerLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
-                    val zoomed=progress>0.001f
+                    val zoomed=kotlin.math.abs(scroll.nativeScaleRatio-1f)>0.03f
                     htmlZoomed=zoomed
                 },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true},externalImageState=externalImageState,onImageAvailability={hasExternalImages=it},showImageControl=false)
             }
