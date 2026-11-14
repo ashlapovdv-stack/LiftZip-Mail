@@ -609,7 +609,15 @@ class ReaderZoomDeviceTest {
         rule.setContent{MailTheme{reader(wide)}}
         val view=loaded()
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
-        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100 && abs(view.scale-view.resources.displayMetrics.density)<0.05f};ready}
+        try {
+            rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100 && abs(view.scale-view.resources.displayMetrics.density)<0.05f};ready}
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            var state=""
+            rule.runOnUiThread {
+                state="interaction=${view.interactionEnabled} progress=${view.progress} scale=${view.scale} density=${view.resources.displayMetrics.density} fittedScale=${view.fittedScale()} relativeScale=${view.relativeScale()} revision=${view.documentGeneration()} contentHeight=${view.contentHeight} viewport=${view.width}x${view.height}"
+            }
+            throw AssertionError("Original HTML mode did not reach its expected scale: $state",failure)
+        }
         rule.runOnIdle{view.zoomBy(0.7f)}
         rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
         rule.runOnIdle{
