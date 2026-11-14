@@ -18,6 +18,7 @@ internal class NativeHistoryControl(
     private val rule: AndroidComposeTestRule<ActivityScenarioRule<ComponentActivity>, ComponentActivity>,
     private val label: String
 ) {
+    private fun trace(stage: String) { android.util.Log.i("MailHistoryDiag", "stage=$stage label=$label") }
     private fun node(): AccessibilityNodeInfo? {
         fun find(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
             root ?: return null
@@ -32,7 +33,7 @@ internal class NativeHistoryControl(
         return find(automation.rootInActiveWindow)
     }
     fun exists() = node()!=null
-    fun assertExists()=apply { rule.waitUntil(15_000){exists()} }
+    fun assertExists()=apply { trace("wait-node-start"); rule.waitUntil(15_000){exists()}; trace("wait-node-ready") }
     fun assertIsDisplayed()=apply { assertExists();assertTrue(node()!!.isVisibleToUser) }
     fun performScrollTo()=apply {
         if(!exists()) {
@@ -57,8 +58,11 @@ internal class NativeHistoryControl(
         rule.waitForIdle()
     }
     fun performClick()=apply {
+        trace("click-start")
         assertIsDisplayed()
-        assertTrue("Native history button must accept clicks",node()!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        val accepted=node()!!.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        android.util.Log.i("MailHistoryDiag", "click-accepted=$accepted")
+        assertTrue("Native history button must accept clicks",accepted)
         rule.waitForIdle()
     }
     data class Bounds(val boundsInRoot: ComposeRect)
@@ -70,6 +74,7 @@ internal class NativeHistoryControl(
         return Bounds(ComposeRect(r.left-origin[0]-root.left,r.top-origin[1]-root.top,r.right-origin[0]-root.left,r.bottom-origin[1]-root.top))
     }
     fun assertExpanded(expanded: Boolean)=apply {
+        trace("wait-expanded-$expanded-start")
         rule.waitUntil(15_000) {
             var result=false
             rule.runOnUiThread {
@@ -87,5 +92,6 @@ internal class NativeHistoryControl(
             }
             result
         }
+        trace("wait-expanded-$expanded-ready")
     }
 }
