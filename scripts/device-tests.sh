@@ -7,7 +7,7 @@ if [ "$device_test_status" -ne 0 ]; then
     # Preserve the first failure's real diagnostics, not just the Gradle summary.
     # Renderer-crash tests can affect subsequent instrumentation cases; keep the
     # Android process and WebView crash evidence to distinguish cascade from defect.
-    adb logcat -d -v threadtime -s AndroidRuntime:E chromium:E cr_ChildProcessConn:E ActivityManager:W TestRunner:I MailReaderReady:I '*:S' > device-timeout.txt || true
+    adb logcat -d -v threadtime -s AndroidRuntime:E chromium:E cr_ChildProcessConn:E ActivityManager:W TestRunner:I MailReaderReady:I MailHistoryDiag:I '*:S' > device-timeout.txt || true
     echo "Device test failure: Android runtime and renderer diagnostics saved to device-timeout.txt"
     grep -E 'FATAL EXCEPTION|Process .* has died|onRenderProcessGone|chromium|TestRunner' device-timeout.txt | tail -n 80 || true
 fi
