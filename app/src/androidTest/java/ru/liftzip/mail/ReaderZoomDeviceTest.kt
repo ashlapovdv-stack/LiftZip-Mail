@@ -523,13 +523,15 @@ class ReaderZoomDeviceTest {
         }
         assertTrue("Fixture's table must be painted before pinch",paintedRows()>30)
         repeat(3){cycle->
+            rule.runOnIdle{android.util.Log.i("MailReaderReady","painted before cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
             val pinch=Pinch(center(),100f*density)
             pinch.down()
-            for(step in 1..24)pinch.move((100f-30f*step/24)*density)
+            for(step in 1..24)pinch.move((100f-60f*step/24)*density)
             pinch.up()
             rule.waitUntil(15_000){var shrunk=false;rule.runOnUiThread{shrunk=view.relativeScale()<0.9f};shrunk}
             rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertIsDisplayed()
             assertTrue("Table must remain painted before reset $cycle",paintedRows()>15)
+            rule.runOnIdle{android.util.Log.i("MailReaderReady","painted shrunk cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
             rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
             rule.waitUntil(15_000){var initial=false;rule.runOnUiThread{initial=abs(view.relativeScale()-1f)<0.03f};initial}
             // Synchronize with the actual renderer, then inspect pixels, not just scale/scroll.
