@@ -105,7 +105,14 @@ import androidx.compose.ui.unit.dp
                     } while(output.size()>900_000 && quality>=55)
                 } finally { bitmap.recycle() }
                 require(output.size()<=1_000_000) { "Не удалось уменьшить фото до 1 МБ" }
-                session.appendImage("data:image/jpeg;base64,"+Base64.encodeToString(output.toByteArray(),Base64.NO_WRAP))
+                val cid="camera-"+java.util.UUID.randomUUID().toString()+"@liftzip.mail"
+                val dir=java.io.File(context.filesDir,"inline-photos").apply{mkdirs()}
+                val stored=java.io.File(dir,java.util.UUID.randomUUID().toString()+".jpg")
+                stored.outputStream().use{it.write(output.toByteArray())}
+                val uri=FileProvider.getUriForFile(context,context.packageName+".attachments",stored)
+                val attachment=OutgoingFile(uri.toString(),"photo.jpg","image/jpeg",stored.length(),cid)
+                onChange(d.copy(attachments=d.attachments+attachment))
+                session.appendImage("data:image/jpeg;base64,"+Base64.encodeToString(output.toByteArray(),Base64.NO_WRAP),cid)
                 file.delete()
             }.onFailure { attachmentError="Не удалось вставить фото: "+(it.message?:"ошибка чтения") }
         } else if(path!=null) java.io.File(path).delete()
