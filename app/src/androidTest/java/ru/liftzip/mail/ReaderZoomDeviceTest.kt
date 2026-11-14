@@ -514,10 +514,23 @@ class ReaderZoomDeviceTest {
         rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100 && abs(view.scale-view.resources.displayMetrics.density)<0.05f};ready}
         rule.runOnIdle{view.zoomBy(0.7f)}
         rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
-        rule.runOnIdle{assertTrue("The document must actually shrink",view.relativeScale()<0.9f)}
+        var anchorBefore=0f
+        rule.runOnIdle{
+            assertTrue("The document must actually shrink",view.relativeScale()<0.9f)
+            anchorBefore=(view.scrollY+view.height/2f)/view.scale
+        }
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
         rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isEmpty()}
-        rule.runOnIdle{assertEquals(1f,view.relativeScale(),0.04f)}
+        view.afterVisualLayout {
+            // The visual callback also gates the viewport-anchor restoration.
+        }
+        rule.waitForIdle()
+        rule.runOnIdle{
+            assertEquals(1f,view.relativeScale(),0.04f)
+            val anchorAfter=(view.scrollY+view.height/2f)/view.scale
+            assertEquals("Reset moved the document away from the reading viewport",
+                anchorBefore,anchorAfter,20f)
+        }
     }
 
 
