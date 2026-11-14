@@ -102,10 +102,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -no-metrics
           script: |
-            status=0
-            bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderDeviceTest#${{ matrix.test }} -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000 || status=$?
-            adb logcat -d -v threadtime -s chromium:E AndroidRuntime:E TestRunner:I MailHistoryDiagnosis:E > isolated-log.txt || true
-            exit "$status"
+            bash -c 'status=0; bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ru.liftzip.mail.ReaderDeviceTest#${{ matrix.test }} -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000 || status=$?; adb logcat -d -v threadtime -s chromium:E AndroidRuntime:E TestRunner:I MailHistoryDiagnosis:E > isolated-log.txt || true; exit "$status"'
       - name: Preserve isolated failure evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
