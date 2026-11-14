@@ -521,10 +521,14 @@ class ReaderZoomDeviceTest {
         }
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
         rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isEmpty()}
-        view.afterVisualLayout {
-            // The visual callback also gates the viewport-anchor restoration.
+        rule.waitUntil(15_000){
+            var restored=false
+            rule.runOnUiThread {
+                val after=(view.scrollY+view.height/2f)/view.scale
+                restored=abs(after-anchorBefore)<20f
+            }
+            restored
         }
-        rule.waitForIdle()
         rule.runOnIdle{
             assertEquals(1f,view.relativeScale(),0.04f)
             val anchorAfter=(view.scrollY+view.height/2f)/view.scale
