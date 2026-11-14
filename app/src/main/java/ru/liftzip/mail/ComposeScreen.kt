@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.dp
     val context=LocalContext.current
     val contactStore=remember(context.applicationContext){ContactStore(context.applicationContext)}
     var showContacts by remember { mutableStateOf(false) }
+    var knownContacts by remember { mutableStateOf(contactStore.all()) }
+    var recipientEditing by remember { mutableStateOf(false) }
     var senderMenu by remember(d.id){mutableStateOf(false)}
     var more by remember(d.id){mutableStateOf(false)}
     var copies by remember(d.id){mutableStateOf(d.cc.isNotBlank() || d.bcc.isNotBlank())}
@@ -68,7 +70,8 @@ import androidx.compose.ui.unit.dp
                 val previous=d.to.trim()
                 onChange(d.copy(to=if(previous.isEmpty())address else previous.trimEnd(',', ';', ' ')+", "+address))
                 showContacts=false
-            },onClose={showContacts=false})
+                knownContacts=contactStore.all()
+            },onClose={showContacts=false;knownContacts=contactStore.all()})
         }
     }
     Scaffold(containerColor=Color.White,modifier=Modifier.testTag("compose-screen"),topBar={
@@ -104,12 +107,29 @@ import androidx.compose.ui.unit.dp
                 }}
             }
             ComposeDivider()
-            ComposeField("Кому",d.to,{onChange(d.copy(to=it))},!s.busy,email=true,trailing={
+            ComposeField("Кому",d.to,{onChange(d.copy(to=it));recipientEditing=true},!s.busy,email=true,trailing={
                 IconButton(onClick={showContacts=true},enabled=!s.busy){Icon(Icons.Outlined.Contacts,"Адресная книга")}
                 IconButton(onClick={copies=!copies},enabled=!s.busy,modifier=Modifier.semantics{stateDescription=if(copies)"Развернуто"else "Свернуто"}) {
                     Icon(if(copies)Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,"Копия и скрытая копия")
                 }
             })
+            val suggestions=remember(d.to,knownContacts,s.messages,recipientEditing) {
+                if(recipientEditing) RecipientSuggestions.search(knownContacts,s.messages,d.to) else emptyList()
+            }
+            if(suggestions.isNotEmpty()) Column(Modifier.fillMaxWidth().padding(start=100.dp,end=16.dp)) {
+                suggestions.forEach { suggestion ->
+                    Row(Modifier.fillMaxWidth().clickable {
+                        onChange(d.copy(to=RecipientSuggestions.replaceToken(d.to,suggestion.email)))
+                        recipientEditing=false
+                    }.padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(suggestion.label,style=MaterialTheme.typography.bodyMedium)
+                            if(suggestion.label!=suggestion.email) Text(suggestion.email,style=MaterialTheme.typography.bodySmall)
+                        }
+                        if(suggestion.saved) Text("Контакт",style=MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
             if(copies) {
                 ComposeField("Копия",d.cc,{onChange(d.copy(cc=it))},!s.busy,email=true)
                 ComposeField("Скр. копия",d.bcc,{onChange(d.copy(bcc=it))},!s.busy,email=true)
