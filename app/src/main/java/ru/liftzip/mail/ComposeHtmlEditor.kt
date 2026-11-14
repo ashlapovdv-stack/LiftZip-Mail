@@ -57,6 +57,7 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
     private var editingEnabled=true
     var ready=false;private set
     @Volatile private var alive=true
+    private val pendingImages=mutableListOf<Pair<String,String>>()
     init {
         session.accept(draftId,initial)
         setBackgroundColor(Color.WHITE)
@@ -81,7 +82,10 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
         webViewClient=object: WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView,request: WebResourceRequest)=true
             override fun shouldInterceptRequest(view: WebView,request: WebResourceRequest)=WebResourceResponse("text/plain","UTF-8",java.io.ByteArrayInputStream(ByteArray(0)))
-            override fun onPageFinished(view: WebView,url: String){ready=true;applyEditable()}
+            override fun onPageFinished(view: WebView,url: String){
+                ready=true;applyEditable()
+                pendingImages.toList().also { pendingImages.clear() }.forEach { (data,cid)->appendImage(data,cid) }
+            }
         }
         val nonce=UUID.randomUUID().toString()
         val previewHtml=org.jsoup.Jsoup.parseBodyFragment(ComposerHtml.clean(initial)).also { doc->
@@ -121,7 +125,10 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
     }
     fun setEditable(value: Boolean){if(value!=editingEnabled){editingEnabled=value;if(ready)applyEditable()}}
     private fun applyEditable(){evaluateJavascript("window.LiftZipEditor.enabled($editingEnabled)",null)}
-    fun appendImage(dataUri: String,cid: String){if(ready)evaluateJavascript("window.LiftZipEditor.appendImage(${JSONObject.quote(dataUri)},${JSONObject.quote(cid)})",null)}
+    fun appendImage(dataUri: String,cid: String){
+        if(!ready){pendingImages+=dataUri to cid;return}
+        evaluateJavascript("window.LiftZipEditor.appendImage(${JSONObject.quote(dataUri)},${JSONObject.quote(cid)})",null)
+    }
     fun insertHtml(html: String){if(ready)evaluateJavascript("window.LiftZipEditor.insert(${JSONObject.quote(ComposerHtml.clean(html))})",null)}
     fun pasteClipboard(plain: Boolean=false): Boolean {
         val clip=(context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?:return false
