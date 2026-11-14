@@ -1,0 +1,59 @@
+name: Kimi Code connection
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [setup/kimi-code]
+    paths: ['.github/workflows/kimi-code.yml']
+
+permissions: {}
+
+concurrency:
+  group: kimi-code-connection
+  cancel-in-progress: false
+
+jobs:
+  connection:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Install official Kimi Code CLI
+        run: npm install --global @moonshot-ai/kimi-code
+      - name: Check Kimi Code connection without project access
+        env:
+          KIMI_MODEL_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          KIMI_MODEL_NAME: kimi-for-coding
+          KIMI_MODEL_BASE_URL: https://api.kimi.com/coding/v1
+          KIMI_MODEL_PROVIDER_TYPE: kimi
+          KIMI_DISABLE_TELEMETRY: '1'
+          KIMI_CODE_NO_AUTO_UPDATE: '1'
+          KIMI_LOG_LEVEL: off
+          KIMI_LOOP_MAX_STEPS_PER_TURN: '1'
+          KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: '1'
+          KIMI_MODEL_MAX_COMPLETION_TOKENS: '256'
+          KIMI_CODE_HOME: ${{ runner.temp }}/kimi-connection-home
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$KIMI_MODEL_API_KEY" ]; then
+            echo "::error::Repository secret KIMI_API_KEY is missing or empty."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/kimi-connection-empty"
+          cd "$RUNNER_TEMP/kimi-connection-empty"
+          kimi --version
+          timeout 180 kimi -p 'Connection test only. Do not use tools or read any files. Reply with exactly KIMI_CONNECTION_OK.' > "$RUNNER_TEMP/kimi-connection-answer.txt" 2> "$RUNNER_TEMP/kimi-connection-error.txt" || {
+            echo "::error::Kimi Code connection failed. Check key validity and Code quota. No fallback to Moonshot paid API is configured."
+            exit 1
+          }
+          if ! grep -q 'KIMI_CONNECTION_OK' "$RUNNER_TEMP/kimi-connection-answer.txt"; then
+            echo "::error::Kimi Code did not return the expected connection marker."
+            exit 1
+          fi
+          echo 'Kimi Code connection succeeded.'
+          echo '### Kimi Code connection succeeded' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Official CLI returned the expected marker. No repository checkout, source changes, or GitHub write token were used.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove temporary credentials and logs
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/kimi-connection-home" "$RUNNER_TEMP/kimi-connection-empty" "$RUNNER_TEMP/kimi-connection-answer.txt" "$RUNNER_TEMP/kimi-connection-error.txt"
