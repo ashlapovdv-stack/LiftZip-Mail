@@ -64,7 +64,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     private var layoutRevision=0L
     private var layoutPending=false
     private var awaitingInitialLayout=false
-    private data class ReadingAnchor(val relativeScale: Float,val cssX: Float,val cssY: Float)
+    private data class ReadingAnchor(val relativeScale: Float,val cssX: Float,val cssY: Float,
+        val viewportX: Float=0f,val viewportY: Float=0f)
     private var pendingAnchor: ReadingAnchor?=null
     private var deferredAnchor: ReadingAnchor?=null
     @Volatile private var live=true
@@ -190,8 +191,8 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         // Clamp only after this revision's scale and layout have committed.
         val maxX=(computeHorizontalScrollRange()-width).coerceAtLeast(0)
         val maxY=(contentHeight.toDouble()*renderScale-height).toInt().coerceAtLeast(0)
-        scrollTo((anchor.cssX*renderScale).roundToInt().coerceIn(0,maxX),
-            (anchor.cssY*renderScale).roundToInt().coerceIn(0,maxY))
+        scrollTo((anchor.cssX*renderScale-anchor.viewportX).roundToInt().coerceIn(0,maxX),
+            (anchor.cssY*renderScale-anchor.viewportY).roundToInt().coerceIn(0,maxY))
     }
 
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
@@ -232,20 +233,20 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         if(!live || renderScale<=0f)return
         val ratio=base/renderScale
         if(!ratio.isFinite() || kotlin.math.abs(ratio-1f)<0.001f)return
-        // Preserve the document point at the centre of the reading viewport.
-        // Chromium's default zoom focal point can land in the oversized reader
-        // inset when zooming back in from a scale below the original.
-        val anchorX=(scrollX+width/2f)/renderScale
-        val anchorY=(scrollY+height/2f)/renderScale
+        // The native window stays screen-sized even for a short letter. Its
+        // centre can be empty canvas: preserving it moves the actual letter
+        // above/left of the viewport when resetting from a smaller scale.
+        // Restoring a reduced page crops the visible text: keep its reading edge.
+        // Zooming back out retains the established centre focal point instead.
+        val viewportX=if(renderScale<base)0f else width/2f
+        val viewportY=if(renderScale<base)0f else height/2f
+        val anchor=ReadingAnchor(1f,(scrollX+viewportX)/renderScale,(scrollY+viewportY)/renderScale,viewportX,viewportY)
         val revision=documentRevision
         zoomBy(ratio.coerceIn(0.01f,100f))
         postVisualStateCallback(revision,object: WebView.VisualStateCallback(){
             override fun onComplete(requestId: Long) {
                 if(!live || requestId!=documentRevision || width<=0 || height<=0)return
-                val maxX=(computeHorizontalScrollRange()-width).coerceAtLeast(0)
-                val maxY=(contentHeight.toDouble()*renderScale-height).toInt().coerceAtLeast(0)
-                scrollTo((anchorX*renderScale-width/2f).roundToInt().coerceIn(0,maxX),
-                    (anchorY*renderScale-height/2f).roundToInt().coerceIn(0,maxY))
+                restoreReadingAnchor(anchor)
             }
         })
     }

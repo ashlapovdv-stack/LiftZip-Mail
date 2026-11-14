@@ -70,12 +70,20 @@ class ReaderDeviceTest {
         rule.runOnIdle{revision=view.documentGeneration()}
         toggle.performScrollTo().assertIsDisplayed().performClick()
         toggle.assertExpanded(expanded)
-        rule.waitUntil(15_000) {
-            var ready=false
-            // Unified HTML history updates the document inside the SAME native WebView.
-            // Plain history still changes only Compose controls, without a reload.
-            rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
-            ready
+        try {
+            rule.waitUntil(15_000) {
+                var ready=false
+                // Capture the actual WebView state, rather than treating a timeout
+                // as proof that the citation rendering itself failed.
+                rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
+                ready
+            }
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            var state=""
+            rule.runOnUiThread {
+                state="expanded=$expanded previousRevision=$revision currentRevision=${view.documentGeneration()} progress=${view.progress} interaction=${view.interactionEnabled} contentHeight=${view.contentHeight} viewHeight=${view.height} url=${view.url}"
+            }
+            throw AssertionError("HTML history did not become ready: $state",failure)
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
     }

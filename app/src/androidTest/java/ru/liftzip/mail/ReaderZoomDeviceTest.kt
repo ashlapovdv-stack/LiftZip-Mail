@@ -506,34 +506,127 @@ class ReaderZoomDeviceTest {
             rule.runOnIdle{assertSame(view,webView())}
         }
     }
+    @Test fun shrinkingOriginalHtmlThenResetKeepsPaintedLetterVisible() {
+        val wide=message.copy(id="painted-original-reset",subject="Видимое содержимое после сброса",
+            htmlBody="<table width='1200' style='background:#00ff00'><tr><td style='height:60px'>Контрольный текст широкой таблицы</td></tr></table><div class='gmail_quote'><p>Предыдущий текст</p></div>")
+        rule.setContent{MailTheme{reader(wide)}}
+        val view=loaded()
+        switchHtmlMode(view,"Оригинальный масштаб HTML")
+        val density=view.resources.displayMetrics.density
+        fun paintedRows(): Int {
+            val bitmap=rule.onRoot().captureToImage().asAndroidBitmap()
+            val row=IntArray(bitmap.width)
+            return (0 until bitmap.height).count{y->
+                bitmap.getPixels(row,0,bitmap.width,0,y,bitmap.width,1)
+                row.count{Color.green(it)>220 && Color.red(it)<35 && Color.blue(it)<35}>bitmap.width/4
+            }
+        }
+        assertTrue("Fixture's table must be painted before pinch",paintedRows()>30)
+        repeat(3){cycle->
+            if(cycle==1) {
+                var revision=0L
+                rule.runOnIdle{revision=view.documentGeneration()}
+                NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertIsDisplayed().performClick()
+                rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.documentGeneration()>revision && view.interactionEnabled && view.progress==100};ready}
+            }
+            rule.runOnIdle{android.util.Log.i("MailReaderReady","painted before cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
+            val pinch=Pinch(center(),100f*density)
+            pinch.down()
+            for(step in 1..24)pinch.move((100f-60f*step/24)*density)
+            pinch.up()
+            rule.waitUntil(15_000){var shrunk=false;rule.runOnUiThread{shrunk=view.relativeScale()<0.9f};shrunk}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertIsDisplayed()
+            assertTrue("Table must remain painted before reset $cycle",paintedRows()>15)
+            rule.runOnIdle{android.util.Log.i("MailReaderReady","painted shrunk cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+            rule.waitUntil(15_000){var initial=false;rule.runOnUiThread{initial=abs(view.relativeScale()-1f)<0.03f};initial}
+            // Synchronize with the actual renderer, then inspect pixels, not just scale/scroll.
+            val committed=java.util.concurrent.atomic.AtomicBoolean(false)
+            rule.runOnUiThread{view.afterVisualLayout{committed.set(true)}}
+            rule.waitUntil(15_000){committed.get()}
+            rule.runOnIdle{android.util.Log.i("MailReaderReady","painted reset cycle=$cycle scale=${view.scale} scroll=${view.scrollX},${view.scrollY} content=${view.contentHeight} viewport=${view.width},${view.height}")}
+            rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
+            screenshot("reader-shrink-reset-$cycle")
+            assertTrue("Reset $cycle left a blank viewport instead of the painted table",paintedRows()>30)
+            if(cycle>0)NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertExpanded(true)
+        }
+    }
+
+    @Test fun resettingLongMailKeepsTheVisibleReadingLandmarkInBothHtmlModes() {
+        val colors=(1..120).associateWith{Color.rgb(30+it,80,200)}
+        val rows=colors.entries.joinToString(""){(index,color)->
+            "<tr><td style='height:70px;background:#%06x'>Reading landmark %d</td></tr>".format(color and 0xffffff,index)
+        }
+        val long=message.copy(id="painted-long-reset",htmlBody="<table width='1200'>$rows</table><div class='gmail_quote'><p>Предыдущий текст</p></div>")
+        rule.setContent{MailTheme{reader(long)}}
+        val view=loaded()
+        val density=view.resources.displayMetrics.density
+        fun visibleRows(): Set<Int> {
+            val bitmap=rule.onRoot().captureToImage().asAndroidBitmap()
+            val indices=colors.entries.associate{it.value to it.key}
+            return (0 until bitmap.height).mapNotNull{indices[bitmap.getPixel(bitmap.width/2,it)]}.toSet()
+        }
+        for(mode in listOf("Оригинальный масштаб HTML","Подогнать HTML по ширине")) {
+            switchHtmlMode(view,mode)
+            rule.runOnIdle{view.scrollContent(5000-view.scrollY)}
+            for(targetHalf in listOf(40f,160f,40f)) {
+                var canReduce=false
+                rule.runOnIdle{canReduce=view.canZoomOut()}
+                if(mode=="Оригинальный масштаб HTML" && targetHalf<100f)
+                    assertTrue("Original long fixture must allow reduction",canReduce)
+                val pinch=Pinch(center(),100f*density)
+                pinch.down()
+                for(step in 1..24)pinch.move((100f+(targetHalf-100f)*step/24)*density)
+                pinch.up()
+                rule.runOnIdle{android.util.Log.i("MailReaderReady","long pinch mode=$mode target=$targetHalf canReduce=$canReduce ratio=${view.relativeScale()} scroll=${view.scrollX},${view.scrollY}")}
+                if(targetHalf<100f && !canReduce) {
+                    // Chromium can clamp fitted pages to their overview minimum.
+                    // A rejected reduction must keep the content and reset state.
+                    rule.runOnIdle{assertEquals("A clamped fitted pinch changed the reading content",1f,view.relativeScale(),0.03f)}
+                    rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
+                    assertTrue("Clamped pinch hid the long letter",visibleRows().isNotEmpty())
+                    continue
+                }
+                rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+                // A band just below the clipped first row identifies actual painted
+                // content near the reading edge, independently of scroll arithmetic.
+                val painted=visibleRows()
+                val landmark=(if(targetHalf>100f)painted.drop(painted.size/2)else painted.drop(1)).firstOrNull()
+                    ?:throw AssertionError("No painted reading landmark before reset in $mode")
+                rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+                rule.waitUntil(15_000){var initial=false;rule.runOnUiThread{initial=abs(view.relativeScale()-1f)<0.03f};initial}
+                val committed=java.util.concurrent.atomic.AtomicBoolean(false)
+                rule.runOnUiThread{view.afterVisualLayout{committed.set(true)}}
+                rule.waitUntil(15_000){committed.get()}
+                assertTrue("Reset lost reading landmark $landmark in $mode at pinch $targetHalf",landmark in visibleRows())
+                // Painted landmark above proves that the reading position survived.\n                // A fixed native scrollY threshold is invalid after a reduced-scale\n                // viewport: the same visible document row can have a much smaller Y.
+            }
+        }
+    }
+
     @Test fun shrinkingOriginalHtmlShowsResetControlAndResetHidesIt() {
         val wide=message.copy(id="original-pinch-in-reset",htmlBody="<div style='width:1200px'><table width='1200'><tr><td>Wide table</td></tr></table></div>")
         rule.setContent{MailTheme{reader(wide)}}
         val view=loaded()
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
-        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100 && abs(view.scale-view.resources.displayMetrics.density)<0.05f};ready}
+        try {
+            rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100 && abs(view.scale-view.resources.displayMetrics.density)<0.05f};ready}
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            var state=""
+            rule.runOnUiThread {
+                state="interaction=${view.interactionEnabled} progress=${view.progress} scale=${view.scale} density=${view.resources.displayMetrics.density} fittedScale=${view.fittedScale()} relativeScale=${view.relativeScale()} revision=${view.documentGeneration()} contentHeight=${view.contentHeight} viewport=${view.width}x${view.height}"
+            }
+            throw AssertionError("Original HTML mode did not reach its expected scale: $state",failure)
+        }
         rule.runOnIdle{view.zoomBy(0.7f)}
         rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
-        var anchorBefore=0f
         rule.runOnIdle{
             assertTrue("The document must actually shrink",view.relativeScale()<0.9f)
-            anchorBefore=(view.scrollY+view.height/2f)/view.scale
         }
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
         rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isEmpty()}
-        rule.waitUntil(15_000){
-            var restored=false
-            rule.runOnUiThread {
-                val after=(view.scrollY+view.height/2f)/view.scale
-                restored=abs(after-anchorBefore)<20f
-            }
-            restored
-        }
         rule.runOnIdle{
             assertEquals(1f,view.relativeScale(),0.04f)
-            val anchorAfter=(view.scrollY+view.height/2f)/view.scale
-            assertEquals("Reset moved the document away from the reading viewport",
-                anchorBefore,anchorAfter,20f)
         }
     }
 
