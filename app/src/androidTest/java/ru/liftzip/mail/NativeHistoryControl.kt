@@ -83,7 +83,10 @@ internal class NativeHistoryControl(
                     return null
                 }
                 view=find(rule.activity.window.decorView)
-                view?.setFindListener{_,total,done->if(done && total>0){view?.setFindListener(null);view?.findNext(true)}}
+                view?.setFindListener{active,total,done->
+                    android.util.Log.e("MailHistoryDiagnosis","findCallback active=$active total=$total done=$done")
+                    if(done && total>0){view?.setFindListener(null);view?.findNext(true)}
+                }
                 view?.findAllAsync("⋯ "+label.substringAfterLast(": "))
             }
             assertExists()
