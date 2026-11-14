@@ -7,7 +7,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.core.content.FileProvider
 import androidx.compose.runtime.saveable.rememberSaveable
-import android.util.Base64
 import java.io.ByteArrayOutputStream
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -124,7 +123,7 @@ import androidx.compose.ui.unit.dp
                 val uri=FileProvider.getUriForFile(context,context.packageName+".attachments",stored)
                 val attachment=OutgoingFile(uri.toString(),"photo.jpg","image/jpeg",stored.length(),cid)
                 onChange(d.copy(attachments=d.attachments+attachment))
-                session.appendImage("data:image/jpeg;base64,"+Base64.encodeToString(output.toByteArray(),Base64.NO_WRAP),cid)
+                session.appendImage(uri.toString(),cid)
                 file.delete()
             }.onFailure { attachmentError="Не удалось вставить фото: "+(it.message?:"ошибка чтения") }
         } else if(path!=null) java.io.File(path).delete()
