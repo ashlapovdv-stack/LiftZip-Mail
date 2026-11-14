@@ -143,16 +143,25 @@ class ReaderZoomDeviceTest {
     @Test fun zoomResetAppearsWhenPinchingBelowInitialScale() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
-        val base=view.scale
+        var base=0f
+        rule.runOnUiThread{base=view.scale}
         val focus=center()
         val density=view.resources.displayMetrics.density
         val pinch=Pinch(focus,90f*density)
         pinch.down()
         for(step in 1..24)pinch.move((90f-65f*step/24)*density)
         pinch.up()
-        rule.waitUntil(15_000){view.scale<base*0.95f}
+        rule.waitUntil(15_000){
+            var reduced=false
+            rule.runOnUiThread{reduced=view.scale<base*0.95f}
+            reduced
+        }
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertExists().performClick()
-        rule.waitUntil(15_000){abs(view.relativeScale()-1f)<0.04f}
+        rule.waitUntil(15_000){
+            var reset=false
+            rule.runOnUiThread{reset=abs(view.relativeScale()-1f)<0.04f}
+            reset
+        }
         rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
     }
 
