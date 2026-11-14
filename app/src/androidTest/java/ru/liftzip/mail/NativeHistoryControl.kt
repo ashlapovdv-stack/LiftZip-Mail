@@ -32,7 +32,44 @@ internal class NativeHistoryControl(
         return find(automation.rootInActiveWindow)
     }
     fun exists() = node()!=null
-    fun assertExists()=apply { rule.waitUntil(15_000){exists()} }
+    fun assertExists()=apply {
+        try {
+            rule.waitUntil(15_000){exists()}
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            // Distinguish missing HTML from a Chromium accessibility bridge failure.
+            rule.runOnUiThread {
+                fun locate(v: View): MailHtmlWebView? {
+                    if(v is MailHtmlWebView)return v
+                    if(v is ViewGroup)for(i in 0 until v.childCount)locate(v.getChildAt(i))?.let{return it}
+                    return null
+                }
+                val view=locate(rule.activity.window.decorView)
+                val document=runCatching {
+                    val field=MailHtmlWebView::class.java.getDeclaredField("document").apply{isAccessible=true}
+                    field.get(view) as? MailHtmlDocument
+                }.getOrNull()
+                val html=document?.html.orEmpty()
+                android.util.Log.e("MailHistoryDiagnosis",
+                    "label=$label webView=${view!=null} attached=${view?.isAttachedToWindow} " +
+                    "progress=${view?.progress} enabled=${view?.interactionEnabled} " +
+                    "generation=${view?.documentGeneration()} htmlLength=${html.length} " +
+                    "labelInHtml=${html.contains(label)} historyLinks=${org.jsoup.Jsoup.parse(html).select("a[aria-expanded]").size}")
+            }
+            val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+            if(android.os.Build.VERSION.SDK_INT>=34)automation.clearCache()
+            val root=automation.rootInActiveWindow
+            val descriptions=mutableListOf<String>()
+            fun collect(node: AccessibilityNodeInfo?,depth: Int) {
+                if(node==null || depth>12 || descriptions.size>=80)return
+                val value=node.contentDescription?.toString() ?: node.text?.toString()
+                if(!value.isNullOrBlank())descriptions+=value.take(90)
+                for(i in 0 until node.childCount)collect(node.getChild(i),depth+1)
+            }
+            collect(root,0)
+            android.util.Log.e("MailHistoryDiagnosis","accessibilityRoot=${root!=null} labels=${descriptions.joinToString(" | ")}")
+            throw failure
+        }
+    }
     fun assertIsDisplayed()=apply { assertExists();assertTrue(node()!!.isVisibleToUser) }
     fun performScrollTo()=apply {
         if(!exists()) {
