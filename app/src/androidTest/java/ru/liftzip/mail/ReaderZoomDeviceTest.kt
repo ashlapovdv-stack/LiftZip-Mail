@@ -141,10 +141,24 @@ class ReaderZoomDeviceTest {
     }
 
     @Test fun zoomResetAppearsWhenPinchingBelowInitialScale() {
-        rule.setContent{MailTheme{reader()}}
+        // Fit-width can already be at WebView's minimum scale. Start at the
+        // original HTML scale so a genuine zoom-out gesture is possible.
+        val wide=message.copy(htmlBody="<div style='width:960px'><p>Ответ</p></div>" +
+            "<div style='height:100000px'></div><p>Конец письма</p>")
+        rule.setContent{MailTheme{reader(wide)}}
         val view=loaded()
+        var generation=0L
+        rule.runOnUiThread{generation=view.documentGeneration()}
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000){
+            var ready=false
+            rule.runOnUiThread{ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100}
+            ready
+        }
         var base=0f
-        rule.runOnUiThread{base=view.scale}
+        var canReduce=false
+        rule.runOnUiThread{base=view.scale;canReduce=view.canZoomOut()}
+        assertTrue("Original-scale fixture must permit zoom-out; base=$base",canReduce)
         val focus=center()
         val density=view.resources.displayMetrics.density
         val pinch=Pinch(focus,90f*density)
