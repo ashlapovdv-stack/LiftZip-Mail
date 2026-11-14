@@ -76,14 +76,25 @@ class ReaderDeviceTest {
     private fun changeHistory(view: MailHtmlWebView,toggle: NativeHistoryControl,expanded: Boolean) {
         var revision=0L
         rule.runOnIdle{revision=view.documentGeneration()}
-        toggle.performScrollTo().assertIsDisplayed().performClick()
-        toggle.assertExpanded(expanded)
-        rule.waitUntil(15_000) {
-            var ready=false
-            // Unified HTML history updates the document inside the SAME native WebView.
-            // Plain history still changes only Compose controls, without a reload.
-            rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
-            ready
+        var stage="locate and click history control"
+        try {
+            toggle.performScrollTo().assertIsDisplayed().performClick()
+            stage="wait for aria-expanded=$expanded"
+            toggle.assertExpanded(expanded)
+            stage="wait for reader readiness"
+            rule.waitUntil(15_000) {
+                var ready=false
+                // Unified HTML history updates the document inside the SAME native WebView.
+                // Plain history still changes only Compose controls, without a reload.
+                rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
+                ready
+            }
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            var state="unavailable"
+            rule.runOnUiThread {
+                state="generation=${view.documentGeneration()} previous=$revision enabled=${view.interactionEnabled} progress=${view.progress} attached=${view.isAttachedToWindow} height=${view.contentHeight} url=${view.url}"
+            }
+            throw AssertionError("History transition timeout: expanded=$expanded stage=$stage $state",failure)
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
     }
