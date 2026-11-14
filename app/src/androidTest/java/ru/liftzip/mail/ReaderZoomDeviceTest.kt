@@ -140,6 +140,22 @@ class ReaderZoomDeviceTest {
         rule.waitForIdle()
     }
 
+    @Test fun zoomResetAppearsWhenPinchingBelowInitialScale() {
+        rule.setContent{MailTheme{reader()}}
+        val view=loaded()
+        val base=view.scale
+        val focus=center()
+        val density=view.resources.displayMetrics.density
+        val pinch=Pinch(focus,90f*density)
+        pinch.down()
+        for(step in 1..24)pinch.move((90f-65f*step/24)*density)
+        pinch.up()
+        rule.waitUntil(15_000){view.scale<base*0.95f}
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertExists().performClick()
+        rule.waitUntil(15_000){abs(view.relativeScale()-1f)<0.04f}
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").assertDoesNotExist()
+    }
+
     @Test fun scrollControlsToolbarAtBaseScaleAndZoomTakesPriorityAfterPinch() {
         rule.setContent{MailTheme{reader()}}
         val view=loaded()
