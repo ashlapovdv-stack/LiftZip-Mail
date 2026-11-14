@@ -86,11 +86,25 @@ import androidx.compose.ui.unit.dp
                 var sample=1
                 while(maxOf(bounds.outWidth,bounds.outHeight)/sample>1600)sample*=2
                 val options=BitmapFactory.Options().apply { inSampleSize=sample }
-                val bitmap=BitmapFactory.decodeFile(path,options)?:error("Не удалось прочитать снимок")
+                val decoded=BitmapFactory.decodeFile(path,options)?:error("Не удалось прочитать снимок")
+                val bitmap=try {
+                    val maxSide=maxOf(decoded.width,decoded.height)
+                    if(maxSide>1600) {
+                        val scale=1600f/maxSide
+                        Bitmap.createScaledBitmap(decoded,(decoded.width*scale).toInt().coerceAtLeast(1),
+                            (decoded.height*scale).toInt().coerceAtLeast(1),true)
+                    } else decoded
+                } finally { if(decoded.isRecycled.not() && maxOf(decoded.width,decoded.height)>1600) decoded.recycle() }
                 val output=ByteArrayOutputStream()
-                try { check(bitmap.compress(Bitmap.CompressFormat.JPEG,82,output)) }
-                finally { bitmap.recycle() }
-                require(output.size()<=3*1024*1024) { "Фотография слишком большая" }
+                try {
+                    var quality=85
+                    do {
+                        output.reset()
+                        check(bitmap.compress(Bitmap.CompressFormat.JPEG,quality,output))
+                        quality-=5
+                    } while(output.size()>900_000 && quality>=55)
+                } finally { bitmap.recycle() }
+                require(output.size()<=1_000_000) { "Не удалось уменьшить фото до 1 МБ" }
                 session.appendImage("data:image/jpeg;base64,"+Base64.encodeToString(output.toByteArray(),Base64.NO_WRAP))
                 file.delete()
             }.onFailure { attachmentError="Не удалось вставить фото: "+(it.message?:"ошибка чтения") }
