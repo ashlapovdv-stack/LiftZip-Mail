@@ -36,7 +36,7 @@ internal class ComposeEditorSession {
     fun focus(){view?.let{it.requestFocus();it.evaluateJavascript("document.getElementById('editor').focus()",null)}}
     fun replaceText(text: String){view?.let{editor->if(editor.ready)editor.evaluateJavascript("window.LiftZipEditor.selectAll();window.LiftZipEditor.insert("+JSONObject.quote(ComposeContent.escaped(text).replace("\n","<br>"))+")",null)}}
     fun insertText(text: String){view?.insertHtml(ComposeContent.escaped(text).replace("\n","<br>"))}
-    fun appendImage(dataUri: String){view?.appendImage(dataUri)}
+    fun appendImage(dataUri: String,cid: String){view?.appendImage(dataUri,cid)}
     fun attach(editor: ComposeEditorWebView){view=editor}
     fun detach(editor: ComposeEditorWebView){if(view===editor)view=null}
     fun flush(draft: ComposeDraft,done: (ComposeDraft)->Unit) {
@@ -52,7 +52,8 @@ internal class ComposeEditorSession {
 
 @SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
 internal class ComposeEditorWebView(context: Context,val draftId: String,initial: String,
-    private val session: ComposeEditorSession,private val changed: (String,String)->Unit,private val resized: (Int)->Unit): WebView(context) {
+    private val session: ComposeEditorSession,private val changed: (String,String)->Unit,private val resized: (Int)->Unit,
+    private val previews: Map<String,String> = emptyMap()): WebView(context) {
     private var editingEnabled=true
     var ready=false;private set
     @Volatile private var alive=true
@@ -83,6 +84,12 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
             override fun onPageFinished(view: WebView,url: String){ready=true;applyEditable()}
         }
         val nonce=UUID.randomUUID().toString()
+        val previewHtml=org.jsoup.Jsoup.parseBodyFragment(ComposerHtml.clean(initial)).also { doc->
+            doc.select("img[src^=cid:]").forEach { img->
+                val cid=img.attr("src").substring(4)
+                previews[cid]?.let { data->img.attr("data-liftzip-cid",cid);img.attr("src",data) }
+            }
+        }.body().html()
         val csp="default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; img-src data:; frame-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'"
         loadDataWithBaseURL("https://compose.liftzip.invalid/", """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="$csp"><style>
           html,body{margin:0;padding:0;background:white;color:#303030;font:16px/1.5 sans-serif}
@@ -91,20 +98,21 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
           #editor img{max-width:100%;height:auto} #editor table{max-width:100%!important}
           #editor p,#editor div,#editor span,#editor a,#editor td,#editor th{white-space:normal!important;overflow-wrap:anywhere}
           #editor pre,#editor pre *{white-space:pre-wrap!important;overflow-wrap:anywhere}
-        </style></head><body><div id="editor" role="textbox" aria-label="Текст письма" aria-multiline="true" contenteditable="true">${ComposerHtml.clean(initial)}</div><script nonce="$nonce">
+        </style></head><body><div id="editor" role="textbox" aria-label="Текст письма" aria-multiline="true" contenteditable="true">${previewHtml}</div><script nonce="$nonce">
           (function(){
             const editor=document.getElementById('editor');let range=null;
-            const emit=()=>EditorBridge.input(editor.innerHTML);
+            const serialized=()=>{const copy=editor.cloneNode(true);copy.querySelectorAll('img[data-liftzip-cid]').forEach(img=>{img.setAttribute('src','cid:'+img.getAttribute('data-liftzip-cid'));img.removeAttribute('data-liftzip-cid');});return copy.innerHTML;};
+            const emit=()=>EditorBridge.input(serialized());
             document.addEventListener('selectionchange',()=>{const s=getSelection();if(s.rangeCount && editor.contains(s.anchorNode))range=s.getRangeAt(0).cloneRange();});
             editor.addEventListener('input',emit);
             editor.addEventListener('paste',e=>{e.preventDefault();EditorBridge.paste(e.clipboardData.getData('text/html'),e.clipboardData.getData('text/plain'));});
             editor.addEventListener('drop',e=>e.preventDefault());
             document.addEventListener('click',e=>{if(e.target.closest('a'))e.preventDefault();});
             window.LiftZipEditor={
-              html:()=>editor.innerHTML,
+              html:()=>serialized(),
               enabled:value=>editor.contentEditable=String(value),
               insert:html=>{const saved=range&&range.cloneRange();editor.focus();const s=getSelection();s.removeAllRanges();if(saved && editor.contains(saved.commonAncestorContainer))s.addRange(saved);else{const r=document.createRange();r.selectNodeContents(editor);r.collapse(false);s.addRange(r);}const r=s.getRangeAt(0);r.deleteContents();const fragment=r.createContextualFragment(html);const last=fragment.lastChild;r.insertNode(fragment);if(last)r.setStartAfter(last);r.collapse(true);s.removeAllRanges();s.addRange(r);range=r.cloneRange();editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertFromPaste'}));},
-              appendImage:src=>{const img=document.createElement("img");img.src=src;img.alt="Фото";editor.appendChild(document.createElement("br"));editor.appendChild(img);editor.appendChild(document.createElement("br"));editor.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertFromPaste"}));},
+              appendImage:(src,cid)=>{const img=document.createElement("img");img.src=src;img.setAttribute('data-liftzip-cid',cid);img.alt="Фото";editor.appendChild(document.createElement("br"));editor.appendChild(img);editor.appendChild(document.createElement("br"));editor.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertFromPaste"}));},
               selectAll:()=>{editor.focus();const r=document.createRange();r.selectNodeContents(editor);const s=getSelection();s.removeAllRanges();s.addRange(r);range=r;}
             };
             new ResizeObserver(()=>EditorBridge.height(Math.ceil(editor.scrollHeight))).observe(editor);
@@ -113,7 +121,7 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
     }
     fun setEditable(value: Boolean){if(value!=editingEnabled){editingEnabled=value;if(ready)applyEditable()}}
     private fun applyEditable(){evaluateJavascript("window.LiftZipEditor.enabled($editingEnabled)",null)}
-    fun appendImage(dataUri: String){if(ready)evaluateJavascript("window.LiftZipEditor.appendImage(${JSONObject.quote(dataUri)})",null)}
+    fun appendImage(dataUri: String,cid: String){if(ready)evaluateJavascript("window.LiftZipEditor.appendImage(${JSONObject.quote(dataUri)},${JSONObject.quote(cid)})",null)}
     fun insertHtml(html: String){if(ready)evaluateJavascript("window.LiftZipEditor.insert(${JSONObject.quote(ComposerHtml.clean(html))})",null)}
     fun pasteClipboard(plain: Boolean=false): Boolean {
         val clip=(context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?:return false
@@ -156,7 +164,11 @@ internal class ComposeEditorWebView(context: Context,val draftId: String,initial
     key(draft.id) {
         AndroidView(factory={context->ComposeEditorWebView(context,draft.id,ComposerHtml.initial(draft),session,{html,plain->
             if(current.id==draft.id)change(current.copy(bodyHtml=html,body=plain))
-        },{height=it}).also{view->session.attach(view);view.onFocusChangeListener=View.OnFocusChangeListener{_,focused->editorFocused=focused}}},
+        },{height=it},draft.filesToSend().filter{it.contentId.isNotBlank()}.mapNotNull { file->
+                runCatching { context.contentResolver.openInputStream(android.net.Uri.parse(file.uri))?.use { input->
+                    val bytes=input.readBytes();if(bytes.size<=1_000_000)file.contentId to ("data:${file.mime};base64,"+android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP)) else null
+                }}.getOrNull()
+            }.filterNotNull().toMap()).also{view->session.attach(view);view.onFocusChangeListener=View.OnFocusChangeListener{_,focused->editorFocused=focused}}},
             update={view->view.setEditable(enabled)},
             onRelease={it.close()},
             modifier=Modifier.fillMaxWidth().height(height.coerceIn(280,4000).dp).testTag("compose-body").semantics {
