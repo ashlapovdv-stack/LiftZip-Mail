@@ -244,6 +244,59 @@ class ReaderZoomDeviceTest {
         assertNoOverlap()
     }
 
+
+    @Test fun expandedHistoryPinchThenOriginalHtmlScaleRestoresChromeAtBaseScale() {
+        val rich=message.copy(
+            id="history-original-scale-chrome",
+            subject="История и исходный масштаб",
+            htmlBody="<p>Ответ</p><div class='gmail_quote'><p>Предыдущий текст</p></div>"
+        )
+        rule.setContent{MailTheme{reader(rich)}}
+        val view=loaded()
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        history.performScrollTo().assertIsDisplayed().performClick()
+        history.assertExpanded(true)
+        rule.waitUntil(15_000) {
+            var ready=false
+            rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100}
+            ready
+        }
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+
+        val focus=center()
+        val density=view.resources.displayMetrics.density
+        val pinch=Pinch(focus,48f*density)
+        pinch.down()
+        for(step in 1..24)pinch.move((48f+80f*step/24)*density)
+        pinch.up()
+        rule.waitUntil(10_000) {
+            var enlarged=false
+            rule.runOnUiThread{enlarged=view.relativeScale()>1.5f}
+            enlarged
+        }
+        rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+
+        var generation=0L
+        rule.runOnIdle{generation=view.documentGeneration()}
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000) {
+            var ready=false
+            rule.runOnUiThread {
+                ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100
+            }
+            ready
+        }
+        rule.runOnIdle {
+            assertSame("Switching HTML scale must retain the native reader",view,webView())
+            assertEquals("Original HTML mode must use device density",density,view.scale,0.05f)
+        }
+        // At the unzoomed native scale, Compose must no longer retain the
+        // hidden chrome state from the preceding pinch gesture.
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText(rich.subject).assertIsDisplayed()
+        history.assertExpanded(true)
+    }
+
     private fun assertStableViewport(samples: List<Sample>) {
         val heights=samples.map{it.height}.distinct()
         val heightChanges=samples.zipWithNext().count{it.first.height!=it.second.height}
