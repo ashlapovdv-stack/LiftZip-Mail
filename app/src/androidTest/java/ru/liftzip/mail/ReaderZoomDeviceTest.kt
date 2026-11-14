@@ -244,6 +244,131 @@ class ReaderZoomDeviceTest {
         assertNoOverlap()
     }
 
+
+    @Test fun expandedHistoryPinchThenOriginalHtmlScaleRestoresChromeAtBaseScale() {
+        val rich=message.copy(
+            id="history-original-scale-chrome",
+            subject="История и исходный масштаб",
+            htmlBody="<p>Ответ</p><div class='gmail_quote'><p>Предыдущий текст</p></div>"
+        )
+        rule.setContent{MailTheme{reader(rich)}}
+        val view=loaded()
+        val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        history.performScrollTo().assertIsDisplayed().performClick()
+        history.assertExpanded(true)
+        rule.waitUntil(15_000) {
+            var ready=false
+            rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100}
+            ready
+        }
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText(rich.subject).assertIsDisplayed()
+        rule.runOnIdle{assertEquals("Fixture must start at the top",0,view.scrollY)}
+
+        val focus=center()
+        val density=view.resources.displayMetrics.density
+        val pinch=Pinch(focus,48f*density)
+        pinch.down()
+        for(step in 1..24)pinch.move((48f+80f*step/24)*density)
+        pinch.up()
+        rule.waitUntil(10_000) {
+            var enlarged=false
+            rule.runOnUiThread{enlarged=view.relativeScale()>1.5f}
+            enlarged
+        }
+        rule.onNodeWithContentDescription("Назад").assertIsNotDisplayed()
+
+        var generation=0L
+        rule.runOnIdle{generation=view.documentGeneration()}
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000) {
+            var ready=false
+            rule.runOnUiThread {
+                ready=view.documentGeneration()>generation && view.interactionEnabled && view.progress==100
+            }
+            ready
+        }
+        rule.runOnIdle {
+            assertSame("Switching HTML scale must retain the native reader",view,webView())
+            assertEquals("Original HTML mode must use device density",density,view.scale,0.05f)
+        }
+        // The short letter cannot retain a zoom-created scroll coordinate
+        // outside its base-scale extent. Both overlays must follow that extent.
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText(rich.subject).assertIsDisplayed()
+        history.assertExpanded(true)
+        switchHtmlMode(view,"Подогнать HTML по ширине")
+        rule.onNodeWithText(rich.subject).assertIsDisplayed()
+        history.assertExpanded(true)
+    }
+
+    @Test fun htmlModeAfterPinchWithoutHistoryRestoresHeaderAndRoundTripsAtTheTop() {
+        val short=message.copy(id="no-history-original-scale",subject="Без истории",body="Ответ",htmlBody="<p>Ответ</p>")
+        rule.setContent{MailTheme{reader(short)}}
+        val view=loaded()
+        rule.onNodeWithText(short.subject).assertIsDisplayed()
+        enlarge(view)
+        switchHtmlMode(view,"Оригинальный масштаб HTML")
+        rule.onNodeWithContentDescription("Назад").assertIsDisplayed()
+        rule.onNodeWithText(short.subject).assertIsDisplayed()
+        rule.onNodeWithText(short.senderEmail).assertIsDisplayed()
+        repeat(2) {
+            switchHtmlMode(view,"Подогнать HTML по ширине")
+            rule.onNodeWithText(short.subject).assertIsDisplayed()
+            switchHtmlMode(view,"Оригинальный масштаб HTML")
+            rule.onNodeWithText(short.subject).assertIsDisplayed()
+        }
+    }
+
+    @Test fun htmlModeAfterScrolledPinchPreservesTheReadingPointWithoutReturningToTheTop() {
+        val long=message.copy(id="scrolled-original-scale",subject="Прокрученное письмо",body="Ответ",htmlBody="<p>Ответ</p><div style='height:100000px'></div>")
+        rule.setContent{MailTheme{reader(long)}}
+        val view=loaded()
+        switchHtmlMode(view,"Оригинальный масштаб HTML")
+        rule.onNodeWithText(long.subject).assertIsDisplayed()
+        switchHtmlMode(view,"Подогнать HTML по ширине")
+        rule.onNodeWithText(long.subject).assertIsDisplayed()
+        rule.runOnIdle{view.scrollContent(5000)}
+        enlarge(view)
+        var readingPoint=0f
+        rule.runOnIdle{readingPoint=view.scrollY/view.scale}
+        repeat(2) {
+            for(label in listOf("Оригинальный масштаб HTML","Подогнать HTML по ширине")) {
+                switchHtmlMode(view,label)
+                rule.runOnIdle {
+                    assertTrue("Mode switch must not return a scrolled letter to the top",view.scrollY>1000)
+                    assertEquals("Mode switch moved the document point at the viewport top",readingPoint,view.scrollY/view.scale,3f)
+                }
+                rule.onNodeWithText(long.subject).assertIsNotDisplayed()
+            }
+        }
+    }
+
+    private fun enlarge(view: MailHtmlWebView) {
+        val density=view.resources.displayMetrics.density
+        val pinch=Pinch(center(),48f*density)
+        pinch.down()
+        for(step in 1..24)pinch.move((48f+80f*step/24)*density)
+        pinch.up()
+        rule.waitUntil(10_000){var enlarged=false;rule.runOnUiThread{enlarged=view.relativeScale()>1.5f};enlarged}
+    }
+
+    private fun switchHtmlMode(view: MailHtmlWebView,label: String) {
+        var revision=0L
+        rule.runOnIdle{revision=view.documentGeneration()}
+        rule.onNodeWithContentDescription(label).performClick()
+        rule.waitUntil(30_000){
+            var ready=false
+            rule.runOnUiThread{ready=view.documentGeneration()>revision && view.interactionEnabled && view.progress==100}
+            ready
+        }
+        rule.runOnIdle {
+            assertSame("HTML mode switch replaced the native reader",view,webView())
+            val maximum=(view.contentHeight*view.scale-view.height).coerceAtLeast(0f)
+            assertTrue("Restored scroll ${view.scrollY} exceeds the new document extent $maximum",view.scrollY<=maximum+3f)
+        }
+    }
+
     private fun assertStableViewport(samples: List<Sample>) {
         val heights=samples.map{it.height}.distinct()
         val heightChanges=samples.zipWithNext().count{it.first.height!=it.second.height}
@@ -381,4 +506,36 @@ class ReaderZoomDeviceTest {
             rule.runOnIdle{assertSame(view,webView())}
         }
     }
+    @Test fun shrinkingOriginalHtmlShowsResetControlAndResetHidesIt() {
+        val wide=message.copy(id="original-pinch-in-reset",htmlBody="<div style='width:1200px'><table width='1200'><tr><td>Wide table</td></tr></table></div>")
+        rule.setContent{MailTheme{reader(wide)}}
+        val view=loaded()
+        rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
+        rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=view.interactionEnabled && view.progress==100 && abs(view.scale-view.resources.displayMetrics.density)<0.05f};ready}
+        rule.runOnIdle{view.zoomBy(0.7f)}
+        rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isNotEmpty()}
+        var anchorBefore=0f
+        rule.runOnIdle{
+            assertTrue("The document must actually shrink",view.relativeScale()<0.9f)
+            anchorBefore=(view.scrollY+view.height/2f)/view.scale
+        }
+        rule.onNodeWithContentDescription("Вернуть исходный масштаб").performClick()
+        rule.waitUntil(15_000){rule.onAllNodesWithContentDescription("Вернуть исходный масштаб").fetchSemanticsNodes().isEmpty()}
+        rule.waitUntil(15_000){
+            var restored=false
+            rule.runOnUiThread {
+                val after=(view.scrollY+view.height/2f)/view.scale
+                restored=abs(after-anchorBefore)<20f
+            }
+            restored
+        }
+        rule.runOnIdle{
+            assertEquals(1f,view.relativeScale(),0.04f)
+            val anchorAfter=(view.scrollY+view.height/2f)/view.scale
+            assertEquals("Reset moved the document away from the reading viewport",
+                anchorBefore,anchorAfter,20f)
+        }
+    }
+
+
 }

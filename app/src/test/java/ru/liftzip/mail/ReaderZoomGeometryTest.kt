@@ -5,6 +5,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderZoomGeometryTest {
+    @Test fun zoomResetAppearsOnBothSidesOfTheCurrentReadingScale() {
+        assertTrue(readerZoomResetVisible(0.65f))
+        assertTrue(readerZoomResetVisible(1.5f))
+        assertEquals(false,readerZoomResetVisible(1f))
+        assertEquals(false,readerZoomResetVisible(1.02f))
+        assertEquals(false,readerZoomResetVisible(0.98f))
+        assertEquals(false,readerZoomResetVisible(Float.NaN))
+    }
+
     @Test fun collapsingHistoryRestoresScrollHiddenChromeWithoutOverridingZoom() {
         var zoom=0f
         val toolbar=ReaderToolbarState{zoom}

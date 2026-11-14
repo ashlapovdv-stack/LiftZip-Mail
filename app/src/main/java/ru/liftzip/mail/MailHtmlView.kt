@@ -173,9 +173,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                                 if(anchor!=null && kotlin.math.abs(anchor.relativeScale-1f)>0.03f){
                                     zoomBy(anchor.relativeScale.coerceIn(0.01f,100f))
                                     postVisualStateCallback(revision,object: WebView.VisualStateCallback(){override fun onComplete(restoreRequest: Long){
-                                        if(live && restoreRequest==documentRevision){scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());publishHeight();ready()}
+                                        if(live && restoreRequest==documentRevision){restoreReadingAnchor(anchor);publishHeight();ready()}
                                     }})
-                                }else {if(anchor!=null)scrollTo((anchor.cssX*renderScale).roundToInt(),(anchor.cssY*renderScale).roundToInt());awaitingInitialLayout=true;publishHeight()}
+                                }else {if(anchor!=null)restoreReadingAnchor(anchor);awaitingInitialLayout=true;publishHeight()}
                             }
                         }})
                     }else {awaitingInitialLayout=true;publishHeight()}
@@ -183,6 +183,17 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
             }
         }
     }
+    private fun restoreReadingAnchor(anchor: ReadingAnchor) {
+        // A mode change can shrink the native extent below the saved zoomed
+        // position. View.scrollTo does not enforce document bounds: restoring
+        // that coordinate would scroll the header past an unscrollable letter.
+        // Clamp only after this revision's scale and layout have committed.
+        val maxX=(computeHorizontalScrollRange()-width).coerceAtLeast(0)
+        val maxY=(contentHeight.toDouble()*renderScale-height).toInt().coerceAtLeast(0)
+        scrollTo((anchor.cssX*renderScale).roundToInt().coerceIn(0,maxX),
+            (anchor.cssY*renderScale).roundToInt().coerceIn(0,maxY))
+    }
+
     fun show(next: MailHtmlDocument,fontScale: Float=1f) {
         if(!live)return
         val zoom=(fontScale*100).toInt().coerceIn(50,300)
@@ -218,7 +229,25 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     fun resetZoom() {
         val base=initialScale?:return
-        if(live && renderScale>0f)zoomBy((base/renderScale).coerceIn(0.01f,100f))
+        if(!live || renderScale<=0f)return
+        val ratio=base/renderScale
+        if(!ratio.isFinite() || kotlin.math.abs(ratio-1f)<0.001f)return
+        // Preserve the document point at the centre of the reading viewport.
+        // Chromium's default zoom focal point can land in the oversized reader
+        // inset when zooming back in from a scale below the original.
+        val anchorX=(scrollX+width/2f)/renderScale
+        val anchorY=(scrollY+height/2f)/renderScale
+        val revision=documentRevision
+        zoomBy(ratio.coerceIn(0.01f,100f))
+        postVisualStateCallback(revision,object: WebView.VisualStateCallback(){
+            override fun onComplete(requestId: Long) {
+                if(!live || requestId!=documentRevision || width<=0 || height<=0)return
+                val maxX=(computeHorizontalScrollRange()-width).coerceAtLeast(0)
+                val maxY=(contentHeight.toDouble()*renderScale-height).toInt().coerceAtLeast(0)
+                scrollTo((anchorX*renderScale-width/2f).roundToInt().coerceIn(0,maxX),
+                    (anchorY*renderScale-height/2f).roundToInt().coerceIn(0,maxY))
+            }
+        })
     }
     internal fun fittedScale(): Float=initialScale?:renderScale
     internal fun documentGeneration(): Long=documentRevision
