@@ -63,6 +63,10 @@ class ReaderScroll(val outer: ScrollState) {
     fun detach(body: MailHtmlWebView){if(view===body)view=null;windows.remove(body);body.scrollPage=null}
 }
 
+/** Reset is offered for both pinch-in and pinch-out relative to the current reading mode. */
+internal fun readerZoomResetVisible(scaleRatio: Float): Boolean =
+    scaleRatio.isFinite() && kotlin.math.abs(scaleRatio-1f)>0.03f
+
 data class HorizontalScrollMetrics(val offset: Int=0,val extent: Int=0,val range: Int=0)
 
 /** Scroll-driven overlay state. It never changes the document's layout constraints. */
