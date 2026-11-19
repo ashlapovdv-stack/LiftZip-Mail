@@ -566,7 +566,14 @@ private val Paper=Color(0xFFF8F9F6)
     val visibleIds=rows?.ids.orEmpty()
     val visibleUnread=rows?.unread?:0
     val visibleById=rows?.byId.orEmpty()
-    val selected=remember(checked,rows){checked.filterTo(mutableSetOf()){it in visibleById}}
+    // Bulk selection includes all saved inbox messages, even past the loaded UI pages.
+    val hasSelectionOutsidePage=usesLocalPages && checked.any{it !in visibleById}
+    val selectionById=remember(rows,s.messages.takeIf{hasSelectionOutsidePage},s.accounts,accountId){
+        if(hasSelectionOutsidePage)SyncRules.activeMessages(s.messages,s.accounts,accountId)
+            .filter{it.localFolder=="inbox"}.associateBy{it.id}
+        else visibleById
+    }
+    val selected=remember(checked,selectionById){checked.filterTo(mutableSetOf()){it in selectionById}}
     val selectionMode=selected.isNotEmpty()
     val chromeFraction=remember(controlsProgress){ {controlsProgress.floatValue} }
     val panelMetrics=remember(memory){mutableStateOf<InboxPanelMetrics?>(null)}
@@ -597,7 +604,7 @@ private val Paper=Color(0xFFF8F9F6)
     fun toggle(id: String){checked=ArrayList(if(id in selected)selected-id else selected+id)}
     fun mark(unread: Boolean){onMarkRead(selected,unread){updated->checked=ArrayList(checked.filter{it !in updated})}}
     fun spam(toInbox: Boolean){onSpam(selected,toInbox){updated->checked=ArrayList(checked.filter{it !in updated})}}
-    val selectedRows=remember(rows,selected){selected.mapNotNull(visibleById::get)}
+    val selectedRows=remember(selectionById,selected){selected.mapNotNull(selectionById::get)}
     val canSpam=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,false)}
     val canRestore=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,true)}
     val selectionActions: @Composable ()->Unit = {
@@ -607,7 +614,12 @@ private val Paper=Color(0xFFF8F9F6)
                     Box {
                         IconButton(onClick={selectionMenu=true},enabled=!s.busy){Icon(Icons.Outlined.MoreVert,"Действия с выбранными письмами")}
                         DropdownMenu(expanded=selectionMenu,onDismissRequest={selectionMenu=false}) {
-                            DropdownMenuItem(text={Text(if(usesLocalPages)"Выбрать все показанные" else "Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={selectionMenu=false;checked=ArrayList(visibleIds)})
+                            DropdownMenuItem(text={Text("Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={
+                                selectionMenu=false
+                                val ids=if(usesLocalPages)SyncRules.activeMessages(s.messages,s.accounts,accountId)
+                                    .filter{it.localFolder=="inbox"}.map{it.id} else visibleIds
+                                checked=ArrayList(ids)
+                            })
                             DropdownMenuItem(text={Text("Отметить прочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailRead,null)},onClick={selectionMenu=false;mark(false)})
                             DropdownMenuItem(text={Text("Отметить непрочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailUnread,null)},onClick={selectionMenu=false;mark(true)})
                             if(canSpam)DropdownMenuItem(text={Text("В спам")},leadingIcon={Icon(Icons.Outlined.Report,null)},onClick={selectionMenu=false;spam(false)})
@@ -624,7 +636,7 @@ private val Paper=Color(0xFFF8F9F6)
             if(rows.any(TrashRules::local))Text("Черновики будут удалены; удаление серверной копии выполнится при подключении к сети.")
         }},confirmButton={TextButton(onClick={deleting=null;onDelete(ids){removed->checked=ArrayList(checked.filter{it !in removed})}},enabled=rows.isNotEmpty() && !s.busy){Text("Удалить")}},dismissButton={TextButton(onClick={deleting=null}){Text("Отмена")}})
     }
-    LaunchedEffect(visibleIds){checked=ArrayList(checked.filter{it in visibleById})}
+    LaunchedEffect(selectionById){checked=ArrayList(checked.filter{it in selectionById})}
     LaunchedEffect(memory,visibleIds.firstOrNull()) {
         if(visibleIds.isNotEmpty()) {
             val restore=memory.restore
