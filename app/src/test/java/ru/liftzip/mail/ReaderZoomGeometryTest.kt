@@ -22,8 +22,9 @@ class ReaderZoomGeometryTest {
     }
 
     @Test fun headerInsetUsesFittedCssScaleInsteadOfDeclaredPageWidth() {
-        val document=MailHtmlDocument("<html><head></head><body>Letter</body></html>",emptyMap(),false)
+        val document=MailHtmlDocument("<html><head></head><body style=\"padding-left:16px!important\">Letter</body></html>",emptyMap(),false)
         val prepared=document.withReaderInset(600,1080,0.5f).withReaderCanvas(2200,1080,0.5f)
+        assertTrue(prepared.html.contains("<body style=\"padding-left:16px!important\"><div"))
         assertTrue(prepared.html.contains("height:1200.0px!important"))
         assertTrue(prepared.html.contains("min-height:4400.0px!important"))
     }

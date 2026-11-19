@@ -479,12 +479,12 @@ object HtmlMail {
         val wrapping=if(originalScale)"normal"else "anywhere"
         val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport, minimum-scale=0.01, maximum-scale=10"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
             html,body{margin:0;padding:0;max-width:100%;overflow-wrap:$wrapping;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
-            body{box-sizing:border-box;padding-left:$leftInset;padding-right:$rightInset}
+            body{box-sizing:border-box}
             $adaptation
             $imageSizing a{color:#526b45;text-decoration:underline}
             .mail-plain,.mail-plain *{white-space:pre-wrap!important}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             #mail-history-toggle{display:inline-flex!important;align-items:center!important;gap:5px!important;box-sizing:border-box!important;min-width:52px!important;height:28px!important;margin:12px 0!important;padding:3px 10px!important;border:1px solid #b8b8b8!important;border-radius:999px!important;background:#e6e6e6!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important;white-space:nowrap!important}
-            </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
+            </style></head><body style="padding-left:$leftInset!important;padding-right:$rightInset!important">${doc.body().html()}</body></html>""".trimIndent()
         return MailHtmlDocument(wrapped,resources,hasExternal,layout,external,originalScale)
     }
     /** One forward scan, including malformed input; nested url( text cannot cause regex backtracking. */

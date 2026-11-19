@@ -828,6 +828,7 @@ class ReaderDeviceTest {
 
     @Test fun fitsTheFullWidthOfANestedEmailTemplate() {
         val html="""
+            <style>body{width:100%!important;margin:0!important;padding:0!important}</style>
             <table width="100%"><tr><td style="padding:0 40px">
                 <div style="min-width:380px">
                     <table width="100%"><tr><td>Reply to seller</td><td>Open conversation</td></tr></table>
@@ -849,6 +850,22 @@ class ReaderDeviceTest {
             assertFalse("Both columns must fit without panning",view.canScrollHorizontally(1))
         }
         assertEquals(1,matches(view,"Open conversation"))
+    }
+
+    @Test fun keepsBothPageGuttersWhenSenderResetsBodyPadding() {
+        val html="<style>body{width:100%!important;margin:0!important;padding:0!important}</style>"+
+            "<table role='presentation' width='100%' style='background:#ff00ff'><tr><td>Template</td></tr></table>"
+        val m=message.copy(id="page-gutters",body="Template",htmlBody=html)
+        rule.setContent{MailTheme{MailHtmlBody(m,m.body,HtmlMail.noHistory(html),{error("No resources")},{})}}
+        loaded()
+        val body=rule.onNodeWithTag("mail-body")
+        rule.waitUntil(10_000) {
+            val pixels=body.captureToImage().toPixelMap()
+            fun magenta(x: Int,y: Int)=pixels[x,y].let{it.red>0.95f && it.green<0.05f && it.blue>0.95f}
+            (0 until pixels.height).any{y->
+                magenta(pixels.width/2,y) && !magenta(1,y) && !magenta(pixels.width-2,y)
+            }
+        }
     }
 
     @Test fun receivedRichReplyExpandsAsHtmlAndBothPresentationsCanBeToggled() {
