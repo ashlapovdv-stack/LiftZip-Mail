@@ -1,5 +1,6 @@
 package ru.liftzip.mail
 
+import org.jsoup.Jsoup
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -13,6 +14,24 @@ class MailLayoutTest {
         assertEquals(0,doc.layoutWidth);assertEquals("width=device-width",org.jsoup.Jsoup.parse(doc.html).selectFirst("meta[name=viewport]")!!.attr("content").substringBefore(","))
         assertFalse(doc.html.contains("initial-scale=1"));assertTrue(doc.html.contains("overflow-wrap:anywhere"))
         assertTrue(doc.html.contains(".mail-table-scroll{max-width:100%;overflow-x:auto}"));assertTrue(doc.html.contains("width=\"720\""))
+    }
+    @Test fun nestedEmailLayoutParticipatesInFitWhileItsDataTableScrollsSeparately() {
+        val source="""
+            <table id="template" width="100%"><tr><td>
+                <table id="actions" width="100%"><tr>
+                    <td><div style="min-width:520px">Reply to seller</div></td><td>Open conversation</td>
+                </tr></table>
+                <table id="items" width="1200"><tr><th>Item</th><th>Price</th></tr>
+                    <tr><td>Sample</td><td>20</td></tr>
+                </table>
+            </td></tr></table>
+        """.trimIndent()
+        val page=HtmlMail.document(source,"",emptyList())
+        val parsed=Jsoup.parse(page.html)
+        assertEquals(listOf("items"),parsed.select(".mail-table-scroll > table").map{it.id()})
+        assertEquals(520,page.layoutWidth)
+        val original=HtmlMail.document(source,"",emptyList(),originalScale=true)
+        assertTrue(Jsoup.parse(original.html).select(".mail-table-scroll").isEmpty())
     }
     @Test fun adaptiveTablesDoNotShrinkJustBecauseTheyHaveManyColumns() {
         // 0.5.19: the column count alone must not force a 640px desktop viewport.

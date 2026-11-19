@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.getOrNull
@@ -822,6 +824,31 @@ class ReaderDeviceTest {
         rule.runOnIdle{assertTrue("Whole page was shrunk",view.scale>=view.resources.displayMetrics.density*0.9f)}
         assertEquals(1,matches(view,"Широкая строка"))
         saveDeviceScreenshot(rule,"html-paste-responsive")
+    }
+
+    @Test fun fitsTheFullWidthOfANestedEmailTemplate() {
+        val html="""
+            <table width="100%"><tr><td style="padding:0 40px">
+                <div style="min-width:380px">
+                    <table width="100%"><tr><td>Reply to seller</td><td>Open conversation</td></tr></table>
+                </div>
+            </td></tr></table>
+        """.trimIndent()
+        val m=message.copy(id="nested-email-template",body="Reply to seller",htmlBody=html)
+        rule.setContent {
+            MailTheme {
+                androidx.compose.foundation.layout.Box(Modifier.width(300.dp)) {
+                    MailHtmlBody(m,m.body,HtmlMail.noHistory(html),{error("No resources")},{})
+                }
+            }
+        }
+        val view=loaded()
+        rule.runOnIdle {
+            assertTrue("The template must scale below 100% on a 300 dp viewport",
+                view.scale<view.resources.displayMetrics.density*0.80f)
+            assertFalse("Both columns must fit without panning",view.canScrollHorizontally(1))
+        }
+        assertEquals(1,matches(view,"Open conversation"))
     }
 
     @Test fun receivedRichReplyExpandsAsHtmlAndBothPresentationsCanBeToggled() {

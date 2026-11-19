@@ -59,6 +59,36 @@ object HtmlMail {
         doc.select("style").forEach{style->result=maxOf(result,pixelWidth.findAll(withoutMediaBlocks(style.data())).maxOfOrNull{it.groupValues[1].toInt()}?:0)}
         return result.takeIf{it>=480}?.coerceAtMost(1440)?:0
     }
+    private fun independentlyScrollingTables(tables: List<Element>): Set<Element> {
+        val isolated=mutableSetOf<Element>()
+        for(table in tables) {
+            val ancestors=table.parents().filter{it.normalName()=="table"}
+            if(ancestors.any{it in isolated})continue
+            val role=table.attr("role").lowercase()
+            if(role=="presentation" || role=="none")continue
+            val rows=table.children().flatMap { child->
+                when(child.normalName()) {
+                    "tr"->listOf(child)
+                    "thead","tbody","tfoot"->child.children().filter{it.normalName()=="tr"}
+                    else->emptyList()
+                }
+            }
+            val dataTable=role in setOf("table","grid","treegrid") ||
+                table.children().any{it.normalName()=="caption"} ||
+                rows.any{row->row.children().any{it.normalName()=="th"}}
+            if(dataTable) {
+                isolated+=table
+            }else if(ancestors.isEmpty()) {
+                // Email templates often put multiple layout tables in a single-column shell.
+                // Keep that shell in the page so its intrinsic width reaches WebView's fit.
+                val layoutShell=rows.isNotEmpty() && rows.all{row->
+                    row.children().size==1 && row.child(0).normalName()=="td"
+                } && table.getElementsByTag("table").size>1
+                if(!layoutShell)isolated+=table
+            }
+        }
+        return isolated
+    }
     /** Width rules inside conditional (@media) blocks target other viewports. Applied
      *  unconditionally they inflate the layout viewport and shrink an adaptive letter. */
     internal fun withoutMediaBlocks(css: String): String {
@@ -422,14 +452,14 @@ object HtmlMail {
         doc.select("style").forEach{it.html(css(it.data()))}
         doc.select("a").forEach{it.removeAttr("target");it.attr("rel","noreferrer noopener")}
         val csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src $ORIGIN; font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'"
-        // Data tables are independent horizontal regions. Their explicit width must
-        // not reduce every surrounding paragraph to a desktop overview.
-        if(!originalScale)doc.select("table").filter{table->table.parents().none{it.normalName()=="table"}}.forEach { table->
-            table.wrap("<div class='mail-table-scroll'></div>")
-        }
+        val tables=if(originalScale)emptyList() else doc.select("table").toList()
+        val isolated=independentlyScrollingTables(tables)
+        isolated.forEach{it.wrap("<div class='mail-table-scroll'></div>")}
         // Normalize the display-only cut, not recognition, source MIME or the expanded quote.
         if(history.separateHistory)CollapsedReplyBoundary.normalize(doc.body())
-        val page=doc.clone().apply{if(!originalScale)select("table").remove()}
+        val page=if(isolated.isEmpty())doc else doc.clone().also{copy->
+            tables.zip(copy.select("table")).forEach{(table,copyTable)->if(table in isolated)copyTable.remove()}
+        }
         val layout=if(html.isNotBlank())layoutWidth(page)else 0
         val viewport=if(originalScale)"device-width, initial-scale=1"else if(layout>0)layout.toString()else "device-width"
         // Only the outer wrapper's own horizontal spacing replaces our inset; inner
