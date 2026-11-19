@@ -6,8 +6,18 @@ class InboxChromeController(initialFraction: Float=1f) {
         private set
     private var headerHeight=0f
     private var flingActive=false
+    private var bottomTravel=0.0
     fun measureHeader(height: Float){headerHeight=height.takeIf{it.isFinite() && it>0f}?:0f}
-    fun show(){fraction=1f}
+    fun show(){fraction=1f;bottomTravel=0.0}
+    fun bottomVisibility(visible: Boolean,delta: Float,rowHeight: Float,forceVisible: Boolean=false): Boolean {
+        if(forceVisible){bottomTravel=0.0;return true}
+        if(!delta.isFinite() || !rowHeight.isFinite() || rowHeight<=0f)return visible
+        val towardsSwitch=if(visible)-delta else delta
+        bottomTravel=(bottomTravel+towardsSwitch.toDouble()/rowHeight).coerceAtLeast(0.0)
+        if(bottomTravel<2.0)return visible
+        bottomTravel=0.0
+        return !visible
+    }
     fun beginFling(velocity: Float){flingActive=velocity.isFinite() && kotlin.math.abs(velocity)>0.01f}
     fun endFling(){flingActive=false}
     fun follows(userInput: Boolean)=userInput || flingActive
@@ -33,11 +43,6 @@ object InboxInteractionRules {
         if(delta.isFinite() && delta<0f && fraction==1f && rowOffset>0 && rowSize>rowOffset)
             -minOf(-delta,(rowSize-rowOffset).toFloat()) else 0f
     fun headerOffset(header: Int,fraction: Float)=kotlin.math.round(header*fraction.coerceIn(0f,1f)).toInt()
-    fun bottomVisibility(visible: Boolean,delta: Float,forced: Boolean,follows: Boolean): Boolean = when {
-        forced -> true
-        !follows || !delta.isFinite() || delta==0f -> visible
-        else -> delta>0f
-    }
     fun pullProgress(distance: Float,refreshing: Boolean,accepted: Boolean,gestureArmed: Boolean)=if(refreshing || accepted || !gestureArmed)0f else distance.coerceIn(0f,1f)
     fun noticeBottom(rootHeight: Int,route: String,anchor: NoticeAnchor?,safeBottom: Int,gap: Int): Int {
         val obstruction=anchor?.takeIf{it.owner==route && it.top>=0f && it.top<rootHeight}?.let{rootHeight-it.top.toInt()}?:0

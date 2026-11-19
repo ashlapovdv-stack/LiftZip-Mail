@@ -538,9 +538,9 @@ private val Paper=Color(0xFFF8F9F6)
     val forceControls by rememberUpdatedState(!s.autoHidePanels || scrollableContent==false)
     LaunchedEffect(selectionMode){if(!selectionMode)selectionMenu=false}
     LaunchedEffect(selectionMode){snapshotFlow{if(bottomVisible.value)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
-    val scrollControls=remember(memory,chrome,focus,keyboard){InboxScrollConnection(chrome,controlsProgress,bottomVisible,
+    val scrollControls=remember(memory,chrome,focus,keyboard,density){InboxScrollConnection(chrome,controlsProgress,bottomVisible,
         forced={forceControls},canPull={!memory.list.canScrollBackward},refreshing={latestRefreshing},
-        onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true},listState=memory.list)}
+        onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true},listState=memory.list,fallbackRowHeight=with(density){96.dp.toPx()})}
     // Selecting rows must not reveal hidden panels and move the list underneath the finger.
     LaunchedEffect(drawer.currentValue,s.autoHidePanels){if(!s.autoHidePanels || drawer.currentValue==DrawerValue.Open)showPanels()}
 

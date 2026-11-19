@@ -42,14 +42,14 @@ import androidx.compose.ui.unit.dp
 /** Distinguishes native fling deltas from unrelated programmatic positioning. */
 class InboxScrollConnection(private val controller: InboxChromeController,private val progress: MutableFloatState,private val bottomVisible: MutableState<Boolean>,
     private val forced: ()->Boolean,private val canPull: ()->Boolean,private val refreshing: ()->Boolean,
-    private val onHide: ()->Unit,private val onPull: ()->Unit,private val listState: LazyListState?=null): NestedScrollConnection {
+    private val onHide: ()->Unit,private val onPull: ()->Unit,private val listState: LazyListState?=null,private val fallbackRowHeight: Float=96f): NestedScrollConnection {
     override fun onPreScroll(available: Offset,source: NestedScrollSource): Offset {
         if(source==NestedScrollSource.UserInput)controller.endFling()
         val before=controller.fraction
         val force=forced()
         val userInput=source==NestedScrollSource.UserInput
         val follows=controller.follows(userInput)
-        bottomVisible.value=InboxInteractionRules.bottomVisibility(bottomVisible.value,available.y,force,follows)
+        if(force || follows && available.y>0f && canPull())updateBottom(0f,forceVisible=true)
         val alignment=if(!force && listState!=null && follows) {
             val offset=listState.firstVisibleItemScrollOffset
             val first=listState.layoutInfo.visibleItemsInfo.firstOrNull{it.index==listState.firstVisibleItemIndex}
@@ -58,14 +58,27 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
         // dispatchRawDelta handles only this row fragment; the remaining motion is still
         // distributed through nested scroll, so neither the row nor the header moves twice.
         val aligned=if(alignment!=0f && listState!=null)-listState.dispatchRawDelta(-alignment)else 0f
+        // Count the row fragment here and the rest of the list travel after nested scroll.
+        if(aligned!=0f)updateBottom(aligned)
         val consumed=controller.scroll(available.y-aligned,forced=force,userInput=userInput)
         progress.floatValue=controller.fraction
         if(before==1f && controller.fraction<1f)onHide()
         return Offset(0f,aligned+consumed)
     }
     override fun onPostScroll(consumed: Offset,available: Offset,source: NestedScrollSource): Offset {
-        if(source==NestedScrollSource.UserInput && available.y>0 && canPull() && !refreshing() && controller.fraction>=1f)onPull()
+        val userInput=source==NestedScrollSource.UserInput
+        val atTop=canPull()
+        if(controller.follows(userInput) && consumed.y!=0f && !forced()) {
+            updateBottom(consumed.y,forceVisible=consumed.y>0f && atTop)
+        }
+        if(userInput && available.y>0 && atTop && !refreshing() && controller.fraction>=1f)onPull()
         return Offset.Zero
+    }
+    private fun updateBottom(delta: Float,forceVisible: Boolean=false) {
+        val rowHeight=listState?.let { list->
+            list.layoutInfo.visibleItemsInfo.firstOrNull{it.index==list.firstVisibleItemIndex}?.size?.takeIf{it>0}?.toFloat()
+        }?:fallbackRowHeight
+        bottomVisible.value=controller.bottomVisibility(bottomVisible.value,delta,rowHeight,forceVisible)
     }
     override suspend fun onPreFling(available: Velocity): Velocity {controller.beginFling(available.y);return Velocity.Zero}
     override suspend fun onPostFling(consumed: Velocity,available: Velocity): Velocity {controller.endFling();return Velocity.Zero}

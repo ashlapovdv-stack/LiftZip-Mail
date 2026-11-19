@@ -4,17 +4,33 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InboxInteractionTest {
-    @Test fun bottomControlsSwitchOnFirstDirectionalMovement() {
-        val hidden=InboxInteractionRules.bottomVisibility(true,-1f,false,true)
-        assertFalse(hidden)
-        assertFalse(InboxInteractionRules.bottomVisibility(hidden,0f,false,true))
-        assertTrue(InboxInteractionRules.bottomVisibility(hidden,1f,false,true))
+    @Test fun bottomControlsWaitForAboutTwoCardsInEachDirection() {
+        val chrome=InboxChromeController()
+        assertTrue(chrome.bottomVisibility(true,-120f,120f))
+        assertTrue(chrome.bottomVisibility(true,-118f,120f))
+        assertFalse(chrome.bottomVisibility(true,-3f,120f))
+        assertFalse(chrome.bottomVisibility(false,80f,160f))
+        assertFalse(chrome.bottomVisibility(false,120f,120f))
+        assertTrue(chrome.bottomVisibility(false,60f,120f))
     }
-    @Test fun bottomControlsIgnorePositionChangesAndRespectForcedVisibility() {
-        assertTrue(InboxInteractionRules.bottomVisibility(true,-100f,false,false))
-        assertFalse(InboxInteractionRules.bottomVisibility(false,100f,false,false))
-        assertFalse(InboxInteractionRules.bottomVisibility(false,Float.NaN,false,true))
-        assertTrue(InboxInteractionRules.bottomVisibility(false,-100f,true,true))
+    @Test fun smallBackAndForthMovementsCancelBeforeSwitching() {
+        val chrome=InboxChromeController()
+        repeat(500){
+            assertTrue(chrome.bottomVisibility(true,-10f,100f))
+            assertTrue(chrome.bottomVisibility(true,10f,100f))
+        }
+        assertTrue(chrome.bottomVisibility(true,-195f,100f))
+        assertTrue(chrome.bottomVisibility(true,10f,100f))
+        assertTrue(chrome.bottomVisibility(true,-10f,100f))
+        assertFalse(chrome.bottomVisibility(true,-6f,100f))
+    }
+    @Test fun returningToStartOrForcingPanelsResetsTheTravel() {
+        val chrome=InboxChromeController()
+        assertTrue(chrome.bottomVisibility(true,-190f,100f))
+        assertTrue(chrome.bottomVisibility(true,0f,100f,forceVisible=true))
+        assertTrue(chrome.bottomVisibility(true,-20f,100f))
+        assertFalse(chrome.bottomVisibility(false,Float.NaN,100f))
+        assertTrue(chrome.bottomVisibility(false,0f,100f,forceVisible=true))
     }
     @Test fun aHiddenHeaderWaitsForTheClippedRowAndUsesOnlyTheRemainingDrag() {
         assertEquals(30f,InboxInteractionRules.revealAlignment(30f,0f,80),0f)

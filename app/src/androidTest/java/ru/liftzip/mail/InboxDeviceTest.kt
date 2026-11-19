@@ -134,6 +134,44 @@ class InboxDeviceTest {
         saveDeviceScreenshot(rule,"hidden-panels")
     }
 
+    @Test fun bottomControlsWaitForActualListTravelInBothDirections() {
+        val progress=mutableFloatStateOf(0f)
+        val bottomVisible=mutableStateOf(true)
+        val controller=InboxChromeController(0f)
+        val listState=LazyListState(10)
+        var dragPixels=0f
+        rule.setContent {
+            dragPixels=with(LocalDensity.current){100.dp.toPx()}
+            val fraction=remember{{progress.floatValue}}
+            val connection=remember{
+                InboxScrollConnection(controller,progress,bottomVisible,{false},
+                    {!listState.canScrollBackward},{false},{},{},listState)
+            }
+            MaterialTheme {
+                InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={},
+                    bottom={Text("Tabs",Modifier.height(80.dp))},bottomVisible=bottomVisible,list={padding->
+                        LazyColumn(Modifier.fillMaxSize().testTag("letters").nestedScroll(connection),state=listState,contentPadding=padding) {
+                            items(100,key={it}){Text("Card $it",Modifier.fillMaxWidth().height(120.dp))}
+                        }
+                    })
+            }
+        }
+        val list=rule.onNodeWithTag("letters")
+        val tabs=rule.onNodeWithText("Tabs")
+        fun drag(direction: Int) {
+            list.performTouchInput{down(center);moveBy(Offset(0f,direction*dragPixels));advanceEventTime(500);up()}
+        }
+        repeat(2){drag(-1)}
+        tabs.assertIsDisplayed()
+        drag(-1)
+        tabs.assertIsNotDisplayed()
+        repeat(2){drag(1)}
+        tabs.assertIsNotDisplayed()
+        drag(1)
+        tabs.assertIsDisplayed()
+        rule.runOnIdle{assertTrue(listState.firstVisibleItemIndex>0)}
+    }
+
     @Test fun filteringALongListToOneMessageRestoresPanelsAndKeepsThemVisibleOnDrag() {
         val progress=mutableFloatStateOf(0.4f);val controller=InboxChromeController(0.4f)
         val bottomVisible=mutableStateOf(false)
@@ -174,7 +212,7 @@ class InboxDeviceTest {
         rule.waitForIdle()
         rule.onNodeWithTag("boundary-list").performTouchInput{down(center);moveBy(Offset(0f,60f));advanceEventTime(500);up()}
         rule.waitForIdle()
-        rule.runOnIdle{assertEquals(0f,progress.floatValue,0f);assertTrue(bottomVisible.value);assertTrue(list.firstVisibleItemScrollOffset in 1..99)}
+        rule.runOnIdle{assertEquals(0f,progress.floatValue,0f);assertFalse(bottomVisible.value);assertTrue(list.firstVisibleItemScrollOffset in 1..99)}
         rule.onNodeWithTag("boundary-list").performTouchInput{down(center);moveBy(Offset(0f,160f));advanceEventTime(500);up()}
         rule.waitForIdle()
         rule.runOnIdle{assertTrue(progress.floatValue>0f);assertEquals(10,list.firstVisibleItemIndex);assertEquals(0,list.firstVisibleItemScrollOffset)}
@@ -198,7 +236,7 @@ class InboxDeviceTest {
         var remaining=0
         rule.runOnIdle{val info=list.layoutInfo.visibleItemsInfo.first{it.index==list.firstVisibleItemIndex};remaining=info.size-list.firstVisibleItemScrollOffset;assertTrue(remaining>100)}
         rule.onNodeWithTag("hide-boundary-list").performTouchInput{down(center);moveBy(Offset(0f,-60f));advanceEventTime(500);up()}
-        rule.waitForIdle();rule.runOnIdle{assertEquals(1f,progress.floatValue,0f);assertFalse(bottomVisible.value);assertTrue(list.firstVisibleItemScrollOffset>100)}
+        rule.waitForIdle();rule.runOnIdle{assertEquals(1f,progress.floatValue,0f);assertTrue(bottomVisible.value);assertTrue(list.firstVisibleItemScrollOffset>100)}
         rule.onNodeWithTag("hide-boundary-list").performTouchInput{down(center);moveBy(Offset(0f,-(remaining+160).toFloat()));advanceEventTime(500);up()}
         rule.waitForIdle();rule.runOnIdle{assertTrue(progress.floatValue<1f);assertEquals(11,list.firstVisibleItemIndex);assertEquals(0,list.firstVisibleItemScrollOffset)}
         saveDeviceScreenshot(rule,"hide-row-boundary")
