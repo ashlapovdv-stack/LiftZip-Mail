@@ -39,6 +39,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     private val query=MutableStateFlow("")
     private val unreadScope=MutableStateFlow(UnreadScope())
     val state=mutable.asStateFlow()
+    internal val backgroundEvents=(app as MailApplication).backgroundJournal.events
     init {
         viewModelScope.launch{(getApplication<Application>() as MailApplication).fastMail.state.collect{value->mutable.update{it.copy(fastMail=value)}}}
         viewModelScope.launch{repo.forwardingProgress.collect{progress->mutable.update{it.copy(forwarding=progress)}}}

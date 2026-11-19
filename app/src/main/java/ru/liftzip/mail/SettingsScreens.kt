@@ -117,9 +117,9 @@ import java.util.Locale
     }
 }
 
-@Composable fun DiagnosticsScreen(s: UiState,onBack: ()->Unit,onPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit,onTestBackground: ()->Unit,onRestore: ()->Unit,onRetryBodies: ()->Unit) {
+@Composable internal fun DiagnosticsScreen(s: UiState,backgroundEvents: List<BackgroundEvent>,onBack: ()->Unit,onPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit,onTestBackground: ()->Unit,onRestore: ()->Unit,onRetryBodies: ()->Unit) {
     SettingsPage("Диагностика",onBack) {
-        BackgroundSettings(s,onPermission,onTestNotification,onCheck,onTestBackground,onRestore,onRetryBodies)
+        BackgroundSettings(s,backgroundEvents,onPermission,onTestNotification,onCheck,onTestBackground,onRestore,onRetryBodies)
         HorizontalDivider(Modifier.padding(vertical=8.dp))
         Text("Проверки ящиков",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
         s.accounts.forEach{a->

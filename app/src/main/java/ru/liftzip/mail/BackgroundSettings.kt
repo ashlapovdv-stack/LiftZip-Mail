@@ -16,7 +16,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@Composable fun BackgroundSettings(s: UiState,onPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit,onTestBackground: ()->Unit,onRestore: ()->Unit,onRetryBodies: ()->Unit) {
+@Composable internal fun BackgroundSettings(s: UiState,backgroundEvents: List<BackgroundEvent>,onPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit,onTestBackground: ()->Unit,onRestore: ()->Unit,onRetryBodies: ()->Unit) {
     val context=LocalContext.current
     fun open(action: String,packageUri: Boolean=false){
         runCatching{context.startActivity(Intent(action).apply{if(packageUri)data=Uri.parse("package:"+context.packageName)})}
@@ -66,6 +66,15 @@ import java.util.Locale
             "Автоматически: ${time(bg.automaticStarted)} — ${time(bg.automaticFinished)}, ${bg.automaticResult}\n"+
             "Последний запуск: ${bg.kind}, ${time(bg.started)} — ${time(bg.finished)}, ${bg.result}; ${bg.error}\n"+
             "Тексты: ${s.bodyCache.pending} ожидают; ${s.bodyCache.saved} сохранено; ${s.bodyCache.error}"
-        context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Диагностика Почты",report))
+        val timestamp=SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z",Locale.ROOT)
+        val journal=backgroundEvents.joinToString("\n"){event->"${timestamp.format(Date(event.time))} · ${event.description()}"}
+        context.getSystemService(ClipboardManager::class.java).setPrimaryClip(
+            ClipData.newPlainText("Диагностика Почты",report+"\n\nЖурнал фоновой проверки\n"+journal.ifBlank{"Пока нет записей"})
+        )
     }){Text("Скопировать диагностику без паролей")}
+    Text("Журнал фоновой проверки",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
+    if(backgroundEvents.isEmpty())Text("Пока нет записей")
+    backgroundEvents.takeLast(12).asReversed().forEach{event->
+        Text("${time(event.time)} · ${event.description()}",style=MaterialTheme.typography.bodySmall)
+    }
 }

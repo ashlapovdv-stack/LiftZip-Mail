@@ -12,18 +12,32 @@ import java.util.concurrent.TimeUnit
 
 class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(context,params) {
     override suspend fun doWork(): Result {
-        val repo=(applicationContext as MailApplication).repository
+        val app=applicationContext as MailApplication
+        val repo=app.repository
+        val journal=app.backgroundJournal
+        val test=inputData.getBoolean("background-test",false)
+        val source=if(test)BackgroundSource.TEST else BackgroundSource.AUTOMATIC
+        val attempt=runAttemptCount+1
         val token="$id:${java.util.UUID.randomUUID()}"
         var checked=false
+        journal.record(source,BackgroundStage.STARTED,attempt)
         return try {
             repo.load()
-            val test=inputData.getBoolean("background-test",false)
-            if(!test && repo.snapshot.value.poll.backgroundMinutes==0 || repo.snapshot.value.accounts.none{it.enabled})return Result.success()
+            if(!test && repo.snapshot.value.poll.backgroundMinutes==0 || repo.snapshot.value.accounts.none{it.enabled}) {
+                journal.record(source,BackgroundStage.SKIPPED,attempt)
+                return Result.success()
+            }
             repo.backgroundStarted(token,if(test)"test" else "auto")
             val result=repo.sync(warmBodies=false)
             val retry=NotificationRules.shouldRetry(result)
             repo.backgroundFinished(token,if(retry)"retry" else "success",result.errors.joinToString("\n"),result.newUnread)
             checked=true
+            val stage=when {
+                result.dnsFailed->BackgroundStage.DNS_RETRY
+                retry->BackgroundStage.RETRY
+                else->BackgroundStage.SUCCESS
+            }
+            journal.record(source,stage,attempt,result.newUnread)
             FolderWorker.enqueue(applicationContext);StorageWorker.enqueue(applicationContext)
             // Try warming bodies while Android still grants a network window.
             try {
@@ -34,10 +48,16 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
             }
             if(retry)Result.retry()else Result.success()
         }catch(e: CancellationException){
-            if(!checked)withContext(NonCancellable){runCatching{repo.backgroundFinished(token,"stopped")}}
+            if(!checked) {
+                journal.record(source,BackgroundStage.STOPPED,attempt)
+                withContext(NonCancellable){runCatching{repo.backgroundFinished(token,"stopped")}}
+            }
             throw e
         }catch(e: Exception){
-            if(!checked)repo.backgroundFinished(token,"retry",friendlyError(e))
+            if(!checked) {
+                journal.record(source,if(e.isMailDnsFailure())BackgroundStage.DNS_RETRY else BackgroundStage.RETRY,attempt)
+                repo.backgroundFinished(token,"retry",friendlyError(e))
+            }
             Result.retry()
         }
     }

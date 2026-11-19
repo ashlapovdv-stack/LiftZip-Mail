@@ -107,6 +107,14 @@ class MainActivity: ComponentActivity() {
         intent.removeExtra(MailNotifications.MESSAGE_EXTRA)
         intent.removeExtra("mail-open-inbox")
     }
+    override fun onStart() {
+        (application as MailApplication).backgroundJournal.visibility(true)
+        super.onStart()
+    }
+    override fun onStop() {
+        (application as MailApplication).backgroundJournal.visibility(false)
+        super.onStop()
+    }
     override fun onNewIntent(intent: Intent){super.onNewIntent(intent);setIntent(intent);handleNotification(intent)}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -308,7 +316,8 @@ private val Paper=Color(0xFFF8F9F6)
                         HorizontalDivider()
                     }
                     Box(Modifier.weight(1f)) {
-                        DiagnosticsScreen(s,onBack={route="settings"},onPermission={
+                        val backgroundEvents by vm.backgroundEvents.collectAsStateWithLifecycle()
+                        DiagnosticsScreen(s,backgroundEvents,onBack={route="settings"},onPermission={
                             if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                             else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
                         },onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestore=vm::restoreBackground,onRetryBodies=vm::retryBodies)

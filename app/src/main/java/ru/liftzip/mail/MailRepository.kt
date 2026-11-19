@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 data class MailSnapshot(val accounts: List<MailAccount> = emptyList(), val messages: List<MailItem> = emptyList(), val history: Map<String,InboxHistory> = emptyMap(), val defaultAccountId: String? = null,
     val poll: PollSettings = PollSettings(), val historyDownload: HistoryDownload = HistoryDownload(), val checks: Map<String,SyncCheck> = emptyMap(),val background: BackgroundCheck=BackgroundCheck(),val bodyCache: BodyCacheStatus=BodyCacheStatus(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus(),val style: MailStyle=MailStyle.STANDARD)
-data class SyncResult(val newUnread: Int, val errors: List<String>)
+data class SyncResult(val newUnread: Int, val errors: List<String>, val dnsFailed: Boolean=false)
 
 class MailApplication : Application() {
     val repository by lazy { MailRepository(this) }
@@ -39,6 +39,7 @@ class MailApplication : Application() {
     val processToken=UUID.randomUUID().toString()
     private val actions=BodyWarmupSignals()
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.IO)
+    internal val backgroundJournal=BackgroundJournal({getSharedPreferences("mail-background-journal",MODE_PRIVATE)},scope)
     private val warmup=BodyWarmupSignals()
     @Volatile var visible=false
     override fun onTrimMemory(level: Int){super.onTrimMemory(level);ReaderDocuments.clear()}
@@ -305,7 +306,7 @@ class MailRepository(private val context: Context) {
     private suspend fun checkAccounts(accountId: String?,unread: Boolean): SyncResult=supervisorScope {
         val ids=coordinator.data{state.value.accounts.filter{it.enabled && (accountId==null || it.id==accountId)}.map{it.id}}
         val results=ids.map{id->async(Dispatchers.IO){parallelChecks.withPermit{checkAccount(id,unread)}}}.awaitAll()
-        SyncResult(results.sumOf{it.newUnread},results.flatMap{it.errors})
+        SyncResult(results.sumOf{it.newUnread},results.flatMap{it.errors},results.any{it.dnsFailed})
     }
     private suspend fun checkAccount(id: String,unread: Boolean): SyncResult=coordinator.poll(id) {
         var request: Request?=null
@@ -355,7 +356,7 @@ class MailRepository(private val context: Context) {
         if(request==null || !current(request))return@data SyncResult(0,emptyList())
         val message=friendlyError(error);val id=request.account.id
         syncPrefs.edit().putString("error:$id",message).putLong("duration:$id",(System.nanoTime()-started)/1_000_000).apply()
-        refresh(messages=state.value.messages);SyncResult(0,listOf("${request.account.name}: $message"))
+        refresh(messages=state.value.messages);SyncResult(0,listOf("${request.account.name}: $message"),error.isMailDnsFailure())
     }
     suspend fun loadOlder(accountId: String?): SyncResult {
         val ids=coordinator.data{state.value.accounts.filter{it.enabled && (accountId==null || it.id==accountId)}.map{it.id}}
