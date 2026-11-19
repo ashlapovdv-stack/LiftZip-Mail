@@ -134,6 +134,37 @@ class MessageFlowDeviceTest {
         rule.onNodeWithTag("mail-row:scroll-20").assertIsDisplayed()
     }
 
+    @Test fun startupInboxShowsCachedRowsAndKeepsPositionWhenFullPagingStarts() {
+        val memory=InboxMemory()
+        val letters=(1..80).map{i->mail.copy(id="startup-$i",date=100L-i)}
+        var model by mutableStateOf(UiState(accounts=listOf(account),messages=letters.take(LOCAL_INBOX_PAGE_SIZE),startupInbox=true))
+        var reads=0
+        rule.setContent {
+            val state=model
+            MailTheme {
+                InboxScreen(state,null,MailFolder.INBOX,null,memory,onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},
+                    onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},
+                    onDelete={_,_->},onSearch={},onOpen={},readLocalInboxPage={_,after,limit->
+                        check(!state.startupInbox)
+                        reads++
+                        val remaining=letters.drop(if(after==null)0 else letters.indexOfFirst{it.id==after.id}+1)
+                        val items=remaining.take(limit)
+                        LocalInboxPage(items,if(remaining.size>items.size)items.last().inboxCursor()else null)
+                    })
+            }
+        }
+        rule.onNodeWithTag("mail-row:startup-1").assertIsDisplayed()
+        rule.onNodeWithTag("inbox-list").performScrollToIndex(12)
+        rule.onNodeWithTag("mail-row:startup-13").assertIsDisplayed()
+        rule.runOnIdle {
+            assertEquals(0,reads)
+            model=model.copy(loaded=true,messages=letters,startupInbox=false)
+        }
+        rule.waitUntil(10_000){reads>0}
+        rule.onNodeWithTag("mail-row:startup-13").assertIsDisplayed()
+        rule.runOnIdle{assertEquals("startup-13",memory.list.layoutInfo.visibleItemsInfo.first().key)}
+    }
+
     @Test fun localInboxLoadsMoreNearTheEndAndKeepsTheVisibleRowOnArrival() {
         val memory=InboxMemory()
         val letters=(1..100).map{i->mail.copy(id="page-$i",subject="Письмо $i",date=200L-i)}

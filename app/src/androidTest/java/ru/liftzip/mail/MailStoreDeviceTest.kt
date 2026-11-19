@@ -7,6 +7,13 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.UUID
 import org.junit.Assert.*
@@ -28,6 +35,38 @@ class MailStoreDeviceTest {
     }
     private fun account()=MailAccount(id="a",name="Test",email="a@example.com",provider=Provider.CUSTOM,imapHost="imap.example.com",smtpHost="smtp.example.com",enabled=false)
     private fun message(account: String="a")=MailItem("m",account,sender="S",senderEmail="s@example.com",recipients="r@example.com",subject="Test",body="Keep this complete body",date=1,localFolder="drafts")
+    @Test fun startupPublishesIndexedInboxBeforeTheCompleteSnapshot(): Unit = runBlocking {
+        val c=context()
+        try {
+            val count=5_000
+            LocalStore(c).use{db->
+                db.putAccount(account().copy(enabled=true))
+                db.putAccount(account().copy(id="off",email="off@example.com"))
+                db.putMessages((1..count).map{i->message().copy(id="in-$i",uid=i.toLong(),validity=1,date=i.toLong(),localFolder="inbox",unread=false)}+
+                    message("off").copy(id="disabled",uid=1,validity=1,date=count+1L,localFolder="inbox"))
+                db.putAction(MailAction("trash","a","in-5000",ActionKind.TRASH,"{}"))
+                db.putAction(MailAction("star","a","in-4999",ActionKind.FLAGS,"{}",starred=true))
+            }
+            val repo=MailRepository(c)
+            val start=System.nanoTime()
+            val first=async(Dispatchers.Unconfined,start=CoroutineStart.UNDISPATCHED) {
+                val page=withTimeout(10_000){repo.startupInbox.filterNotNull().first()}
+                assertTrue("The complete snapshot was already published",repo.snapshot.value.messages.isEmpty())
+                (System.nanoTime()-start)/1_000_000 to page
+            }
+            repo.load()
+            val fullMs=(System.nanoTime()-start)/1_000_000
+            val (firstMs,preview)=first.await()
+            assertEquals(LOCAL_INBOX_PAGE_SIZE,preview.messages.size)
+            assertEquals((4999 downTo 4960).map{"in-$it"},preview.messages.map{it.id})
+            assertTrue(preview.messages.first().starred)
+            assertEquals(preview.messages,repo.localInboxPage(null,null,LOCAL_INBOX_PAGE_SIZE).items)
+            assertEquals(count+1,repo.snapshot.value.messages.size)
+            assertNull(repo.startupInbox.value)
+            android.util.Log.i("MailStartup","rows=${count+1} first_page_ms=$firstMs full_initialization_ms=$fullMs")
+        }finally{c.deleteDatabase("mail-v1.db")}
+    }
+
     @Test fun storedMimeHistoryIsReanalyzedAfterReopeningWithoutChangingItsSource() {
         val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
             .open("mailru-linked-history.eml").use{input->

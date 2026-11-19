@@ -88,11 +88,11 @@ class MailRepository(private val context: Context) {
     private var nextFlagVersion=0L
     private val state=MutableStateFlow(MailSnapshot())
     val snapshot=state.asStateFlow()
-    private fun refresh(arrived: Set<String> = emptySet(),messages: List<MailItem>?=null) {
-        val accounts=db.accounts()
-        val actions=db.actions()
-        val items=ActionRules.overlay(messages?:db.messages(),actions)
-        state.value=MailSnapshot(accounts,items,accounts.associate { a->
+    private val startup=MutableStateFlow<MailSnapshot?>(null)
+    internal val startupInbox=startup.asStateFlow()
+
+    private fun buildSnapshot(accounts: List<MailAccount>,actions: List<MailAction>,items: List<MailItem>)=
+        MailSnapshot(accounts,items,accounts.associate { a->
             a.id to InboxHistory(if(syncPrefs.contains("count:${a.id}"))syncPrefs.getInt("count:${a.id}",0) else null,syncPrefs.getBoolean("older:${a.id}",true),
                 if(syncPrefs.contains("unread:${a.id}"))syncPrefs.getInt("unread:${a.id}",0)else null)
         },settings.getString("default-sender",null)?.takeIf{id->accounts.any{it.id==id}},
@@ -101,25 +101,44 @@ class MailRepository(private val context: Context) {
             BackgroundCheck(settings.getLong("poll-start",0),settings.getLong("poll-end",0),settings.getString("poll-result","").orEmpty(),settings.getString("poll-error","").orEmpty(),settings.getInt("poll-arrived",0),
                 settings.getString("poll-kind","auto").orEmpty(),settings.getLong("poll-auto-start",0),settings.getLong("poll-auto-end",0),settings.getString("poll-auto-result","").orEmpty()),
             bodyCache.copy(pending=pendingBodies(items,accounts).size),settings.getBoolean("auto-hide-panels",true),db.folders(),actions,storage,AppearancePreferences.read(settings))
+    private fun refresh(arrived: Set<String> = emptySet(),messages: List<MailItem>?=null) {
+        val accounts=db.accounts()
+        val actions=db.actions()
+        state.value=buildSnapshot(accounts,actions,ActionRules.overlay(messages?:db.messages(),actions))
         notifications.reconcile(SyncRules.activeMessages(state.value.messages,accounts,null),arrived,accounts){id->db.message(id)?.body?.take(3000)}
         notifications.history(state.value)
     }
-    suspend fun load(): Unit=withContext(Dispatchers.IO){coordinator.data{
-        if(loaded)return@data
-        val accounts=db.accounts()
-        AccountColorSlots.assign(accounts).zip(accounts).filter{(assigned,old)->assigned.colorSlot!=old.colorSlot}
-            .forEach{(assigned,_)->db.updateAccount(assigned,resetInbox=false)}
-        val process=(context.applicationContext as MailApplication).processToken
-        db.actions().forEach{a->val recovered=ActionRules.recovered(a,process);if(recovered!=a)db.putAction(recovered)}
-        refresh()
-        if(!settings.getBoolean("server-sync-initialized",false)) {
-            val initial=state.value.messages.filter{it.uid==0L && it.localFolder in setOf("drafts","sent")}.mapNotNull{preview->db.message(preview.id)}
-            db.applyActions(emptyList(),actions=initial.map{actionFor(it,if(it.localFolder=="sent")ActionKind.APPEND_SENT else ActionKind.APPEND_DRAFT)})
-            settings.edit().putBoolean("server-sync-initialized",true).apply();refresh(messages=state.value.messages)
+    suspend fun load(): Unit=withContext(Dispatchers.IO){
+        val coroutine=currentCoroutineContext()
+        coordinator.data {
+            if(loaded)return@data
+            val accounts=db.accounts()
+            AccountColorSlots.assign(accounts).zip(accounts).filter{(assigned,old)->assigned.colorSlot!=old.colorSlot}
+                .forEach{(assigned,_)->db.updateAccount(assigned,resetInbox=false)}
+            val process=(context.applicationContext as MailApplication).processToken
+            db.actions().forEach{a->val recovered=ActionRules.recovered(a,process);if(recovered!=a)db.putAction(recovered)}
+            try {
+                // The coordinator's full snapshot remains authoritative for sync and notifications.
+                // Publish only the indexed first page to the UI while the complete snapshot is read.
+                try {
+                    val currentAccounts=db.accounts()
+                    val actions=db.actions()
+                    val page=readLocalInboxPage(currentAccounts.enabledIds(),actions,null,LOCAL_INBOX_PAGE_SIZE){coroutine.ensureActive()}
+                    if(page.items.isNotEmpty())startup.value=buildSnapshot(currentAccounts,actions,page.items)
+                }catch(_: android.database.SQLException){
+                    // Full initialization can still use the existing unpaged read.
+                }
+                refresh()
+                if(!settings.getBoolean("server-sync-initialized",false)) {
+                    val initial=state.value.messages.filter{it.uid==0L && it.localFolder in setOf("drafts","sent")}.mapNotNull{preview->db.message(preview.id)}
+                    db.applyActions(emptyList(),actions=initial.map{actionFor(it,if(it.localFolder=="sent")ActionKind.APPEND_SENT else ActionKind.APPEND_DRAFT)})
+                    settings.edit().putBoolean("server-sync-initialized",true).apply();refresh(messages=state.value.messages)
+                }
+                state.value.messages.filter{it.localFolder=="drafts" && it.forwarding?.active==true}.forEach{ForwardWorker.enqueue(context,it.id)}
+                loaded=true
+            }finally{startup.value=null}
         }
-        state.value.messages.filter{it.localFolder=="drafts" && it.forwarding?.active==true}.forEach{ForwardWorker.enqueue(context,it.id)}
-        loaded=true
-    }}
+    }
     private data class Request(val account: MailAccount,val version: Long,val cached: List<MailItem>,val flags: Map<String,Long>,val cursor: ArrivalCursor)
     private data class CheckReply(val inbox: InboxPage?=null,val unread: UnreadPage?=null)
     private data class HistoryRequest(val request: Request,val missing: List<MailItem>)
@@ -181,22 +200,26 @@ class MailRepository(private val context: Context) {
         require(limit in 1 until Int.MAX_VALUE)
         val coroutine=currentCoroutineContext()
         coordinator.data {
-            val accounts=accountId?.let(::setOf)?:db.accounts().filter{it.enabled}.mapTo(mutableSetOf()){it.id}
-            val actions=db.actions()
-            val items=mutableListOf<MailItem>()
-            var cursor=after
-            while(items.size<=limit) {
-                coroutine.ensureActive()
-                val batchSize=minOf(LOCAL_INBOX_PAGE_SIZE,limit+1-items.size)
-                val batch=db.inboxRows(accounts,cursor,batchSize)
-                items+=ActionRules.overlay(batch,actions).filterNot{it.pendingDelete}
-                if(batch.size<batchSize)break
-                cursor=batch.last().inboxCursor()
-            }
-            val hasMore=items.size>limit
-            val page=items.take(limit)
-            LocalInboxPage(page,if(hasMore)page.last().inboxCursor()else null)
+            val accounts=accountId?.let(::setOf)?:db.accounts().enabledIds()
+            readLocalInboxPage(accounts,db.actions(),after,limit){coroutine.ensureActive()}
         }
+    }
+
+    private fun List<MailAccount>.enabledIds()=filter{it.enabled}.mapTo(mutableSetOf()){it.id}
+
+    private fun readLocalInboxPage(accounts: Set<String>,actions: List<MailAction>,after: LocalInboxCursor?,limit: Int,checkActive: ()->Unit): LocalInboxPage {
+        val items=mutableListOf<MailItem>()
+        var cursor=after
+        while(items.size<=limit) {
+            checkActive()
+            val batchSize=minOf(LOCAL_INBOX_PAGE_SIZE,limit+1-items.size)
+            val batch=db.inboxRows(accounts,cursor,batchSize)
+            items+=ActionRules.overlay(batch,actions).filterNot{it.pendingDelete}
+            if(batch.size<batchSize)break
+            cursor=batch.last().inboxCursor()
+        }
+        val page=items.take(limit)
+        return LocalInboxPage(page,if(items.size>limit)page.last().inboxCursor()else null)
     }
     suspend fun search(query: String): Set<String> =withContext(Dispatchers.IO){
         val coroutine=currentCoroutineContext();db.search(query){coroutine.ensureActive()}
