@@ -4,8 +4,15 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.mutableFloatStateOf
 
+internal class InboxRows(val items: List<MailItem>) {
+    val ids=items.map{it.id}
+    val byId=items.associateBy{it.id}
+    val unread=items.count{it.unread}
+}
+
 class InboxMemory(val list: LazyListState = LazyListState(),var restore: InboxPosition? = null,initialControls: Float=1f) {
-    var visibleRows: List<MailItem>? = null
+    internal var rows: InboxRows? = null
+    val visibleRows: List<MailItem>? get()=rows?.items
     var pinned = restore?.atTop ?: true
     var firstId: String? = null
     val controlsProgress=mutableFloatStateOf(initialControls.coerceIn(0f,1f))

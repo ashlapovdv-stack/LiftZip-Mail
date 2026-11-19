@@ -149,6 +149,49 @@ class MailStoreDeviceTest {
         }
     }
 
+    @Test fun folderDiscoveryRollsBackWhenRemovingAnObsoleteMessageFails() {
+        val c=context()
+        val removed=ServerFolder("a","Old","Old",FolderRole.OTHER)
+        val discovered=ServerFolder("a","New","New",FolderRole.OTHER)
+        val obsolete=message().copy(localFolder="remote-other",remoteFolder=removed.path,uid=10)
+        try {
+            LocalStore(c).use{ db->
+                db.putAccount(account())
+                db.putFolders(listOf(removed))
+                db.putMessage(obsolete)
+                db.writableDatabase.execSQL("""
+                    CREATE TRIGGER fail_message_delete BEFORE DELETE ON messages
+                    BEGIN SELECT RAISE(ABORT, 'test message delete failure'); END
+                """.trimIndent())
+                assertThrows(SQLiteException::class.java) {
+                    db.replaceFolders("a",listOf(discovered),setOf(obsolete.id))
+                }
+                assertEquals(listOf(removed),db.folders())
+                assertEquals(obsolete.body,db.message(obsolete.id)?.body)
+
+                db.writableDatabase.execSQL("DROP TRIGGER fail_message_delete")
+                db.replaceFolders("a",listOf(discovered),setOf(obsolete.id))
+                assertEquals(listOf(discovered),db.folders())
+                assertNull(db.message(obsolete.id))
+            }
+        }finally{c.deleteDatabase("mail-v1.db")}
+    }
+
+    @Test fun localSearchFindsRecipientsAndFullCachedBody() {
+        val c=context()
+        try {
+            val cached=message().copy(body="prefix ".repeat(100)+"sku-400",cc="copy@example.com",bcc="hidden@example.com")
+            LocalStore(c).use{ db->
+                db.putAccount(account())
+                db.putMessage(cached)
+                db.putMessage(cached.copy(id="other",body="Other letter",recipients="unrelated@example.com",cc="",bcc=""))
+                assertEquals(setOf(cached.id),db.search("r@example.com sku-400"){})
+                assertEquals(setOf(cached.id),db.search("COPY@EXAMPLE.COM hidden@example.com"){})
+                assertEquals(emptySet<String>(),db.search("copy@example.com missing"){})
+            }
+        }finally{c.deleteDatabase("mail-v1.db")}
+    }
+
     @Test fun openingARealVersionOneDatabaseMigratesAndKeepsTheCompleteBody() {
         val c=context();val helper=LocalStore(c)
         val legacy=c.openOrCreateDatabase("mail-v1.db",0,null)

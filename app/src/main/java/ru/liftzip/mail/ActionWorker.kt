@@ -32,12 +32,19 @@ class FolderWorker(context: Context,params: WorkerParameters): CoroutineWorker(c
     override suspend fun doWork(): Result {
         val repo=(applicationContext as MailApplication).repository
         return try {
-            repo.load();repo.discoverFolders()
+            repo.load()
+            var discoveryFailed=false
+            for(account in repo.snapshot.value.accounts.filter{it.enabled}) {
+                try { repo.discoverFolders(account.id,maxAgeMs=FolderRules.DISCOVERY_MAX_AGE_MS) }
+                catch(e: CancellationException){throw e}
+                catch(_: Exception){discoveryFailed=true}
+            }
             val started=android.os.SystemClock.elapsedRealtime()
             var more=true
             while(more && android.os.SystemClock.elapsedRealtime()-started<120_000)more=repo.folderStep()
+            if(discoveryFailed || !more && repo.pendingFolderHistory())return Result.retry()
             if(more)enqueue(applicationContext)
-            if(!more && repo.pendingFolderHistory())Result.retry()else Result.success()
+            Result.success()
         }catch(e: CancellationException){throw e}catch(_: Exception){Result.retry()}
     }
     companion object {

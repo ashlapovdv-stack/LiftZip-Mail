@@ -496,24 +496,28 @@ private val Paper=Color(0xFFF8F9F6)
     val chrome=remember(memory){InboxChromeController(controlsProgress.floatValue)}
 
     LaunchedEffect(query){onSearch(query)}
-    val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf<List<MailItem>?>(if(query.isBlank())memory.visibleRows else null)}
+    val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf(if(query.isBlank())memory.rows else null)}
     var pinFirstId by remember(accountId,folder,serverPath,query){mutableStateOf<String?>(null)}
     LaunchedEffect(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
         val updated=withContext(kotlinx.coroutines.Dispatchers.Default) {
             val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
             val source=if(query.isBlank())active else active.filter{s.searchQuery==query && it.id in s.searchIds}
-            if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
+            val items=if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
+            InboxRows(items)
         }
         val atTop=!memory.list.isScrollInProgress && memory.list.firstVisibleItemIndex==0 && memory.list.firstVisibleItemScrollOffset==0
-        val pinNewFirst=atTop && memory.restore==null && visibleState.value?.firstOrNull()?.id!=updated.firstOrNull()?.id && updated.isNotEmpty()
+        val first=updated.ids.firstOrNull()
+        val pinNewFirst=atTop && memory.restore==null && first!=null && visibleState.value?.ids?.firstOrNull()!=first
         visibleState.value=updated
-        pinFirstId=if(pinNewFirst)updated.firstOrNull()?.id else null
-        if(query.isBlank())memory.visibleRows=visibleState.value
+        pinFirstId=first.takeIf{pinNewFirst}
+        if(query.isBlank())memory.rows=updated
     }
-    val visible=visibleState.value.orEmpty()
-    val visibleIds=remember(visible){visible.map{it.id}}
-    val visibleUnread=remember(visible){visible.count{it.unread}}
-    val selected=checked.toSet().intersect(visibleIds.toSet())
+    val rows=visibleState.value
+    val visible=rows?.items.orEmpty()
+    val visibleIds=rows?.ids.orEmpty()
+    val visibleUnread=rows?.unread?:0
+    val visibleById=rows?.byId.orEmpty()
+    val selected=remember(checked,rows){checked.filterTo(mutableSetOf()){it in visibleById}}
     val selectionMode=selected.isNotEmpty()
     val chromeFraction=remember(controlsProgress){ {controlsProgress.floatValue} }
     val panelMetrics=remember(memory){mutableStateOf<InboxPanelMetrics?>(null)}
@@ -544,7 +548,7 @@ private val Paper=Color(0xFFF8F9F6)
     fun toggle(id: String){checked=ArrayList(if(id in selected)selected-id else selected+id)}
     fun mark(unread: Boolean){onMarkRead(selected,unread){updated->checked=ArrayList(checked.filter{it !in updated})}}
     fun spam(toInbox: Boolean){onSpam(selected,toInbox){updated->checked=ArrayList(checked.filter{it !in updated})}}
-    val selectedRows=visible.filter{it.id in selected}
+    val selectedRows=remember(rows,selected){selected.mapNotNull(visibleById::get)}
     val canSpam=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,false)}
     val canRestore=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,true)}
     val selectionActions: @Composable ()->Unit = {
@@ -571,7 +575,7 @@ private val Paper=Color(0xFFF8F9F6)
             if(rows.any(TrashRules::local))Text("Черновики будут удалены; удаление серверной копии выполнится при подключении к сети.")
         }},confirmButton={TextButton(onClick={deleting=null;onDelete(ids){removed->checked=ArrayList(checked.filter{it !in removed})}},enabled=rows.isNotEmpty() && !s.busy){Text("Удалить")}},dismissButton={TextButton(onClick={deleting=null}){Text("Отмена")}})
     }
-    LaunchedEffect(visibleIds){checked=ArrayList(checked.filter{it in visibleIds})}
+    LaunchedEffect(visibleIds){checked=ArrayList(checked.filter{it in visibleById})}
     LaunchedEffect(memory,visibleIds.firstOrNull()) {
         if(visibleIds.isNotEmpty()) {
             val restore=memory.restore

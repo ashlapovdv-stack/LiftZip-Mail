@@ -48,19 +48,20 @@ internal class ContactStore(context: Context) :
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
 
     @Synchronized fun all(): List<MailContact> {
-        val db = readableDatabase
-        return db.rawQuery("SELECT id,name FROM contacts ORDER BY name COLLATE NOCASE", null).use { cursor ->
-            buildList {
-                while (cursor.moveToNext()) {
-                    val id = cursor.getString(0)
-                    val emails = db.rawQuery(
-                        "SELECT email FROM contact_emails WHERE contact_id=? ORDER BY rowid", arrayOf(id)
-                    ).use { rows ->
-                        buildList { while (rows.moveToNext()) add(rows.getString(0)) }
-                    }
-                    add(MailContact(id, cursor.getString(1), emails))
-                }
+        return readableDatabase.rawQuery(
+            """SELECT c.id,c.name,e.email FROM contacts c
+               LEFT JOIN contact_emails e ON e.contact_id=c.id
+               ORDER BY c.name COLLATE NOCASE,c.rowid,e.rowid""",null
+        ).use { cursor ->
+            val contacts=linkedMapOf<String,MailContact>()
+            val addresses=mutableMapOf<String,MutableList<String>>()
+            while(cursor.moveToNext()) {
+                val id=cursor.getString(0)
+                val emails=addresses.getOrPut(id){mutableListOf()}
+                if(!cursor.isNull(2))emails.add(cursor.getString(2))
+                contacts.getOrPut(id){MailContact(id,cursor.getString(1),emails)}
             }
+            contacts.values.toList()
         }
     }
 

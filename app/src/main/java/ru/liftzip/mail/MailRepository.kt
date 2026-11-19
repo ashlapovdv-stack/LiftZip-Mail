@@ -73,6 +73,7 @@ class MailRepository(private val context: Context) {
     private val settings=context.getSharedPreferences("mail-settings",Context.MODE_PRIVATE)
     private val syncPrefs=context.getSharedPreferences("sync-baseline",Context.MODE_PRIVATE)
     private val coordinator=MailboxCoordinator()
+    private var loaded=false
     private val historyMutex=Mutex()
     private val bodyMutex=Mutex()
     private val bodyFailures=readBodyFailures()
@@ -103,7 +104,8 @@ class MailRepository(private val context: Context) {
         notifications.reconcile(SyncRules.activeMessages(state.value.messages,accounts,null),arrived,accounts){id->db.message(id)?.body?.take(3000)}
         notifications.history(state.value)
     }
-    suspend fun load()=withContext(Dispatchers.IO){coordinator.data{
+    suspend fun load(): Unit=withContext(Dispatchers.IO){coordinator.data{
+        if(loaded)return@data
         val accounts=db.accounts()
         AccountColorSlots.assign(accounts).zip(accounts).filter{(assigned,old)->assigned.colorSlot!=old.colorSlot}
             .forEach{(assigned,_)->db.updateAccount(assigned,resetInbox=false)}
@@ -116,6 +118,7 @@ class MailRepository(private val context: Context) {
             settings.edit().putBoolean("server-sync-initialized",true).apply();refresh(messages=state.value.messages)
         }
         state.value.messages.filter{it.localFolder=="drafts" && it.forwarding?.active==true}.forEach{ForwardWorker.enqueue(context,it.id)}
+        loaded=true
     }}
     private data class Request(val account: MailAccount,val version: Long,val cached: List<MailItem>,val flags: Map<String,Long>,val cursor: ArrivalCursor)
     private data class CheckReply(val inbox: InboxPage?=null,val unread: UnreadPage?=null)
@@ -138,8 +141,12 @@ class MailRepository(private val context: Context) {
         syncPrefs.edit().putLong("validity:$id",validity).apply()
     }
     private fun saveRemote(id: String,previous: List<MailItem>,merged: List<MailItem>,arrived: Set<String> = emptySet()) {
-        db.applyInbox(previous,merged)
-        refresh(arrived,state.value.messages.filterNot{it.accountId==id && SyncRules.remoteInbox(it)}+merged.map(MailContent::preview))
+        if(previous==merged) {
+            refresh(arrived,state.value.messages)
+        }else {
+            db.applyInbox(previous,merged)
+            refresh(arrived,state.value.messages.filterNot{it.accountId==id && SyncRules.remoteInbox(it)}+merged.map(MailContent::preview))
+        }
     }
     /** Resolve a notification before routing, independently of the list's snapshot collector. */
     suspend fun watchInbox(a: MailAccount,onConnected: (Boolean)->Unit,onChanged: ()->Unit)=withContext(Dispatchers.IO) {
@@ -193,7 +200,7 @@ class MailRepository(private val context: Context) {
         coordinator.data {
             require(coordinator.version(old.id)==version && db.accounts().any{it.id==old.id}){"Ящик изменён во время проверки. Повторите сохранение."}
             val reset=!SyncRules.sameInbox(old,account)
-            if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("unread:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").apply()
+            if(reset)syncPrefs.edit().remove(old.id).remove("count:${old.id}").remove("unread:${old.id}").remove("older:${old.id}").remove("alert-validity:${old.id}").remove("alert-uid:${old.id}").remove("alert-ready:${old.id}").remove("folders-listed:${old.id}").apply()
             coordinator.invalidate(old.id)
             if(reset)attachmentCache.removeAccount(old.id)
             db.updateAccount(account.copy(secret=vault.seal(old.id,secret),enabled=old.enabled,colorSlot=old.colorSlot),reset)
@@ -211,7 +218,7 @@ class MailRepository(private val context: Context) {
         queueFiles.removeUris(outgoing-retained)
         coordinator.invalidate(id);db.removeAccount(id);attachmentCache.removeAccount(id)
         if(settings.getString("default-sender",null)==id)settings.edit().remove("default-sender").apply()
-        syncPrefs.edit().remove(id).remove("count:$id").remove("unread:$id").remove("older:$id").remove("checked:$id").remove("error:$id").apply()
+        syncPrefs.edit().remove(id).remove("count:$id").remove("unread:$id").remove("older:$id").remove("checked:$id").remove("error:$id").remove("folders-listed:$id").apply()
         val job=readHistory()
         if(id in job.accountIds)writeHistory(job.copy(accountIds=job.accountIds-id,status=if(job.accountIds.size==1)"done" else job.status))
         refresh()
@@ -790,21 +797,41 @@ class MailRepository(private val context: Context) {
         }}catch(e: Exception){if(!queued)queueFiles.removeUris(frozen.attachments.map{it.uri}.toSet());throw e}
         wakeActions()
     }
-    suspend fun discoverFolders(accountId: String?=null)=withContext(Dispatchers.IO) {
-        val accounts=coordinator.data{state.value.accounts.filter{it.enabled && (accountId==null || it.id==accountId)}}
-        for(a in accounts) {
-            val version=coordinator.data{coordinator.version(a.id)}
+    suspend fun discoverFolders(accountId: String?=null,maxAgeMs: Long=0)=withContext(Dispatchers.IO) {
+        val ids=state.value.accounts.filter{it.enabled && (accountId==null || it.id==accountId)}.map{it.id}
+        for(id in ids) {
+            val (a,version)=coordinator.data {
+                val account=state.value.accounts.find{it.id==id && it.enabled}?:return@data null
+                val age=System.currentTimeMillis()-syncPrefs.getLong("folders-listed:$id",0)
+                if(age in 0 until maxAgeMs)return@data null
+                account to coordinator.version(id)
+            }?:continue
             val folders=runInterruptible{gateway.folders(a,vault.open(a.id,a.secret))}
             coordinator.data {
                 if(coordinator.version(a.id)!=version || db.accounts().none{it.id==a.id && it.enabled})return@data
                 val existing=db.folders().filter{it.accountId==a.id}.associateBy{it.path}
-                db.replaceFolders(a.id,folders.map{f->existing[f.path]?.let{f.copy(total=it.total,unread=it.unread,validity=it.validity,hasOlder=it.hasOlder,checkedAt=it.checkedAt,syncAll=it.syncAll,syncing=false,error=it.error)}?:f})
+                val updated=folders.map{f->existing[f.path]?.let{f.copy(total=it.total,unread=it.unread,validity=it.validity,hasOlder=it.hasOlder,checkedAt=it.checkedAt,syncAll=it.syncAll,syncing=it.syncing,error=it.error)}?:f}
                 val removed=existing.keys-folders.map{it.path}.toSet()
                 val obsolete=state.value.messages.filter{it.accountId==a.id && FolderRules.remote(it) && it.remoteFolder in removed}.map{it.id}.toSet()
-                if(obsolete.isNotEmpty())db.removeMessages(obsolete)
-                refresh(messages=state.value.messages.filter{it.id !in obsolete})
+                if(updated.associateBy{it.path}!=existing || obsolete.isNotEmpty()) {
+                    db.replaceFolders(a.id,updated,obsolete)
+                    refresh(messages=state.value.messages.filter{it.id !in obsolete})
+                }
+                syncPrefs.edit().putLong("folders-listed:$id",System.currentTimeMillis()).apply()
             }
         }
+    }
+    suspend fun syncVisibleFolders(accountId: String?,path: String?,role: FolderRole?): List<String> = supervisorScope {
+        fun targets(id: String)=state.value.folders.filter {
+            it.accountId==id && (if(path!=null)it.path==path else it.role==role)
+        }
+        state.value.accounts.filter{it.enabled && (accountId==null || it.id==accountId)}.map{account->async(Dispatchers.IO) {
+            try {
+                if(targets(account.id).isEmpty())discoverFolders(account.id,maxAgeMs=FolderRules.DISCOVERY_MAX_AGE_MS)
+                targets(account.id).forEach{syncFolder(it.accountId,it.path)}
+                targets(account.id).mapNotNull{folder->folder.error.takeIf{it.isNotBlank()}?.let{"${account.name}: $it"}}
+            }catch(e: CancellationException){throw e}catch(e: Exception){listOf("${account.name}: ${friendlyError(e)}")}
+        }}.awaitAll().flatten()
     }
     suspend fun syncFolder(accountId: String,path: String,older: Boolean=false)=withContext(Dispatchers.IO){folderLocks.computeIfAbsent(accountId+"|"+path){Mutex()}.withLock {
         var folder: ServerFolder?=null
@@ -823,6 +850,7 @@ class MailRepository(private val context: Context) {
                 val byId=now.associateBy{it.id}
                 val localCopies=state.value.messages.filter{it.accountId==accountId && it.uid==0L && FolderRules.sent(it) && it.internetMessageId.isNotBlank()}.associateBy{it.internetMessageId}
                 val flagActions = mutableListOf<MailAction>()
+                val protectedIds=protected(r)
                 val incoming=page.messages.map{m->
                     val local=localCopies[m.internetMessageId]
                     val current=byId[m.id]
@@ -832,7 +860,7 @@ class MailRepository(private val context: Context) {
                     if(local!=null) {
                         if(local.unread!=m.unread || local.starred!=m.starred)flagActions += actionFor(withBody,ActionKind.FLAGS,unread=local.unread,starred=local.starred)
                         withBody.copy(unread=local.unread,starred=local.starred)
-                    }else if(m.id in protected(r) && current!=null)withBody.copy(unread=current.unread,starred=current.starred)else withBody
+                    }else if(m.id in protectedIds && current!=null)withBody.copy(unread=current.unread,starred=current.starred)else withBody
                 }
                 val ids=incoming.map{it.id}.toSet()
                 val merged=(if(older)now.filter{it.validity==page.validity && it.id !in ids}else emptyList())+incoming
@@ -841,14 +869,19 @@ class MailRepository(private val context: Context) {
                     checkedAt=System.currentTimeMillis(),syncing=false,syncAll=latest.syncAll && page.history.hasOlder,error="")
                 db.applyFolderSync(now, merged, updated, flagActions)
                 if(f.validity>0 && f.validity!=page.validity)coordinator.invalidate(accountId)
-                refresh()
+                val previews=if(flagActions.isEmpty() && now==merged) state.value.messages else null
+                refresh(messages=previews)
             })
         }catch(e: CancellationException){throw e}catch(e: Exception){coordinator.data {
             if (folder != null) db.folders().find { it.accountId == accountId && it.path == path }?.let { latest ->
                 db.putFolders(listOf(latest.copy(syncing = false, checkedAt = System.currentTimeMillis(), error = friendlyError(e))))
             }
             refresh(messages=state.value.messages)
-        }}finally{withContext(kotlinx.coroutines.NonCancellable){coordinator.data{db.folders().find{it.accountId==accountId && it.path==path && it.syncing}?.let{db.putFolders(listOf(it.copy(syncing=false)))};refresh(messages=state.value.messages)}}}
+        }}finally{withContext(kotlinx.coroutines.NonCancellable){coordinator.data{
+            db.folders().find{it.accountId==accountId && it.path==path && it.syncing}?.let{
+                db.putFolders(listOf(it.copy(syncing=false)));refresh(messages=state.value.messages)
+            }
+        }}}
     }}
     suspend fun folderStep(): Boolean=withContext(Dispatchers.IO) {
         val target=coordinator.data {

@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -56,7 +57,8 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
                 poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage,style=snapshot.style) } }
         }
         viewModelScope.launch {
-            combine(query,repo.snapshot){q,snapshot->q to snapshot.messages}.distinctUntilChanged().collectLatest{(text,_)->
+            combine(query,repo.snapshot){q,snapshot->q to snapshot.messages.takeIf{q.isNotBlank()}}
+                .distinctUntilChanged().flowOn(Dispatchers.Default).collectLatest{(text,_)->
                 mutable.update{it.copy(searchQuery=text,searchIds=if(text==it.searchQuery)it.searchIds else emptySet(),searching=text.isNotBlank())}
                 if(text.isBlank())mutable.update{it.copy(searchIds=emptySet(),searching=false)}else {
                     delay(200)
@@ -201,11 +203,9 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         folderTarget=target
         folderOpening=viewModelScope.launch {
             try {
-                repo.discoverFolders(accountId)
                 val role=when(folder){MailFolder.SENT->FolderRole.SENT;MailFolder.DRAFTS->FolderRole.DRAFTS;else->null}
-                val targets=repo.snapshot.value.folders.filter{(accountId==null || it.accountId==accountId) && if(path!=null)it.path==path else it.role==role}
-                for(f in targets)repo.syncFolder(f.accountId,f.path)
-                if(manual)notice(if(targets.any{f->repo.snapshot.value.folders.any{it.accountId==f.accountId && it.path==f.path && it.error.isNotBlank()}})"Некоторые папки не обновились. Подробности указаны в папке." else "Папка обновлена")
+                val errors=repo.syncVisibleFolders(accountId,path,role)
+                if(manual)notice(if(errors.isEmpty())"Папка обновлена" else errors.joinToString("\n"),error=errors.isNotEmpty())
             }catch(e: CancellationException){throw e}catch(e: Exception){if(manual)notice(friendlyError(e),error=true)}
         }
     }

@@ -34,9 +34,15 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             put("data", folder.json().toString())
         })
     }
-    @Synchronized fun replaceFolders(accountId: String,items: List<ServerFolder>) {
-        val db=writableDatabase;db.beginTransaction()
-        try{db.delete("server_folders","account_id=?",arrayOf(accountId));putFolders(items);db.setTransactionSuccessful()}finally{db.endTransaction()}
+    @Synchronized fun replaceFolders(accountId: String,items: List<ServerFolder>,obsolete: Set<String>) {
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("server_folders","account_id=?",arrayOf(accountId))
+            items.forEach{putFolder(db,it)}
+            obsolete.forEach{db.delete("messages","account_id=? AND id=?",arrayOf(accountId,it))}
+            db.setTransactionSuccessful()
+        }finally{db.endTransaction()}
     }
     @Synchronized fun compact(){writableDatabase.execSQL("VACUUM")}
     @Synchronized fun actions(): List<MailAction> = readableDatabase.rawQuery("SELECT data FROM mail_actions ORDER BY rowid",null).use{c->buildList{while(c.moveToNext())add(actionFromJson(JSONObject(c.getString(0))))}}
@@ -108,11 +114,13 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
     @Synchronized fun search(query: String,checkCancelled: ()->Unit): Set<String> {
         val terms=query.lowercase().trim().split(Regex("\\s+")).filter(String::isNotBlank)
         if(terms.isEmpty())return emptySet()
-        return readableDatabase.rawQuery("SELECT data FROM messages",null).use{c->buildSet{
+        return readableDatabase.rawQuery("SELECT id,data FROM messages",null).use{c->buildSet{
             while(c.moveToNext()){
                 checkCancelled()
-                val m=decodeMessage(JSONObject(c.getString(0)))
-                if(MailContent.matches(m,terms))add(m.id)
+                val row=JSONObject(c.getString(1))
+                if(MailContent.matchesFields(terms,HeaderText.decode(row.getString("sender")),row.getString("email"),
+                    HeaderText.decode(row.getString("subject")),row.getString("body"),HeaderText.recipients(row.getString("to")),
+                    HeaderText.recipients(row.optString("cc")),row.optString("bcc")))add(c.getString(0))
             }
         }}
     }

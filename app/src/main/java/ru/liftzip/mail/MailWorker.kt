@@ -14,24 +14,31 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
     override suspend fun doWork(): Result {
         val repo=(applicationContext as MailApplication).repository
         val token="$id:${java.util.UUID.randomUUID()}"
+        var checked=false
         return try {
             repo.load()
             val test=inputData.getBoolean("background-test",false)
             if(!test && repo.snapshot.value.poll.backgroundMinutes==0 || repo.snapshot.value.accounts.none{it.enabled})return Result.success()
             repo.backgroundStarted(token,if(test)"test" else "auto")
             val result=repo.sync(warmBodies=false)
-            // Use the current network window; do not wait for Android to schedule another worker.
-            val bodies=repo.prefetchBodies()
-            if(bodies.pending>0)NotificationPreviewWorker.enqueue(applicationContext)
-            FolderWorker.enqueue(applicationContext);StorageWorker.enqueue(applicationContext)
             val retry=NotificationRules.shouldRetry(result)
             repo.backgroundFinished(token,if(retry)"retry" else "success",result.errors.joinToString("\n"),result.newUnread)
+            checked=true
+            FolderWorker.enqueue(applicationContext);StorageWorker.enqueue(applicationContext)
+            // Try warming bodies while Android still grants a network window.
+            try {
+                val bodies=repo.prefetchBodies()
+                if(bodies.pending>0)NotificationPreviewWorker.enqueue(applicationContext)
+            }catch(e: CancellationException){throw e}catch(_: Exception){
+                NotificationPreviewWorker.enqueue(applicationContext)
+            }
             if(retry)Result.retry()else Result.success()
         }catch(e: CancellationException){
-            withContext(NonCancellable){runCatching{repo.backgroundFinished(token,"stopped")}}
+            if(!checked)withContext(NonCancellable){runCatching{repo.backgroundFinished(token,"stopped")}}
             throw e
         }catch(e: Exception){
-            repo.backgroundFinished(token,"retry",friendlyError(e));Result.retry()
+            if(!checked)repo.backgroundFinished(token,"retry",friendlyError(e))
+            Result.retry()
         }
     }
     companion object {

@@ -19,7 +19,15 @@ object ActionRules {
     fun overlay(items: List<MailItem>,actions: List<MailAction>): List<MailItem> {
         val pending=actions.filter{it.kind==ActionKind.FLAGS && it.active}.associateBy{it.messageId}
         val deleting=actions.filter{(folderMove(it.kind) || it.kind==ActionKind.REMOVE_DRAFT) && it.active}.map{it.messageId}.toSet()
-        return items.map{m->val a=pending[m.id];m.copy(unread=a?.unread?:m.unread,starred=a?.starred?:m.starred,pendingDelete=m.id in deleting)}
+        if(pending.isEmpty() && deleting.isEmpty() && items.none{it.pendingDelete})return items
+        return items.map{m->
+            val action=pending[m.id]
+            val unread=action?.unread?:m.unread
+            val starred=action?.starred?:m.starred
+            val pendingDelete=m.id in deleting
+            if(unread==m.unread && starred==m.starred && pendingDelete==m.pendingDelete)m
+            else m.copy(unread=unread,starred=starred,pendingDelete=pendingDelete)
+        }
     }
     fun protectedIds(actions: List<MailAction>)=actions.filter{it.kind in setOf(ActionKind.FLAGS,ActionKind.MARK_ANSWERED,ActionKind.MARK_FORWARDED) || folderMove(it.kind)}.map{it.messageId}.toSet()
 }
