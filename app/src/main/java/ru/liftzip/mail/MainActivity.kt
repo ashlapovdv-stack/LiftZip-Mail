@@ -108,11 +108,11 @@ class MainActivity: ComponentActivity() {
         intent.removeExtra("mail-open-inbox")
     }
     override fun onStart() {
-        (application as MailApplication).backgroundJournal.visibility(true)
+        (application as MailApplication).logMailVisibility(true)
         super.onStart()
     }
     override fun onStop() {
-        (application as MailApplication).backgroundJournal.visibility(false)
+        (application as MailApplication).logMailVisibility(false)
         super.onStop()
     }
     override fun onNewIntent(intent: Intent){super.onNewIntent(intent);setIntent(intent);handleNotification(intent)}

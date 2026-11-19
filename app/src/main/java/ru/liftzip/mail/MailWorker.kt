@@ -3,12 +3,36 @@ package ru.liftzip.mail
 import android.content.Context
 import android.os.SystemClock
 import androidx.work.*
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
+
+internal data class PollWorkState(
+    val runtime: BackgroundRuntime,
+    val workId: String?=null,
+    val generation: Int?=null,
+    val workState: String=runtime.state
+) {
+    fun description(): String = buildString {
+        append(workState)
+        if(workId!=null)append(" · задание ").append(workId).append(" · редакция ").append(generation)
+        append(" · повторов ").append(runtime.attempt)
+        if(runtime.nextRunAt>0) {
+            val date=SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z",Locale.ROOT).format(Date(runtime.nextRunAt))
+            append(" · можно запустить с ").append(date)
+        }
+        runtime.stopReason?.let{append(" · код остановки ").append(it)}
+    }
+}
 
 class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(context,params) {
     override suspend fun doWork(): Result {
@@ -19,12 +43,13 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
         val source=if(test)BackgroundSource.TEST else BackgroundSource.AUTOMATIC
         val attempt=runAttemptCount+1
         val token="$id:${java.util.UUID.randomUUID()}"
+        val job="задание ${id.toString().take(8)}"
         var checked=false
-        journal.record(source,BackgroundStage.STARTED,attempt)
+        journal.record(source,BackgroundStage.STARTED,attempt,detail=job)
         return try {
             repo.load()
             if(!test && repo.snapshot.value.poll.backgroundMinutes==0 || repo.snapshot.value.accounts.none{it.enabled}) {
-                journal.record(source,BackgroundStage.SKIPPED,attempt)
+                journal.record(source,BackgroundStage.SKIPPED,attempt,detail=job)
                 return Result.success()
             }
             repo.backgroundStarted(token,if(test)"test" else "auto")
@@ -37,7 +62,7 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
                 retry->BackgroundStage.RETRY
                 else->BackgroundStage.SUCCESS
             }
-            journal.record(source,stage,attempt,result.newUnread)
+            journal.record(source,stage,attempt,result.newUnread,job)
             FolderWorker.enqueue(applicationContext);StorageWorker.enqueue(applicationContext)
             // Try warming bodies while Android still grants a network window.
             try {
@@ -49,13 +74,13 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
             if(retry)Result.retry()else Result.success()
         }catch(e: CancellationException){
             if(!checked) {
-                journal.record(source,BackgroundStage.STOPPED,attempt)
+                journal.record(source,BackgroundStage.STOPPED,attempt,detail=job)
                 withContext(NonCancellable){runCatching{repo.backgroundFinished(token,"stopped")}}
             }
             throw e
         }catch(e: Exception){
             if(!checked) {
-                journal.record(source,if(e.isMailDnsFailure())BackgroundStage.DNS_RETRY else BackgroundStage.RETRY,attempt)
+                journal.record(source,if(e.isMailDnsFailure())BackgroundStage.DNS_RETRY else BackgroundStage.RETRY,attempt,detail=job)
                 repo.backgroundFinished(token,"retry",friendlyError(e))
             }
             Result.retry()
@@ -70,16 +95,49 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
             WorkManager.getInstance(context).enqueueUniqueWork(TEST_NAME,ExistingWorkPolicy.KEEP,work)
         }
-        fun schedule(context: Context) {
+        internal fun observePeriodic(context: Context)=WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(NAME)
+            .map { infos->
+                val active=infos.firstOrNull{it.state==WorkInfo.State.RUNNING}?:infos.firstOrNull{!it.state.isFinished}
+                val observed=active?:infos.singleOrNull()
+                if(observed==null)PollWorkState(BackgroundRuntime("STOPPED"))
+                else PollWorkState(
+                    BackgroundRuntime(active?.state?.name?:"STOPPED",observed.runAttemptCount,
+                        observed.nextScheduleTimeMillis.takeIf{it<Long.MAX_VALUE}?:0,
+                        observed.stopReason.takeIf{it!=WorkInfo.STOP_REASON_NOT_STOPPED}),
+                    observed.id.toString().take(8),observed.generation,observed.state.name
+                )
+            }.distinctUntilChanged()
+
+        internal fun periodicRequest(minutes: Int)=PeriodicWorkRequestBuilder<MailWorker>(minutes.coerceAtLeast(15).toLong(),TimeUnit.MINUTES)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
+
+        fun schedule(context: Context,reason: String="настройки или аккаунты") {
             val minutes=context.getSharedPreferences("mail-settings",Context.MODE_PRIVATE).getInt("background-minutes",15)
-            if(minutes==0){cancel(context);return}
-            val work=PeriodicWorkRequestBuilder<MailWorker>(minutes.coerceAtLeast(15).toLong(),TimeUnit.MINUTES)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build()
-            // UPDATE applies a changed interval instead of retaining the old request forever.
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(NAME,ExistingPeriodicWorkPolicy.UPDATE,work)
+            if(minutes==0){cancel(context,reason);return}
+            changeSchedule(context,"интервал ${minutes.coerceAtLeast(15)} мин · $reason") { manager->
+                manager.enqueueUniquePeriodicWork(NAME,ExistingPeriodicWorkPolicy.UPDATE,periodicRequest(minutes))
+            }
         }
-        fun cancel(context: Context)=WorkManager.getInstance(context).cancelUniqueWork(NAME)
+
+        fun cancel(context: Context,reason: String="проверка выключена или нет аккаунтов") {
+            changeSchedule(context,"отмена · $reason"){it.cancelUniqueWork(NAME)}
+        }
+
+        private fun changeSchedule(context: Context,detail: String,change: (WorkManager)->Operation) {
+            val journal=(context.applicationContext as MailApplication).backgroundJournal
+            journal.record(BackgroundSource.SCHEDULER,BackgroundStage.REQUESTED,detail=detail)
+            val operation=try {
+                change(WorkManager.getInstance(context))
+            }catch(e: RuntimeException) {
+                journal.record(BackgroundSource.SCHEDULER,BackgroundStage.SCHEDULE_FAILED,detail=detail)
+                throw e
+            }
+            operation.result.addListener({
+                val stage=if(runCatching{operation.result.get()}.isSuccess)BackgroundStage.APPLIED else BackgroundStage.SCHEDULE_FAILED
+                journal.record(BackgroundSource.SCHEDULER,stage,detail=detail)
+            },ContextCompat.getMainExecutor(context))
+        }
     }
 }
 

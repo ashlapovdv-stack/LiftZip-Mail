@@ -31,7 +31,7 @@ class BackgroundJournalDeviceTest {
             journal.record(BackgroundSource.TEST,BackgroundStage.SUCCESS,1)
             journal.record(BackgroundSource.AUTOMATIC,BackgroundStage.STARTED,2)
             journal.record(BackgroundSource.AUTOMATIC,BackgroundStage.SUCCESS,2,1)
-            journal.visibility(true)
+            journal.visibility(true,detail="последнее наблюдение · ENQUEUED")
             journal.visibility(true)
             journal.record(BackgroundSource.AUTOMATIC,BackgroundStage.STARTED,1)
             journal.visibility(false)
@@ -44,6 +44,7 @@ class BackgroundJournalDeviceTest {
             assertEquals(1,before[4].newUnread)
             assertFalse(before[4].visible)
             assertTrue(before[6].visible)
+            assertEquals("последнее наблюдение · ENQUEUED",before[5].detail)
 
             val reopened=BackgroundJournal({prefs},scope)
             assertEquals(before,withTimeout(10_000){reopened.events.first{it.isNotEmpty()}})

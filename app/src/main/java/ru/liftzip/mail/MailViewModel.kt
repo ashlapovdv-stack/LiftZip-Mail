@@ -44,11 +44,9 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         viewModelScope.launch{(getApplication<Application>() as MailApplication).fastMail.state.collect{value->mutable.update{it.copy(fastMail=value)}}}
         viewModelScope.launch{repo.forwardingProgress.collect{progress->mutable.update{it.copy(forwarding=progress)}}}
         viewModelScope.launch {
-            combine(WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.NAME),WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.TEST_NAME)){infos,tests->infos to tests}.collect{(infos,tests)->
-                val active=infos.firstOrNull{it.state==androidx.work.WorkInfo.State.RUNNING}?:infos.firstOrNull{!it.state.isFinished}
+            combine(app.periodicMailState,WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.TEST_NAME)){periodic,tests->periodic to tests}.collect{(periodic,tests)->
                 val test=tests.firstOrNull{!it.state.isFinished}?:tests.firstOrNull()
-                val runtime=(if(active==null)BackgroundRuntime("STOPPED")else BackgroundRuntime(active.state.name,active.runAttemptCount,active.nextScheduleTimeMillis.takeIf{it<Long.MAX_VALUE}?:0,
-                    active.stopReason.takeIf{it!=androidx.work.WorkInfo.STOP_REASON_NOT_STOPPED})).copy(testState=test?.state?.name?:"STOPPED")
+                val runtime=(periodic?.runtime?:BackgroundRuntime()).copy(testState=test?.state?.name?:"STOPPED")
                 mutable.update{it.copy(backgroundRuntime=runtime)}
             }
         }
@@ -94,7 +92,6 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             val access=MailNotifications.access(getApplication())
             mutable.update { it.withSnapshot(repo.snapshot.value).copy(loaded=true,startupInbox=false,notificationAccess=access) }
             repo.notificationEnvironmentChanged()
-            if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
     }
     internal suspend fun localInboxPage(accountId: String?,after: LocalInboxCursor?,limit: Int)=
@@ -164,7 +161,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     }
     fun testBackground(){MailWorker.test(getApplication());notice("Проверка запланирована. Сверните приложение; результат появится здесь после запуска задания Android.")}
     fun restoreBackground(){
-        MailWorker.schedule(getApplication());notificationEnvironmentChanged()
+        MailWorker.schedule(getApplication(),"восстановление вручную");notificationEnvironmentChanged()
         notice("Расписание фоновой проверки восстановлено")
     }
     fun retryBodies(){viewModelScope.launch{try{repo.retryBodyWarmup()}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}

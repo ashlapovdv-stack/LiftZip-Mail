@@ -17,6 +17,11 @@ import java.net.SocketTimeoutException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -40,17 +45,38 @@ class MailApplication : Application() {
     private val actions=BodyWarmupSignals()
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.IO)
     internal val backgroundJournal=BackgroundJournal({getSharedPreferences("mail-background-journal",MODE_PRIVATE)},scope)
+    internal lateinit var periodicMailState: StateFlow<PollWorkState?>
+        private set
+    internal fun logMailVisibility(active: Boolean) {
+        val state=periodicMailState.value?.description() ?: "состояние ещё не прочитано"
+        backgroundJournal.visibility(active,detail="последнее наблюдение планировщика · $state")
+    }
     private val warmup=BodyWarmupSignals()
     @Volatile var visible=false
     override fun onTrimMemory(level: Int){super.onTrimMemory(level);ReaderDocuments.clear()}
-    override fun onCreate(){super.onCreate();runCatching{connectivity.registerDefaultNetworkCallback(networkCallback)};scope.launchSafe{actions.collect({true},{repository.flushActions(60_000);BodyWarmupResult(0,0,false)})};scope.launchSafe{warmup.collect({visible},{repository.prefetchBodies(45_000)})};scope.launchSafe{
-        repository.load()
-        scope.launchSafe{repository.indexSearch()}
-        if(repository.snapshot.value.accounts.any{it.enabled}) {
-            MailWorker.schedule(this@MailApplication);FolderWorker.enqueue(this@MailApplication);StorageWorker.enqueue(this@MailApplication)
-            if(repository.snapshot.value.actions.any{it.active}){ActionWorker.enqueue(this@MailApplication);actions.request()}
-        }else MailWorker.cancel(this@MailApplication)
-    }}
+    override fun onCreate() {
+        super.onCreate()
+        periodicMailState=MailWorker.observePeriodic(this)
+            .onEach { backgroundJournal.record(BackgroundSource.SCHEDULER,BackgroundStage.STATE,detail=it.description()) }
+            .catch { backgroundJournal.record(BackgroundSource.SCHEDULER,BackgroundStage.SCHEDULE_FAILED,detail="чтение состояния задания") }
+            .stateIn(scope,SharingStarted.Eagerly,null)
+        runCatching { connectivity.registerDefaultNetworkCallback(networkCallback) }
+        scope.launchSafe { actions.collect({true},{repository.flushActions(60_000);BodyWarmupResult(0,0,false)}) }
+        scope.launchSafe { warmup.collect({visible},{repository.prefetchBodies(45_000)}) }
+        scope.launchSafe {
+            repository.load()
+            scope.launchSafe { repository.indexSearch() }
+            if(repository.snapshot.value.accounts.any{it.enabled}) {
+                MailWorker.schedule(this@MailApplication,"запуск процесса")
+                FolderWorker.enqueue(this@MailApplication)
+                StorageWorker.enqueue(this@MailApplication)
+                if(repository.snapshot.value.actions.any{it.active}) {
+                    ActionWorker.enqueue(this@MailApplication)
+                    actions.request()
+                }
+            }else MailWorker.cancel(this@MailApplication,"запуск процесса · нет подключённых аккаунтов")
+        }
+    }
     fun flushActions(){actions.request()}
     fun warmBodies(){if(visible)warmup.request()}
     private val connectivity by lazy{getSystemService(android.net.ConnectivityManager::class.java)}
