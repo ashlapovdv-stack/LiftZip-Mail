@@ -49,8 +49,8 @@
     }
   },
   "files": {
-    "AGENTS.md": "0311457d18bd3950e0f327eacfa0c5a6d4c66fb8e43570f9eb4baf73abbd8884",
-    ".ai/PROJECT.md": "1a8884996520f15984b636e806ffa45d095bcc7c1fe35812f8089ab8e14dd73a",
+    "AGENTS.md": "12c42472a54da8088fc92e4c8f2a859b2359575a76341548ba64d87bcdf8176b",
+    ".ai/PROJECT.md": "3ca458e8022d262bcfdb244eab69bbb0e4577cc7777e35bd0cdad97f1d3ffe1d",
     ".ai/README.md": "51caf9f6fa033b80c1bf0e6ccc4bd383c7977b6c7a96e8059904493750a099bd",
     ".ai/validate_skills.py": "92df4a679a2026f2fcc082721acc22b6ccd08e10f6fdacf06e3277792e1c0f9e",
     ".github/copilot-instructions.md": "c590f90077066bfea958757037c21791d599fc8f12af44fcb0c84a73b72ec96c",
