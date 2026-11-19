@@ -44,7 +44,7 @@ import java.util.Locale
     Text("Последний автоматический запуск: "+time(bg.automaticStarted),style=MaterialTheme.typography.bodySmall)
     Text("Завершение автоматической проверки: "+time(bg.automaticFinished),style=MaterialTheme.typography.bodySmall)
     Text("Последний запуск (${if(bg.kind=="test")"проверочный" else "автоматический"}): "+time(bg.started),style=MaterialTheme.typography.bodySmall)
-    Text("Результат: "+when(bg.result){"running"->"проверяем почту и загружаем тексты";"success"->"успешно, новых непрочитанных: ${bg.newUnread}";"retry"->"ошибка, запланирован повтор";"stopped"->"задание прервано";else->"ещё не завершался"},style=MaterialTheme.typography.bodySmall)
+    Text("Результат: "+when(bg.result){"running"->"проверяем почту";"success"->"успешно, новых непрочитанных: ${bg.newUnread}";"retry"->"ошибка, запланирован повтор";"stopped"->"задание прервано";else->"ещё не завершался"},style=MaterialTheme.typography.bodySmall)
     if(bg.finished>0)Text("Завершение: "+time(bg.finished),style=MaterialTheme.typography.bodySmall)
     if(bg.error.isNotBlank())Text(bg.error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
     Text("Автоматическое задание: "+when(runtime.state){"RUNNING"->"выполнение";"ENQUEUED","BLOCKED"->"ожидание Android";"STOPPED"->"не запланировано";else->"проверяем"},style=MaterialTheme.typography.bodySmall)
@@ -60,7 +60,7 @@ import java.util.Locale
     Text("В первую очередь загружаем текст новых и непрочитанных писем, затем последних входящих. Вложения скачиваются по запросу.",style=MaterialTheme.typography.bodySmall)
     if(s.bodyCache.pending>0)OutlinedButton(onClick=onRetryBodies){Text("Повторить загрузку текстов")}
     TextButton(onClick={
-        val report="Почта 0.5.0\nAndroid ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.MANUFACTURER}\n"+
+        val report="Почта ${BuildConfig.VERSION_NAME} (сборка ${BuildConfig.VERSION_CODE})\nAndroid ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.MANUFACTURER}\n"+
             "Фон: ${s.poll.backgroundMinutes} мин; ${runtime.state}; остановка ${runtime.stopReason}; попытка ${runtime.attempt}\n"+
             "Уведомления: ${access.canPost}; фон ограничен: ${access.backgroundRestricted}; экономия трафика: ${access.dataRestricted}; аккумулятор без ограничений: ${access.batteryExempt}; standby: ${access.standbyRestricted}; сеть: ${access.connected}\n"+
             "Автоматически: ${time(bg.automaticStarted)} — ${time(bg.automaticFinished)}, ${bg.automaticResult}\n"+
