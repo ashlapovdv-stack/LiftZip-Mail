@@ -348,7 +348,7 @@ private val Paper=Color(0xFFF8F9F6)
                 else -> {
                     val memoryKey="${currentAccount?:"all"}:${folder.name}:${serverPath.orEmpty()}"
                     val memory=inboxMemory.getOrPut(memoryKey){InboxMemory()}
-                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,serverPath,memory,drawerState=inboxDrawer,onAccount={currentAccount=it;serverPath=null},onEnable=vm::setAccountEnabled,onFolder={folder=it;serverPath=null},
+                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,serverPath,memory,drawerState=inboxDrawer,readLocalInboxPage=vm::localInboxPage,onAccount={currentAccount=it;serverPath=null},onEnable=vm::setAccountEnabled,onFolder={folder=it;serverPath=null},
                     onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path},onQueue={route="actions"},onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
                     onNoticeAnchor={anchor("inbox",it)},onSettings={route="settings"},onDelivery={route="delivery"},onRefresh={if(serverPath!=null || folder in setOf(MailFolder.SENT,MailFolder.DRAFTS))vm.refreshFolders(folder,currentAccount,serverPath)else vm.refresh()},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onDelete=vm::deleteMessages,onSpam=vm::spamMessages,onSearch=vm::search,onOpen={m->
                         if(!vm.canOpen(m.id))return@InboxScreen
@@ -464,7 +464,8 @@ private val Paper=Color(0xFFF8F9F6)
     onServerFolder: (ServerFolder)->Unit,onQueue: ()->Unit,
     onAdd: ()->Unit,onExit: ()->Unit,onNoticeAnchor: (Float?)->Unit,onSettings: ()->Unit,onDelivery: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
     onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onDelete: (Set<String>,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit,
-    onSpam: (Set<String>,Boolean,(Set<String>)->Unit)->Unit={_,_,_->},drawerState: DrawerState?=null) {
+    onSpam: (Set<String>,Boolean,(Set<String>)->Unit)->Unit={_,_,_->},drawerState: DrawerState?=null,
+    readLocalInboxPage: (suspend (String?,LocalInboxCursor?,Int)->LocalInboxPage)?=null) {
     val style=LocalMailStyle.current
     val navigationAccent=if(isSystemInDarkTheme())MaterialTheme.colorScheme.primary else style.navAccent
     val localDrawer=rememberDrawerState(DrawerValue.Closed)
@@ -503,19 +504,62 @@ private val Paper=Color(0xFFF8F9F6)
     LaunchedEffect(query){onSearch(query)}
     val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf(if(query.isBlank())memory.rows else null)}
     var pinFirstId by remember(accountId,folder,serverPath,query){mutableStateOf<String?>(null)}
-    LaunchedEffect(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
+    val usesLocalPages=readLocalInboxPage!=null && folder==MailFolder.INBOX && serverPath==null && query.isBlank()
+    LaunchedEffect(s.messages,s.accounts,s.actions,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
+        fun publish(updated: InboxRows) {
+            val atTop=!memory.list.isScrollInProgress && memory.list.firstVisibleItemIndex==0 && memory.list.firstVisibleItemScrollOffset==0
+            val first=updated.ids.firstOrNull()
+            val pinNewFirst=atTop && memory.restore==null && first!=null && visibleState.value?.ids?.firstOrNull()!=first
+            visibleState.value=updated
+            pinFirstId=first.takeIf{pinNewFirst}
+            if(query.isBlank())memory.rows=updated
+        }
+        if(readLocalInboxPage!=null && usesLocalPages) {
+            try {
+                // Retain the loaded window on refresh or when returning to a lower row.
+                val limit=maxOf(LOCAL_INBOX_PAGE_SIZE,memory.rows?.items?.size?:0,
+                    (memory.restore?.index?:0)+LOCAL_INBOX_PAGE_SIZE)
+                val anchor=memory.restore?.takeUnless{it.atTop}?.id ?: memory.list.let{list->
+                    if(list.firstVisibleItemIndex!=0 || list.firstVisibleItemScrollOffset!=0)
+                        visibleState.value?.ids?.getOrNull(list.firstVisibleItemIndex) else null
+                }
+                var page=readLocalInboxPage(accountId,null,limit)
+                val window=page.items.toMutableList()
+                if(anchor!=null && s.messages.any{it.id==anchor && !it.pendingDelete && it.localFolder=="inbox"}) {
+                    while(window.none{it.id==anchor}) {
+                        val cursor=page.next?:break
+                        page=readLocalInboxPage(accountId,cursor,LOCAL_INBOX_PAGE_SIZE)
+                        window+=page.items
+                    }
+                }
+                publish(InboxRows(window))
+                if(page.next!=null)snapshotFlow {
+                    val count=visibleState.value?.items?.size?:0
+                    val last=memory.list.layoutInfo.visibleItemsInfo.lastOrNull()?.index?:-1
+                    count.takeIf{it>0 && last>=it-8}
+                }.collect { nearEnd->
+                    val cursor=page.next
+                    if(nearEnd!=null && cursor!=null) {
+                        page=readLocalInboxPage(accountId,cursor,LOCAL_INBOX_PAGE_SIZE)
+                        val existing=visibleState.value?.items.orEmpty()
+                        val priorIds=visibleState.value?.byId.orEmpty()
+                        publish(InboxRows(existing+page.items.filterNot{it.id in priorIds}))
+                    }
+                }
+                return@LaunchedEffect
+            }catch(e: CancellationException){throw e}
+            catch(_: android.database.SQLException){
+                // The current session already has a complete snapshot for synchronization.
+                // Keep the list accessible if the paged query fails.
+            }
+        }
         val updated=withContext(kotlinx.coroutines.Dispatchers.Default) {
             val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
             val source=if(query.isBlank())active else active.filter{s.searchQuery==query && it.id in s.searchIds}
             val items=if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
             InboxRows(items)
         }
-        val atTop=!memory.list.isScrollInProgress && memory.list.firstVisibleItemIndex==0 && memory.list.firstVisibleItemScrollOffset==0
-        val first=updated.ids.firstOrNull()
-        val pinNewFirst=atTop && memory.restore==null && first!=null && visibleState.value?.ids?.firstOrNull()!=first
-        visibleState.value=updated
-        pinFirstId=first.takeIf{pinNewFirst}
-        if(query.isBlank())memory.rows=updated
+        publish(updated)
     }
     val rows=visibleState.value
     val visible=rows?.items.orEmpty()
@@ -563,7 +607,7 @@ private val Paper=Color(0xFFF8F9F6)
                     Box {
                         IconButton(onClick={selectionMenu=true},enabled=!s.busy){Icon(Icons.Outlined.MoreVert,"Действия с выбранными письмами")}
                         DropdownMenu(expanded=selectionMenu,onDismissRequest={selectionMenu=false}) {
-                            DropdownMenuItem(text={Text("Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={selectionMenu=false;checked=ArrayList(visibleIds)})
+                            DropdownMenuItem(text={Text(if(usesLocalPages)"Выбрать все показанные" else "Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={selectionMenu=false;checked=ArrayList(visibleIds)})
                             DropdownMenuItem(text={Text("Отметить прочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailRead,null)},onClick={selectionMenu=false;mark(false)})
                             DropdownMenuItem(text={Text("Отметить непрочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailUnread,null)},onClick={selectionMenu=false;mark(true)})
                             if(canSpam)DropdownMenuItem(text={Text("В спам")},leadingIcon={Icon(Icons.Outlined.Report,null)},onClick={selectionMenu=false;spam(false)})

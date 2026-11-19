@@ -134,6 +134,37 @@ class MessageFlowDeviceTest {
         rule.onNodeWithTag("mail-row:scroll-20").assertIsDisplayed()
     }
 
+    @Test fun localInboxLoadsMoreNearTheEndAndKeepsTheVisibleRowOnArrival() {
+        val memory=InboxMemory()
+        val letters=(1..100).map{i->mail.copy(id="page-$i",subject="Письмо $i",date=200L-i)}
+        var model by mutableStateOf(UiState(loaded=true,accounts=listOf(account),messages=letters))
+        val requests=mutableListOf<Pair<LocalInboxCursor?,Int>>()
+        rule.setContent {
+            val state=model
+            MailTheme {
+                InboxScreen(state,"a",MailFolder.INBOX,null,memory,onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},
+                    onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},
+                    onDelete={_,_->},onSearch={},onOpen={},readLocalInboxPage={_,cursor,limit->
+                        requests+=cursor to limit
+                        val start=if(cursor==null)0 else model.messages.indexOfFirst{it.id==cursor.id}+1
+                        val items=model.messages.drop(start).take(limit)
+                        LocalInboxPage(items,if(start+items.size<model.messages.size)items.last().inboxCursor()else null)
+                    })
+            }
+        }
+        rule.waitUntil(10_000){memory.visibleRows?.size==40}
+        rule.runOnIdle{assertEquals(listOf(null to 40),requests)}
+        rule.onNodeWithTag("inbox-list").performScrollToIndex(35)
+        rule.waitUntil(10_000){memory.visibleRows?.size==80}
+        val row=rule.onNodeWithTag("mail-row:page-36")
+        row.assertIsDisplayed()
+        val top=row.fetchSemanticsNode().boundsInRoot.top
+        rule.runOnIdle{model=model.copy(messages=listOf(mail.copy(id="page-new",date=300))+model.messages)}
+        rule.waitUntil(10_000){memory.visibleRows?.firstOrNull()?.id=="page-new"}
+        row.assertIsDisplayed()
+        assertEquals(top,row.fetchSemanticsNode().boundsInRoot.top,2f)
+    }
+
     @Test fun hiddenPanelsAndExactScreenPositionSurviveAndroidBack() {
         var route by mutableStateOf("inbox")
         val memory=InboxMemory()

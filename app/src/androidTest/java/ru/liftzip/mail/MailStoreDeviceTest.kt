@@ -203,13 +203,65 @@ class MailStoreDeviceTest {
             val m=message().copy(body="Complete old body. "+"long text ".repeat(100))
             legacy.execSQL("INSERT INTO messages VALUES(?,?,?,?)",arrayOf(m.id,m.accountId,m.localFolder,helper.encodeMessage(m).toString()))
             legacy.version=1;legacy.close()
-            assertEquals(2,helper.readableDatabase.version)
+            assertEquals(3,helper.readableDatabase.version)
             assertEquals("encrypted-old-secret",helper.accounts().single().secret)
             assertEquals(m.body,helper.message(m.id)?.body)
             assertTrue(helper.messages().single().body.length<=MailContent.PREVIEW_LENGTH)
             assertEquals(m.body,helper.message(m.id)?.body)
             assertTrue(helper.actions().isEmpty());assertTrue(helper.folders().isEmpty())
         }finally{if(legacy.isOpen)legacy.close();helper.close();c.deleteDatabase("mail-v1.db")}
+    }
+
+    @Test fun versionTwoUpgradeKeepsMessagesAndPagesTiedDatesAcrossAccounts() {
+        val c=context()
+        val helper=LocalStore(c)
+        val file="mail-v1.db"
+        try {
+            c.openOrCreateDatabase(file,0,null).use{db->
+                db.execSQL("CREATE TABLE accounts(id TEXT PRIMARY KEY,data TEXT NOT NULL)")
+                db.execSQL("CREATE TABLE messages(id TEXT PRIMARY KEY,account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,folder TEXT NOT NULL,data TEXT NOT NULL)")
+                helper.onUpgrade(db,1,2)
+                db.execSQL("INSERT INTO accounts VALUES('a','{}'),('b','{}')")
+                val ids=(1..1050).map{"m"+it.toString().padStart(4,'0')}
+                db.beginTransaction()
+                try {
+                    for((i,id) in ids.withIndex()) {
+                        val item=message(if(i%2==0)"a" else "b").copy(id=id,date=5000,localFolder="inbox",body="Complete body",htmlBody="<b>Letter</b>")
+                        db.execSQL("INSERT INTO messages(id,account_id,folder,data,preview) VALUES(?,?,?,?,?)",arrayOf(item.id,item.accountId,item.localFolder,helper.encodeMessage(item).toString(),
+                            if(i%3==0)null else helper.encodeMessage(MailContent.preview(item)).toString()))
+                    }
+                    val draft=message().copy(id="edit",sourceDraftId=ids.last())
+                    db.execSQL("INSERT INTO messages(id,account_id,folder,data) VALUES(?,?,?,?)",arrayOf(draft.id,draft.accountId,draft.localFolder,helper.encodeMessage(draft).toString()))
+                    db.execSQL("INSERT INTO mail_actions VALUES('queued','a',1,'{}')")
+                    db.setTransactionSuccessful()
+                }finally{db.endTransaction()}
+                db.version=2
+            }
+            var after: LocalInboxCursor?=null
+            val ids=mutableListOf<String>()
+            repeat(27) {
+                val page=helper.inboxRows(setOf("a","b"),after,40)
+                assertTrue(page.isNotEmpty())
+                assertTrue(page.all{it.previewOnly})
+                ids+=page.map{it.id}
+                after=page.last().inboxCursor()
+            }
+            assertEquals((1049 downTo 1).map{"m"+it.toString().padStart(4,'0')},ids)
+            assertTrue(helper.inboxRows(setOf("a","b"),after,40).isEmpty())
+            assertEquals(listOf("m1049","m1047"),helper.inboxRows(setOf("a"),null,2).map{it.id})
+            assertEquals("<b>Letter</b>",helper.message("m1050")?.htmlBody)
+            assertEquals("m1050",helper.message("edit")?.sourceDraftId)
+            helper.readableDatabase.rawQuery("SELECT revision FROM mail_actions WHERE id='queued'",null).use{
+                assertTrue(it.moveToFirst());assertEquals(1,it.getInt(0))
+            }
+            helper.putMessage(message().copy(id="new",date=9000,localFolder="inbox"))
+            assertEquals("new",helper.inboxRows(setOf("a"),null,1).single().id)
+            helper.close()
+            LocalStore(c).use{reopened->
+                assertEquals(listOf("new","m1049"),reopened.inboxRows(setOf("a"),null,2).map{it.id})
+                assertEquals("Complete body",reopened.message("m1050")?.body)
+            }
+        }finally{helper.close();c.deleteDatabase(file)}
     }
 
     @Test fun htmlAndInlineImageMetadataSurviveAFlagUpdateFromAListPreview() {

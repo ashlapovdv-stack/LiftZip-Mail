@@ -86,6 +86,9 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
     }
+    internal suspend fun localInboxPage(accountId: String?,after: LocalInboxCursor?,limit: Int)=
+        repo.localInboxPage(accountId,after,limit)
+
     fun search(text: String){query.value=text}
     fun canOpen(id: String): Boolean {
         val snapshot=repo.snapshot.value

@@ -177,6 +177,27 @@ class MailRepository(private val context: Context) {
             })?:error("Включите ящик в меню, чтобы загрузить текст письма.")
         }catch(e: CancellationException){throw e}catch(e: Exception){if(cached.contentCached)cached else throw e}
     }}
+    internal suspend fun localInboxPage(accountId: String?,after: LocalInboxCursor?,limit: Int): LocalInboxPage = withContext(Dispatchers.IO) {
+        require(limit in 1 until Int.MAX_VALUE)
+        val coroutine=currentCoroutineContext()
+        coordinator.data {
+            val accounts=accountId?.let(::setOf)?:db.accounts().filter{it.enabled}.mapTo(mutableSetOf()){it.id}
+            val actions=db.actions()
+            val items=mutableListOf<MailItem>()
+            var cursor=after
+            while(items.size<=limit) {
+                coroutine.ensureActive()
+                val batchSize=minOf(LOCAL_INBOX_PAGE_SIZE,limit+1-items.size)
+                val batch=db.inboxRows(accounts,cursor,batchSize)
+                items+=ActionRules.overlay(batch,actions).filterNot{it.pendingDelete}
+                if(batch.size<batchSize)break
+                cursor=batch.last().inboxCursor()
+            }
+            val hasMore=items.size>limit
+            val page=items.take(limit)
+            LocalInboxPage(page,if(hasMore)page.last().inboxCursor()else null)
+        }
+    }
     suspend fun search(query: String): Set<String> =withContext(Dispatchers.IO){
         val coroutine=currentCoroutineContext();db.search(query){coroutine.ensureActive()}
     }
