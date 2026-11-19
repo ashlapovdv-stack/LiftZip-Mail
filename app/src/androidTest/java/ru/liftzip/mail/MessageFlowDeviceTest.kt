@@ -148,9 +148,12 @@ class MessageFlowDeviceTest {
             }
         }
         rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:hidden-0").fetchSemanticsNodes().isNotEmpty()}
-        rule.onNodeWithTag("inbox-list").performScrollToIndex(20)
-        rule.onNodeWithTag("inbox-list").performTouchInput{swipe(center,center+Offset(0f,-600f),600)}
-        rule.waitUntil(10000){memory.controlsProgress.floatValue==0f}
+        val list=rule.onNodeWithTag("inbox-list")
+        list.performScrollToIndex(20)
+        repeat(4){
+            if(memory.bottomVisible.value)list.performTouchInput{swipeUp(durationMillis=450)}
+        }
+        rule.waitUntil(10000){memory.controlsProgress.floatValue==0f && !memory.bottomVisible.value}
         rule.waitForIdle()
         var id="";var top=0f
         rule.runOnIdle{id=memory.list.layoutInfo.visibleItemsInfo.first{it.key is String && it.offset>=0 && it.offset+it.size<=memory.list.layoutInfo.viewportEndOffset}.key as String}

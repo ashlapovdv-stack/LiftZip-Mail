@@ -57,12 +57,16 @@ class MailScreensDeviceTest {
         }
         drag(-40f)
         unread.assertIsDisplayed()
-        repeat(4){drag(-250f)}
+        repeat(4){
+            if(unread.isDisplayed())list.performTouchInput{swipeUp(durationMillis=450)}
+        }
         unread.assertIsNotDisplayed()
         screenshot("mail-partial")
         drag(40f)
         unread.assertIsNotDisplayed()
-        repeat(5){drag(250f)}
+        repeat(4){
+            if(!unread.isDisplayed())list.performTouchInput{swipeDown(durationMillis=450)}
+        }
         unread.assertIsDisplayed().performClick()
         rule.waitUntil(10_000){rule.onNodeWithContentDescription("Написать письмо").isDisplayed()}
         screenshot("single-unread")
