@@ -52,8 +52,13 @@ class MailScreensDeviceTest {
         rule.waitForIdle()
         rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-100f),600)}
         rule.waitForIdle();screenshot("mail-partial")
-        rule.onNodeWithContentDescription("Непрочитанные").performClick()
-        rule.waitForIdle()
+        val unread=rule.onNodeWithContentDescription("Непрочитанные")
+        unread.assertIsNotDisplayed()
+        rule.onNodeWithTag("inbox-list").performTouchInput {
+            down(center);moveBy(Offset(0f,40f));advanceEventTime(500);up()
+        }
+        unread.assertIsDisplayed().performClick()
+        rule.waitUntil(10_000){rule.onNodeWithContentDescription("Написать письмо").isDisplayed()}
         screenshot("single-unread")
         rule.onNodeWithText("Поиск писем").assertIsDisplayed()
         rule.onNodeWithContentDescription("Выбрать ящик").assertIsDisplayed()
