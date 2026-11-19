@@ -23,6 +23,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -43,6 +44,7 @@ class MailApplication : Application() {
     override fun onTrimMemory(level: Int){super.onTrimMemory(level);ReaderDocuments.clear()}
     override fun onCreate(){super.onCreate();runCatching{connectivity.registerDefaultNetworkCallback(networkCallback)};scope.launchSafe{actions.collect({true},{repository.flushActions(60_000);BodyWarmupResult(0,0,false)})};scope.launchSafe{warmup.collect({visible},{repository.prefetchBodies(45_000)})};scope.launchSafe{
         repository.load()
+        scope.launchSafe{repository.indexSearch()}
         if(repository.snapshot.value.accounts.any{it.enabled}) {
             MailWorker.schedule(this@MailApplication);FolderWorker.enqueue(this@MailApplication);StorageWorker.enqueue(this@MailApplication)
             if(repository.snapshot.value.actions.any{it.active}){ActionWorker.enqueue(this@MailApplication);actions.request()}
@@ -220,6 +222,10 @@ class MailRepository(private val context: Context) {
         }
         val page=items.take(limit)
         return LocalInboxPage(page,if(items.size>limit)page.last().inboxCursor()else null)
+    }
+    internal suspend fun indexSearch()=withContext(Dispatchers.IO){
+        val coroutine=currentCoroutineContext()
+        while(db.indexSearchBatch{coroutine.ensureActive()})yield()
     }
     suspend fun search(query: String): Set<String> =withContext(Dispatchers.IO){
         val coroutine=currentCoroutineContext();db.search(query){coroutine.ensureActive()}

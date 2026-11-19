@@ -15,9 +15,11 @@ object MailContent {
     fun matches(message: MailItem,terms: List<String>): Boolean =
         matchesFields(terms,message.sender,message.senderEmail,message.subject,message.body,message.recipients,message.cc,message.bcc)
 
+    internal fun searchText(vararg fields: String)=fields.joinToString(" ").lowercase()
+
     internal fun matchesFields(terms: List<String>,vararg fields: String): Boolean {
         if(terms.isEmpty())return true
-        val text=fields.joinToString(" ").lowercase()
+        val text=searchText(*fields)
         return terms.all{it in text}
     }
     fun forStorage(message: MailItem,storedBody: String?,storedHtml: String?=null,storedVersion: Int?=null): MailItem = if(!message.previewOnly)message else

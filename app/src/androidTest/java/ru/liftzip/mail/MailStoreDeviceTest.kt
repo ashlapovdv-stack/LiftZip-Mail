@@ -171,6 +171,7 @@ class MailStoreDeviceTest {
             }
             assertEquals(listOf(sent), db.folders())
             assertEquals(listOf(existing.id), db.messages().map { it.id })
+            assertEquals(setOf(existing.id),db.search("complete body"){})
             assertTrue(db.actions().isEmpty())
 
             db.writableDatabase.execSQL("DROP TRIGGER fail_folder_write")
@@ -231,6 +232,90 @@ class MailStoreDeviceTest {
         }finally{c.deleteDatabase("mail-v1.db")}
     }
 
+    @Test fun versionThreeSearchBackfillsWithoutLosingMatchesAndUsesTheIndex() {
+        val c=context()
+        val file="mail-v1.db"
+        val db=LocalStore(c)
+        val target=message().copy(id="target",sender="=?UTF-8?B?0JzQuNGA?=",subject="Заказ — ZIP-401",
+            body="Начало ".repeat(75)+"КОНТАКТОР-ДЭК",cc="supplier@example.com",htmlBody="<b>Keep original HTML</b>")
+        val count=5_000
+        fun measuredSearch(query: String): Triple<Set<String>,Int,Double> {
+            var inspected=0
+            val start=System.nanoTime()
+            val result=db.search(query){inspected++}
+            return Triple(result,inspected,(System.nanoTime()-start)/1_000_000.0)
+        }
+        try {
+            c.openOrCreateDatabase(file,0,null).use { legacy->
+                legacy.execSQL("CREATE TABLE accounts(id TEXT PRIMARY KEY,data TEXT NOT NULL)")
+                legacy.execSQL("CREATE TABLE messages(id TEXT PRIMARY KEY,account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,folder TEXT NOT NULL,data TEXT NOT NULL,preview TEXT,message_date INTEGER NOT NULL DEFAULT 0,source_draft_id TEXT)")
+                legacy.execSQL("INSERT INTO accounts VALUES('a','{}')")
+                legacy.beginTransaction()
+                try {
+                    legacy.compileStatement("INSERT INTO messages(id,account_id,folder,data) VALUES(?,?,?,?)").use { insert->
+                        for(i in 0 until count) {
+                            val item=if(i==count-1)target else message().copy(id="other-$i",body="Обычное письмо это письмо номер $i. ".repeat(16))
+                            insert.bindString(1,item.id);insert.bindString(2,item.accountId)
+                            insert.bindString(3,item.localFolder);insert.bindString(4,db.encodeMessage(item).toString())
+                            insert.executeInsert()
+                        }
+                    }
+                    legacy.setTransactionSuccessful()
+                } finally {legacy.endTransaction()}
+                legacy.version=3
+            }
+            assertEquals(4,db.readableDatabase.version)
+            val query="p-401 ТАКТОР-дэ supplier@"
+            val before=List(5){measuredSearch(query)}.sortedBy{it.third}[2]
+            assertEquals(setOf(target.id),before.first)
+            assertTrue("Lookup before backfill must inspect legacy rows",before.second>=count)
+            // An interrupted backfill can be resumed by a later application process.
+            assertTrue(db.indexSearchBatch{})
+            db.close()
+            assertEquals(setOf(target.id),db.search(query){})
+            while(db.indexSearchBatch{}) Unit
+            val after=List(5){measuredSearch(query)}.sortedBy{it.third}[2]
+            assertEquals(before.first,after.first)
+            assertTrue("Indexed lookup must skip non-matching letters",after.second<=3)
+            assertEquals(setOf(target.id),db.search("ир дэ"){})
+            assertEquals(setOf(target.id),db.search("-дэ"){})
+            assertEquals(target.htmlBody,db.message(target.id)?.htmlBody)
+            android.util.Log.i("MailSearchPerf","rows=$count legacy_scan_ms=${before.third} indexed_ms=${after.third}")
+        }finally{db.close();c.deleteDatabase(file)}
+    }
+
+    @Test fun searchReadsCommittedMailDuringSyncAndTracksUpdatesAndAccountDeletion() {
+        val c=context()
+        val db=LocalStore(c)
+        val message=message().copy(body="Запчасть AX-1200",localFolder="inbox",date=100)
+        try {
+            db.putAccount(account())
+            db.putMessage(message)
+            assertEquals(setOf(message.id),db.search("x-12"){})
+            val updated=message.copy(body="Новый артикул RQ-7701")
+            val writer=db.writableDatabase
+            val executor=java.util.concurrent.Executors.newSingleThreadExecutor()
+            try {
+                writer.beginTransactionNonExclusive()
+                try {
+                    db.applyFolderSync(listOf(message),listOf(updated),ServerFolder("a","Inbox","Inbox",FolderRole.INBOX),emptyList())
+                    val concurrent=executor.submit<Set<String>>{db.search("x-12"){}}
+                    assertEquals(setOf(message.id),concurrent.get(10,java.util.concurrent.TimeUnit.SECONDS))
+                    writer.setTransactionSuccessful()
+                }finally{writer.endTransaction()}
+            }finally{executor.shutdownNow()}
+            assertTrue(db.search("x-12"){}.isEmpty())
+            assertEquals(setOf(message.id),db.search("q-77"){})
+            db.putMessage(db.messages().single().copy(starred=true))
+            assertEquals(setOf(message.id),db.search("q-77"){})
+            db.removeAccount("a")
+            assertTrue(db.search("q-77"){}.isEmpty())
+            db.readableDatabase.rawQuery("SELECT count(*) FROM message_search",null).use {
+                assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))
+            }
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
+
     @Test fun openingARealVersionOneDatabaseMigratesAndKeepsTheCompleteBody() {
         val c=context();val helper=LocalStore(c)
         val legacy=c.openOrCreateDatabase("mail-v1.db",0,null)
@@ -242,7 +327,7 @@ class MailStoreDeviceTest {
             val m=message().copy(body="Complete old body. "+"long text ".repeat(100))
             legacy.execSQL("INSERT INTO messages VALUES(?,?,?,?)",arrayOf(m.id,m.accountId,m.localFolder,helper.encodeMessage(m).toString()))
             legacy.version=1;legacy.close()
-            assertEquals(3,helper.readableDatabase.version)
+            assertEquals(4,helper.readableDatabase.version)
             assertEquals("encrypted-old-secret",helper.accounts().single().secret)
             assertEquals(m.body,helper.message(m.id)?.body)
             assertTrue(helper.messages().single().body.length<=MailContent.PREVIEW_LENGTH)
