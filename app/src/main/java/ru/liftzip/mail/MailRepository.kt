@@ -822,6 +822,7 @@ class MailRepository(private val context: Context) {
                 val now=state.value.messages.filter{it.accountId==accountId && FolderRules.remote(it) && it.remoteFolder==path}
                 val byId=now.associateBy{it.id}
                 val localCopies=state.value.messages.filter{it.accountId==accountId && it.uid==0L && FolderRules.sent(it) && it.internetMessageId.isNotBlank()}.associateBy{it.internetMessageId}
+                val flagActions = mutableListOf<MailAction>()
                 val incoming=page.messages.map{m->
                     val local=localCopies[m.internetMessageId]
                     val current=byId[m.id]
@@ -829,21 +830,24 @@ class MailRepository(private val context: Context) {
                     val withBody=(if(reused?.contentCached==true)m.copy(id=local?.id?:m.id,body=reused.body,htmlBody=reused.htmlBody,contentVersion=reused.contentVersion,cacheBytes=reused.cacheBytes,attachments=reused.attachments,outgoing=reused.outgoing,contentCached=true,previewOnly=reused.previewOnly)else m)
                         .copy(answered=m.answered || current?.answered==true,forwarded=m.forwarded || current?.forwarded==true)
                     if(local!=null) {
-                        if(local.unread!=m.unread || local.starred!=m.starred)db.putAction(actionFor(withBody,ActionKind.FLAGS,unread=local.unread,starred=local.starred))
+                        if(local.unread!=m.unread || local.starred!=m.starred)flagActions += actionFor(withBody,ActionKind.FLAGS,unread=local.unread,starred=local.starred)
                         withBody.copy(unread=local.unread,starred=local.starred)
                     }else if(m.id in protected(r) && current!=null)withBody.copy(unread=current.unread,starred=current.starred)else withBody
                 }
                 val ids=incoming.map{it.id}.toSet()
                 val merged=(if(older)now.filter{it.validity==page.validity && it.id !in ids}else emptyList())+incoming
-                db.applyInbox(now,merged)
+                val latest=db.folders().find{it.accountId==accountId && it.path==path}?:return@request
+                val updated=latest.copy(total=page.history.total,unread=page.history.unread?:latest.unread,validity=page.validity?:0,hasOlder=page.history.hasOlder,
+                    checkedAt=System.currentTimeMillis(),syncing=false,syncAll=latest.syncAll && page.history.hasOlder,error="")
+                db.applyFolderSync(now, merged, updated, flagActions)
                 if(f.validity>0 && f.validity!=page.validity)coordinator.invalidate(accountId)
-                val latest=db.folders().find{it.accountId==accountId && it.path==path}?:f
-                db.putFolders(listOf(latest.copy(total=page.history.total,unread=page.history.unread?:latest.unread,validity=page.validity?:0,hasOlder=page.history.hasOlder,
-                    checkedAt=System.currentTimeMillis(),syncing=false,syncAll=latest.syncAll && page.history.hasOlder,error="")))
                 refresh()
             })
         }catch(e: CancellationException){throw e}catch(e: Exception){coordinator.data {
-            folder?.let{f->db.putFolders(listOf(f.copy(syncing=false,checkedAt=System.currentTimeMillis(),error=friendlyError(e))))};refresh(messages=state.value.messages)
+            if (folder != null) db.folders().find { it.accountId == accountId && it.path == path }?.let { latest ->
+                db.putFolders(listOf(latest.copy(syncing = false, checkedAt = System.currentTimeMillis(), error = friendlyError(e))))
+            }
+            refresh(messages=state.value.messages)
         }}finally{withContext(kotlinx.coroutines.NonCancellable){coordinator.data{db.folders().find{it.accountId==accountId && it.path==path && it.syncing}?.let{db.putFolders(listOf(it.copy(syncing=false)))};refresh(messages=state.value.messages)}}}
     }}
     suspend fun folderStep(): Boolean=withContext(Dispatchers.IO) {

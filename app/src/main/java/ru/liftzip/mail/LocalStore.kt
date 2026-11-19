@@ -25,7 +25,14 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
     @Synchronized fun folders(): List<ServerFolder> = readableDatabase.rawQuery("SELECT data FROM server_folders",null).use{c->buildList{while(c.moveToNext())add(folderFromJson(JSONObject(c.getString(0))))}}
     @Synchronized fun putFolders(items: List<ServerFolder>) {
         val db=writableDatabase;db.beginTransaction()
-        try{items.forEach{f->db.insertWithOnConflict("server_folders",null,ContentValues().apply{put("account_id",f.accountId);put("path",f.path);put("data",f.json().toString())},SQLiteDatabase.CONFLICT_REPLACE)};db.setTransactionSuccessful()}finally{db.endTransaction()}
+        try{items.forEach{putFolder(db,it)};db.setTransactionSuccessful()}finally{db.endTransaction()}
+    }
+    private fun putFolder(db: SQLiteDatabase, folder: ServerFolder) {
+        db.replaceOrThrow("server_folders", null, ContentValues().apply {
+            put("account_id", folder.accountId)
+            put("path", folder.path)
+            put("data", folder.json().toString())
+        })
     }
     @Synchronized fun replaceFolders(accountId: String,items: List<ServerFolder>) {
         val db=writableDatabase;db.beginTransaction()
@@ -132,16 +139,38 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
-    @Synchronized fun applyInbox(previous: List<MailItem>,items: List<MailItem>) {
-        val db=writableDatabase
-        val old=previous.associateBy{it.id}
-        val ids=items.map{it.id}.toSet()
+    @Synchronized fun applyInbox(previous: List<MailItem>, items: List<MailItem>) {
+        val db = writableDatabase
         db.beginTransaction()
         try {
-            previous.filter{it.id !in ids}.forEach{db.delete("messages","id = ?",arrayOf(it.id))}
-            items.filter{old[it.id]!=it}.forEach{putMessage(db,it)}
+            applyMessageChanges(db, previous, items)
             db.setTransactionSuccessful()
-        } finally {db.endTransaction()}
+        } finally {
+            db.endTransaction()
+        }
+    }
+    @Synchronized fun applyFolderSync(
+        previous: List<MailItem>,
+        items: List<MailItem>,
+        folder: ServerFolder,
+        flagActions: List<MailAction>
+    ) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            applyMessageChanges(db, previous, items)
+            flagActions.forEach { putAction(db, it) }
+            putFolder(db, folder)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+    private fun applyMessageChanges(db: SQLiteDatabase, previous: List<MailItem>, items: List<MailItem>) {
+        val old = previous.associateBy { it.id }
+        val ids = items.map { it.id }.toSet()
+        previous.filter { it.id !in ids }.forEach { db.delete("messages", "id = ?", arrayOf(it.id)) }
+        items.filter { old[it.id] != it }.forEach { putMessage(db, it) }
     }
     @Synchronized fun putMessages(items: List<MailItem>) {
         val db=writableDatabase

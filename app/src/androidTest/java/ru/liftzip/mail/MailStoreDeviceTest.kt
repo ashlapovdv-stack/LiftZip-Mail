@@ -110,6 +110,45 @@ class MailStoreDeviceTest {
             assertNotNull(db.action(a.id));assertEquals("a",db.message("m")?.accountId)
         }finally{db.close();c.deleteDatabase("mail-v1.db")}
     }
+    @Test fun folderSyncCommitsMessagesFlagsAndFolderStateTogether() {
+        val c = context()
+        val db = LocalStore(c)
+        val sent = ServerFolder("a", "Sent", "Sent", FolderRole.SENT, total = 1, validity = 7)
+        val updated = sent.copy(total = 2, checkedAt = 100)
+        val existing = message().copy(localFolder = "remote-sent", remoteFolder = sent.path, uid = 10, validity = sent.validity)
+        val incoming = existing.copy(id = "new-sent", uid = 11)
+        val flag = MailAction("sent-flag", "a", incoming.id, ActionKind.FLAGS, "{}")
+        try {
+            db.putAccount(account())
+            db.putFolders(listOf(sent))
+            db.putMessage(existing)
+            db.writableDatabase.execSQL("""
+                CREATE TRIGGER fail_folder_write BEFORE INSERT ON server_folders
+                BEGIN SELECT RAISE(ABORT, 'test folder write failure'); END
+            """.trimIndent())
+
+            assertThrows(SQLiteException::class.java) {
+                db.applyFolderSync(listOf(existing), listOf(incoming), updated, listOf(flag))
+            }
+            assertEquals(listOf(sent), db.folders())
+            assertEquals(listOf(existing.id), db.messages().map { it.id })
+            assertTrue(db.actions().isEmpty())
+
+            db.writableDatabase.execSQL("DROP TRIGGER fail_folder_write")
+            db.applyFolderSync(listOf(existing), listOf(existing, incoming), updated, listOf(flag))
+            db.close()
+            LocalStore(c).use { reopened ->
+                assertEquals(listOf(updated), reopened.folders())
+                assertEquals(setOf(existing.id, incoming.id), reopened.messages().map { it.id }.toSet())
+                assertEquals(existing.body, reopened.message(existing.id)?.body)
+                assertEquals(flag.id, reopened.actions().single().id)
+            }
+        } finally {
+            db.close()
+            c.deleteDatabase("mail-v1.db")
+        }
+    }
+
     @Test fun openingARealVersionOneDatabaseMigratesAndKeepsTheCompleteBody() {
         val c=context();val helper=LocalStore(c)
         val legacy=c.openOrCreateDatabase("mail-v1.db",0,null)
