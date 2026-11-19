@@ -290,7 +290,11 @@ class MailStoreDeviceTest {
         val message=message().copy(body="Запчасть AX-1200",localFolder="inbox",date=100)
         try {
             db.putAccount(account())
+            db.putMessage(message.copy(id="obsolete",body="Obsolete SKU"))
             db.putMessage(message)
+            db.removeMessage("obsolete")
+            db.compact()
+            assertTrue(db.search("obsolete sku"){}.isEmpty())
             assertEquals(setOf(message.id),db.search("x-12"){})
             val updated=message.copy(body="Новый артикул RQ-7701")
             val writer=db.writableDatabase

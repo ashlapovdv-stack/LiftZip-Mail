@@ -192,13 +192,10 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         }finally{db.endTransaction()}
     }
     private fun putMessage(db: SQLiteDatabase,m: MailItem) {
-        // Keep row IDs stable for FTS. List preview updates preserve the full body and HTML.
-        val fields=if(m.previewOnly)"rowid,data" else "rowid"
-        val previous=db.rawQuery("SELECT $fields FROM messages WHERE id=?",arrayOf(m.id)).use{cursor->
-            if(cursor.moveToFirst())cursor.getLong(0) to if(m.previewOnly)JSONObject(cursor.getString(1))else null
-            else null
-        }
-        val stored=previous?.second
+        // List preview updates preserve the full body and HTML.
+        val stored=if(m.previewOnly)db.rawQuery("SELECT data FROM messages WHERE id=?",arrayOf(m.id)).use{
+            if(it.moveToFirst())JSONObject(it.getString(0))else null
+        }else null
         val full=MailContent.forStorage(m,stored?.getString("body"),stored?.optString("htmlBody"),stored?.optInt("contentVersion")).let{it.copy(composer=if(m.previewOnly)stored?.optJSONObject("composer")?.let(ComposeCodec::decode)?:m.composer else m.composer,headers=m.headers?:stored?.optJSONObject("headers")?.let(ComposeCodec::headers),cacheBytes=if(it.contentCached)MailContent.bytes(it)else it.cacheBytes,cachedAt=it.cachedAt.takeIf{time->time>0}?:System.currentTimeMillis())}
         val row=encodeMessage(full)
         val values=ContentValues().apply {
@@ -211,11 +208,8 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             put("preview",encodeMessage(MailContent.preview(full)).toString())
             put("search_pending",0)
         }
-        val rowId=if(previous==null)db.insertOrThrow("messages",null,values)else {
-            check(db.update("messages",values,"rowid=?",arrayOf(previous.first.toString()))==1)
-            previous.first
-        }
-        MailSearch.put(db,rowId,row)
+        if(db.update("messages",values,"id=?",arrayOf(full.id))==0)db.insertOrThrow("messages",null,values)
+        MailSearch.put(db,full.id,row)
     }
     @Synchronized fun removeMessage(id: String) { writableDatabase.delete("messages","id = ?",arrayOf(id)) }
     @Synchronized fun removeMessages(ids: Set<String>) {

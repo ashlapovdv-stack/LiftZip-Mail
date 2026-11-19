@@ -10,12 +10,13 @@ internal object MailSearch {
     private const val MAX_SQL_TERMS=32
 
     fun create(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE message_search_keys(docid INTEGER PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE)")
         db.execSQL("CREATE VIRTUAL TABLE message_search USING fts4(grams, text, notindexed=text, matchinfo=fts3)")
         db.execSQL("CREATE INDEX message_search_pending ON messages(id) WHERE search_pending=1")
         db.execSQL("""
-            CREATE TRIGGER message_search_delete BEFORE DELETE ON messages WHEN old.search_pending=0
+            CREATE TRIGGER message_search_delete BEFORE DELETE ON message_search_keys
             BEGIN
-                DELETE FROM message_search WHERE docid=old.rowid;
+                DELETE FROM message_search WHERE docid=old.docid;
             END
         """.trimIndent())
     }
@@ -37,15 +38,22 @@ internal object MailSearch {
         return grams.joinToString(" "){ "g"+it.toString(36) }
     }
 
-    fun put(db: SQLiteDatabase,rowId: Long,row: JSONObject) {
+    fun put(db: SQLiteDatabase,messageId: String,row: JSONObject) {
+        // VACUUM may renumber messages.rowid. Only an explicit integer key is stable.
+        val key=db.rawQuery("SELECT docid FROM message_search_keys WHERE message_id=?",arrayOf(messageId)).use {
+            if(it.moveToFirst())it.getLong(0)else null
+        }
+        val docId=key?:db.insertOrThrow("message_search_keys",null,ContentValues().apply {
+            put("message_id",messageId)
+        })
         val searchable=text(row)
-        val old=db.rawQuery("SELECT text FROM message_search WHERE docid=?",arrayOf(rowId.toString())).use{
+        val old=if(key==null)null else db.rawQuery("SELECT text FROM message_search WHERE docid=?",arrayOf(docId.toString())).use{
             if(it.moveToFirst())it.getString(0)else null
         }
         if(old==searchable)return
-        if(old!=null)db.delete("message_search","docid=?",arrayOf(rowId.toString()))
+        if(old!=null)db.delete("message_search","docid=?",arrayOf(docId.toString()))
         db.insertOrThrow("message_search",null,ContentValues().apply {
-            put("docid",rowId)
+            put("docid",docId)
             put("grams",tokens(searchable))
             put("text",searchable)
         })
@@ -54,18 +62,18 @@ internal object MailSearch {
     fun indexBatch(db: SQLiteDatabase,checkCancelled: ()->Unit): Boolean {
         db.beginTransactionNonExclusive()
         try {
-            val rows=db.rawQuery("SELECT rowid,data FROM messages WHERE search_pending=1 ORDER BY id LIMIT $BATCH_SIZE",null).use{cursor->
+            val rows=db.rawQuery("SELECT id,data FROM messages WHERE search_pending=1 ORDER BY id LIMIT $BATCH_SIZE",null).use{cursor->
                 buildList {
                     while(cursor.moveToNext()){
                         checkCancelled()
-                        add(cursor.getLong(0) to JSONObject(cursor.getString(1)))
+                        add(cursor.getString(0) to JSONObject(cursor.getString(1)))
                     }
                 }
             }
-            for((rowId,row) in rows) {
+            for((id,row) in rows) {
                 checkCancelled()
-                put(db,rowId,row)
-                db.execSQL("UPDATE messages SET search_pending=0 WHERE rowid=?",arrayOf(rowId))
+                put(db,id,row)
+                db.execSQL("UPDATE messages SET search_pending=0 WHERE id=?",arrayOf(id))
             }
             db.setTransactionSuccessful()
             return rows.size==BATCH_SIZE
@@ -90,7 +98,7 @@ internal object MailSearch {
         val extraText=if(extraTerms.isEmpty())"NULL" else "s.text"
         checkCancelled()
         return db.rawQuery("""
-            SELECT m.id, $extraText, NULL FROM message_search s JOIN messages m ON s.docid=m.rowid
+            SELECT k.message_id, $extraText, NULL FROM message_search s JOIN message_search_keys k ON s.docid=k.docid
             WHERE $match$contains
             UNION ALL
             SELECT id, NULL, data FROM messages WHERE search_pending=1
