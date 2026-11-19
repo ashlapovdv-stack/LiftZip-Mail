@@ -77,14 +77,14 @@ object HtmlMail {
                 table.children().any{it.normalName()=="caption"} ||
                 rows.any{row->row.children().any{it.normalName()=="th"}}
             if(dataTable) {
-                isolated+=table
+                isolated.add(table)
             }else if(ancestors.isEmpty()) {
                 // Email templates often put multiple layout tables in a single-column shell.
                 // Keep that shell in the page so its intrinsic width reaches WebView's fit.
                 val layoutShell=rows.isNotEmpty() && rows.all{row->
                     row.children().size==1 && row.child(0).normalName()=="td"
                 } && table.getElementsByTag("table").size>1
-                if(!layoutShell)isolated+=table
+                if(!layoutShell)isolated.add(table)
             }
         }
         return isolated
