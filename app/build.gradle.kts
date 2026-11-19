@@ -10,8 +10,8 @@ android {
         applicationId = "ru.liftzip.mail"
         minSdk = 26
         targetSdk = 36
-        versionCode = 44
-        versionName = "0.5.23"
+        versionCode = 45
+        versionName = "0.5.24"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {

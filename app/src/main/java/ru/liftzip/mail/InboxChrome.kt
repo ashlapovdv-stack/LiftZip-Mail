@@ -32,10 +32,11 @@ object InboxInteractionRules {
     fun hideAlignment(delta: Float,fraction: Float,rowOffset: Int,rowSize: Int)=
         if(delta.isFinite() && delta<0f && fraction==1f && rowOffset>0 && rowSize>rowOffset)
             -minOf(-delta,(rowSize-rowOffset).toFloat()) else 0f
-    fun viewport(height: Int,header: Int,bottom: Int,fraction: Float): InboxViewportGeometry {
-        val progress=fraction.coerceIn(0f,1f)
-        val offset=kotlin.math.round(header*progress).toInt()
-        return InboxViewportGeometry(height,offset,height-bottom,offset+kotlin.math.round(bottom*progress).toInt())
+    fun headerOffset(header: Int,fraction: Float)=kotlin.math.round(header*fraction.coerceIn(0f,1f)).toInt()
+    fun bottomVisibility(visible: Boolean,delta: Float,forced: Boolean,follows: Boolean): Boolean = when {
+        forced -> true
+        !follows || !delta.isFinite() || delta==0f -> visible
+        else -> delta>0f
     }
     fun pullProgress(distance: Float,refreshing: Boolean,accepted: Boolean,gestureArmed: Boolean)=if(refreshing || accepted || !gestureArmed)0f else distance.coerceIn(0f,1f)
     fun noticeBottom(rootHeight: Int,route: String,anchor: NoticeAnchor?,safeBottom: Int,gap: Int): Int {
@@ -43,8 +44,6 @@ object InboxInteractionRules {
         return maxOf(safeBottom,obstruction).coerceAtLeast(0)+gap
     }
 }
-
-data class InboxViewportGeometry(val listHeight: Int,val listY: Int,val bottomY: Int,val listBottomPadding: Int)
 
 /** Space available with both panels fully visible, independent of the current fade. */
 data class InboxPanelMetrics(val viewportHeight: Int,val headerHeight: Int,val bottomHeight: Int,val edgeGap: Int=0) {

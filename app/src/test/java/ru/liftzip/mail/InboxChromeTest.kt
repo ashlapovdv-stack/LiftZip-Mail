@@ -35,9 +35,9 @@ class InboxChromeTest {
     @Test fun viewportMovementAndRemainingListScrollNeverDoubleTheFingerDistance() {
         val c=controller();var listScroll=0f
         for(delta in listOf(-55f,-120f,-100f,30f,190f,65f)) {
-            val before=InboxInteractionRules.viewport(800,200,152,c.fraction).listY-listScroll
+            val before=InboxInteractionRules.headerOffset(200,c.fraction)-listScroll
             val consumed=c.scroll(delta);listScroll-=delta-consumed
-            val after=InboxInteractionRules.viewport(800,200,152,c.fraction).listY-listScroll
+            val after=InboxInteractionRules.headerOffset(200,c.fraction)-listScroll
             assertEquals(delta,after-before,0.001f)
         }
     }

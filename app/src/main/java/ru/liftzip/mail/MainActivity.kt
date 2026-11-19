@@ -25,7 +25,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
@@ -476,7 +475,8 @@ private val Paper=Color(0xFFF8F9F6)
     var exitRequested by rememberSaveable { mutableStateOf(false) }
     var deleting by remember{mutableStateOf<Set<String>?>(null)}
     var selectionMenu by remember{mutableStateOf(false)}
-    val controlsProgress=remember(memory){memory.controlsProgress}
+    val controlsProgress=memory.controlsProgress
+    val bottomVisible=memory.bottomVisible
     val focus=LocalFocusManager.current
     val keyboard=LocalSoftwareKeyboardController.current
     val density=LocalDensity.current
@@ -494,6 +494,11 @@ private val Paper=Color(0xFFF8F9F6)
     val latestRefreshing by rememberUpdatedState(refreshing)
     ObservePullRefresh(pullState,refreshing,onRefreshing={pullGestureArmed=false},onRest={pullAccepted=false;pullGestureArmed=false})
     val chrome=remember(memory){InboxChromeController(controlsProgress.floatValue)}
+    fun showPanels(){
+        chrome.show()
+        controlsProgress.floatValue=1f
+        bottomVisible.value=true
+    }
 
     LaunchedEffect(query){onSearch(query)}
     val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf(if(query.isBlank())memory.rows else null)}
@@ -528,16 +533,16 @@ private val Paper=Color(0xFFF8F9F6)
     val itemKeys=remember(visibleIds,historyFooter){buildSet<Any>{if(visibleIds.isEmpty())add("empty")else addAll(visibleIds);if(historyFooter)add("history-footer")}}
     if(visibleState.value!=null)ObserveInboxScrollability(memory.list,itemKeys,visibleIds to LocalDensity.current.fontScale,panelMetrics){scrollable->
         scrollableContent=scrollable
-        if(!scrollable){chrome.show();controlsProgress.floatValue=1f}
+        if(!scrollable)showPanels()
     }
     val forceControls by rememberUpdatedState(!s.autoHidePanels || scrollableContent==false)
     LaunchedEffect(selectionMode){if(!selectionMode)selectionMenu=false}
-    LaunchedEffect(selectionMode){snapshotFlow{if(controlsProgress.floatValue>0.02f)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
-    val scrollControls=remember(memory,chrome,focus,keyboard){InboxScrollConnection(chrome,controlsProgress,
+    LaunchedEffect(selectionMode){snapshotFlow{if(bottomVisible.value)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
+    val scrollControls=remember(memory,chrome,focus,keyboard){InboxScrollConnection(chrome,controlsProgress,bottomVisible,
         forced={forceControls},canPull={!memory.list.canScrollBackward},refreshing={latestRefreshing},
         onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true},listState=memory.list)}
     // Selecting rows must not reveal hidden panels and move the list underneath the finger.
-    LaunchedEffect(drawer.currentValue,s.autoHidePanels){if(!s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsProgress.floatValue=1f}}
+    LaunchedEffect(drawer.currentValue,s.autoHidePanels){if(!s.autoHidePanels || drawer.currentValue==DrawerValue.Open)showPanels()}
 
     val current=s.accounts.find{it.id==accountId}
     val selectedAccounts=remember(s.accounts,accountId){s.accounts.filter{if(accountId==null)it.enabled else it.id==accountId}}
@@ -610,7 +615,7 @@ private val Paper=Color(0xFFF8F9F6)
         if(exitRequested)AlertDialog(onDismissRequest=onExit,properties=DialogProperties(dismissOnClickOutside=false),
             title={Text("Выйти из Почты?")},text={Text("Нажмите «Выйти» или кнопку Android «Назад» ещё раз. Фоновая проверка почты продолжится по настройкам.")},
             confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
-        InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},endInset=safeBottom,nearEnd=nearEndValue,
+        InboxViewport(fraction=chromeFraction,bottomVisible=bottomVisible,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},endInset=safeBottom,nearEnd=nearEndValue,
             modifier=Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),header={
             Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).testTag("inbox-header")) {
                 if(selectionMode)TopAppBar(modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.height(DecorativeHeaderHeight),
@@ -637,20 +642,19 @@ private val Paper=Color(0xFFF8F9F6)
                 }
                 }
             }
-        },bottom={alpha->
-            val fade=alpha
+        },bottom={
             val composeButtonSize=56.dp
             Column(Modifier.fillMaxWidth().testTag("inbox-bottom")) {
                 // Keep the action slot when selection hides its button; reducing the
                 // list's end padding would move rows at the bottom of the mailbox.
                 Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp).height(composeButtonSize),contentAlignment=Alignment.CenterEnd) {
-                    if(!selectionMode)InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp)) {
+                    if(!selectionMode) {
                         FloatingActionButton(onClick=onCompose,shape=CircleShape,
                             containerColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.primaryContainer else style.accent,
                             contentColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.onPrimaryContainer else Color.White,modifier=Modifier.size(composeButtonSize).semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top}) {Icon(Icons.Outlined.Edit,null)}
                     }
                 }
-                Column(Modifier.fillMaxWidth().graphicsLayer{this.alpha=fade().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
                 Box(if(style==MailStyle.STANDARD)Modifier else Modifier.padding(horizontal=8.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
                         modifier=Modifier.height(64.dp).then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
@@ -674,7 +678,7 @@ private val Paper=Color(0xFFF8F9F6)
             Box(Modifier.fillMaxSize().padding(end=16.dp,bottom=safeBottom+148.dp),contentAlignment=Alignment.BottomEnd) {
                 AnimatedVisibility(visible=showTop && !selectionMode,enter=fadeIn(animationSpec=tween(180)),exit=fadeOut(animationSpec=tween(180))) {
                     SmallFloatingActionButton(onClick={scope.launch {
-                        chrome.show();controlsProgress.floatValue=1f
+                        showPanels()
                         if(memory.list.firstVisibleItemIndex>8)memory.list.scrollToItem(8)
                         memory.list.animateScrollToItem(0)
                     }},shape=CircleShape,modifier=Modifier.size(48.dp).semantics{contentDescription="Вернуться к началу списка"}) {Icon(Icons.Outlined.ArrowUpward,null)}
