@@ -73,12 +73,44 @@ class ReaderDeviceTest {
         rule.runOnIdle{view.setFindListener(null);view.clearMatches()}
         return found
     }
-    private fun changeHistory(view: MailHtmlWebView,toggle: NativeHistoryControl,expanded: Boolean) {
+    // These fixtures have no other grey fill in the left quarter of the reader.
+    // Locate the painted button and send the same tap as a reader would.
+    private fun tapPaintedHistoryCapsule() {
+        val root = rule.onRoot()
+        var target: Offset? = null
+        rule.waitUntil(15_000) {
+            val pixels = root.captureToImage().toPixelMap()
+            find@ for (y in pixels.height / 5 until pixels.height * 3 / 4 step 2) {
+                for (x in 0 until pixels.width / 4 - 8 step 2) {
+                    val solid = (0..8 step 2).all { dx ->
+                        (0..4 step 2).all { dy ->
+                            val pixel = pixels[x + dx, y + dy]
+                            kotlin.math.abs(pixel.red - 230f / 255f) < 0.005f &&
+                                kotlin.math.abs(pixel.green - pixel.red) < 0.005f &&
+                                kotlin.math.abs(pixel.blue - pixel.red) < 0.005f
+                        }
+                    }
+                    if (solid) {
+                        target = Offset(x + 4f, y + 2f)
+                        break@find
+                    }
+                }
+            }
+            target != null
+        }
+        root.performTouchInput { click(checkNotNull(target)) }
+    }
+    private fun changeHistory(
+        view: MailHtmlWebView,
+        toggle: NativeHistoryControl,
+        expanded: Boolean,
+        tap: (() -> Unit)? = null
+    ) {
         var revision=0L
         rule.runOnIdle{revision=view.documentGeneration()}
         var stage="locate and click history control"
         try {
-            toggle.performScrollTo().assertIsDisplayed().performClick()
+            if (tap == null) toggle.performScrollTo().assertIsDisplayed().performClick() else tap()
             stage="wait for aria-expanded=$expanded"
             toggle.assertExpanded(expanded)
             stage="wait for reader readiness"
@@ -200,11 +232,10 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{reader(message.copy(id="nested-flattened-provider",body=body,htmlBody=html))}}
         val view=loaded()
         val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 2")
-        toggle.performScrollTo().assertIsDisplayed()
         assertEquals(0,matches(view,"Вложенная цитата"))
-        changeHistory(view,toggle,true)
+        changeHistory(view,toggle,true,::tapPaintedHistoryCapsule)
         assertEquals(1,matches(view,"Вложенная цитата"))
-        changeHistory(view,toggle,false)
+        changeHistory(view,toggle,false,::tapPaintedHistoryCapsule)
         assertEquals(0,matches(view,"Вложенная цитата"))
     }
     @Test fun longHtmlCitationSharesScrollingAndRevealsItsFinalLine() {
@@ -216,7 +247,7 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{reader(message.copy(id="long-citation",body=plain,htmlBody=html))}}
         val main=loaded()
         val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
-        changeHistory(main,toggle,true)
+        changeHistory(main,toggle,true,::tapPaintedHistoryCapsule)
         val quote=unifiedHistoryView()
         assertEquals(1,matches(quote,"Последняя строка цитаты"))
         // Native scrolling must hand the movement back to the Compose page at its
@@ -249,7 +280,7 @@ class ReaderDeviceTest {
             rule.waitForIdle()
         }
         rule.runOnIdle{assertEquals(0,quote.scrollY)}
-        changeHistory(main,toggle,false)
+        changeHistory(main,toggle,false,::tapPaintedHistoryCapsule)
         assertEquals(1,matches(main,"Ответ"))
     }
     @Test fun reopeningUsesWarmGeometryAndStartsWithCollapsedHistory() {
