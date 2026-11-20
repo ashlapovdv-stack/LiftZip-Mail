@@ -44,7 +44,9 @@ class MailApplication : Application() {
     val processToken=UUID.randomUUID().toString()
     private val actions=BodyWarmupSignals()
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.IO)
-    internal val backgroundJournal=BackgroundJournal({getSharedPreferences("mail-background-journal",MODE_PRIVATE)},scope)
+    internal val backgroundJournal by lazy {
+        BackgroundJournal({getSharedPreferences("mail-background-journal",MODE_PRIVATE)},scope)
+    }
     internal lateinit var periodicMailState: StateFlow<PollWorkState?>
         private set
     internal fun logMailVisibility(active: Boolean) {
