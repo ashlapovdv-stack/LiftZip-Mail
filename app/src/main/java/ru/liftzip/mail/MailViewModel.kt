@@ -28,7 +28,8 @@ data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = e
 private data class UnreadScope(val enabled: Boolean=false,val accountId: String?=null)
 
 class MailViewModel(app: Application): AndroidViewModel(app) {
-    private val repo=(app as MailApplication).repository
+    private val mailApp=app as MailApplication
+    private val repo=mailApp.repository
     private val mutable=MutableStateFlow(UiState())
     private var foreground: Job?=null
     private var checking: Job?=null
@@ -39,12 +40,12 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     private val query=MutableStateFlow("")
     private val unreadScope=MutableStateFlow(UnreadScope())
     val state=mutable.asStateFlow()
-    internal val backgroundEvents=(app as MailApplication).backgroundJournal.events
+    internal val backgroundEvents=mailApp.backgroundJournal.events
     init {
         viewModelScope.launch{(getApplication<Application>() as MailApplication).fastMail.state.collect{value->mutable.update{it.copy(fastMail=value)}}}
         viewModelScope.launch{repo.forwardingProgress.collect{progress->mutable.update{it.copy(forwarding=progress)}}}
         viewModelScope.launch {
-            combine(app.periodicMailState,WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.TEST_NAME)){periodic,tests->periodic to tests}.collect{(periodic,tests)->
+            combine(mailApp.periodicMailState,WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.TEST_NAME)){periodic,tests->periodic to tests}.collect{(periodic,tests)->
                 val test=tests.firstOrNull{!it.state.isFinished}?:tests.firstOrNull()
                 val runtime=(periodic?.runtime?:BackgroundRuntime()).copy(testState=test?.state?.name?:"STOPPED")
                 mutable.update{it.copy(backgroundRuntime=runtime)}
