@@ -50,10 +50,25 @@ class MailScreensDeviceTest {
                 onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={composeRequests++},onStar={},onMarkRead={_,_,_->},onDelete={_,_->},onSearch={},onOpen={})}
         }
         rule.waitForIdle()
-        rule.onRoot().performTouchInput{swipe(center,center+Offset(0f,-100f),600)}
-        rule.waitForIdle();screenshot("mail-partial")
-        rule.onNodeWithContentDescription("Непрочитанные").performClick()
-        rule.waitForIdle()
+        val list=rule.onNodeWithTag("inbox-list")
+        val unread=rule.onNodeWithContentDescription("Непрочитанные")
+        fun drag(distance: Float){
+            list.performTouchInput{down(center);moveBy(Offset(0f,distance));advanceEventTime(500);up()}
+        }
+        drag(-40f)
+        unread.assertIsDisplayed()
+        repeat(4){
+            if(unread.isDisplayed())list.performTouchInput{swipeUp(durationMillis=450)}
+        }
+        unread.assertIsNotDisplayed()
+        screenshot("mail-partial")
+        drag(40f)
+        unread.assertIsNotDisplayed()
+        repeat(4){
+            if(!unread.isDisplayed())list.performTouchInput{swipeDown(durationMillis=450)}
+        }
+        unread.assertIsDisplayed().performClick()
+        rule.waitUntil(10_000){rule.onNodeWithContentDescription("Написать письмо").isDisplayed()}
         screenshot("single-unread")
         rule.onNodeWithText("Поиск писем").assertIsDisplayed()
         rule.onNodeWithContentDescription("Выбрать ящик").assertIsDisplayed()

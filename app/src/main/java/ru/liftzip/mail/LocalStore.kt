@@ -7,13 +7,21 @@ import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 import org.json.JSONObject
 
-class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", null, 2) {
+internal const val LOCAL_INBOX_PAGE_SIZE=40
+internal data class LocalInboxCursor(val date: Long,val id: String)
+internal data class LocalInboxPage(val items: List<MailItem>,val next: LocalInboxCursor?)
+internal fun MailItem.inboxCursor()=LocalInboxCursor(date,id)
+
+class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", null, 4) {
+    init { setWriteAheadLoggingEnabled(true) }
+    private val searchBackfillLock=Any()
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE accounts (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
-        db.execSQL("CREATE TABLE messages (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, folder TEXT NOT NULL, data TEXT NOT NULL, preview TEXT)")
-        db.execSQL("CREATE INDEX message_account ON messages(account_id, folder)")
+        db.execSQL("CREATE TABLE messages (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, folder TEXT NOT NULL, data TEXT NOT NULL, preview TEXT, message_date INTEGER NOT NULL DEFAULT 0, source_draft_id TEXT, search_pending INTEGER NOT NULL DEFAULT 1)")
         createSyncTables(db)
+        createPagingIndexes(db)
+        MailSearch.create(db)
     }
     private fun createSyncTables(db: SQLiteDatabase) {
         val hasPreview=db.rawQuery("PRAGMA table_info(messages)",null).use{c->var found=false;while(c.moveToNext())if(c.getString(c.getColumnIndexOrThrow("name"))=="preview")found=true;found}
@@ -21,15 +29,67 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         db.execSQL("CREATE TABLE IF NOT EXISTS server_folders (account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, path TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(account_id,path))")
         db.execSQL("CREATE TABLE IF NOT EXISTS mail_actions (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, revision INTEGER NOT NULL, data TEXT NOT NULL)")
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {if(oldVersion<2)createSyncTables(db)}
+    private fun createPagingIndexes(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS inbox_date ON messages(folder,message_date DESC,id DESC)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS inbox_account_date ON messages(account_id,folder,message_date DESC,id DESC)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS edited_draft ON messages(folder,source_draft_id)")
+    }
+
+    override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
+        if(oldVersion<2)createSyncTables(db)
+        if(oldVersion<3 && newVersion>=3) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN message_date INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE messages ADD COLUMN source_draft_id TEXT")
+            // SQLiteOpenHelper already wraps this migration. Walk primary keys in batches
+            // so full legacy message content is never collected into a single list.
+            var after: String?=null
+            while(true) {
+                val batch=db.query("messages",arrayOf("id","COALESCE(preview,data)"),after?.let{"id>?"},after?.let{arrayOf(it)},null,null,"id","200").use{cursor->
+                    buildList {
+                        while(cursor.moveToNext()) {
+                            val row=JSONObject(cursor.getString(1))
+                            add(Triple(cursor.getString(0),row.getLong("date"),draftSource(row)))
+                        }
+                    }
+                }
+                if(batch.isEmpty())break
+                for((id,date,source) in batch)db.update("messages",ContentValues().apply{
+                    put("message_date",date)
+                    put("source_draft_id",source)
+                },"id=?",arrayOf(id))
+                after=batch.last().first
+            }
+            createPagingIndexes(db)
+            db.execSQL("DROP INDEX IF EXISTS message_account")
+        }
+        if(oldVersion<4 && newVersion>=4) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN search_pending INTEGER NOT NULL DEFAULT 1")
+            MailSearch.create(db)
+        }
+    }
+    private fun draftSource(row: JSONObject)=row.optString("sourceDraftId").takeIf{it.isNotBlank() && it!="null"}
+
     @Synchronized fun folders(): List<ServerFolder> = readableDatabase.rawQuery("SELECT data FROM server_folders",null).use{c->buildList{while(c.moveToNext())add(folderFromJson(JSONObject(c.getString(0))))}}
     @Synchronized fun putFolders(items: List<ServerFolder>) {
         val db=writableDatabase;db.beginTransaction()
-        try{items.forEach{f->db.insertWithOnConflict("server_folders",null,ContentValues().apply{put("account_id",f.accountId);put("path",f.path);put("data",f.json().toString())},SQLiteDatabase.CONFLICT_REPLACE)};db.setTransactionSuccessful()}finally{db.endTransaction()}
+        try{items.forEach{putFolder(db,it)};db.setTransactionSuccessful()}finally{db.endTransaction()}
     }
-    @Synchronized fun replaceFolders(accountId: String,items: List<ServerFolder>) {
-        val db=writableDatabase;db.beginTransaction()
-        try{db.delete("server_folders","account_id=?",arrayOf(accountId));putFolders(items);db.setTransactionSuccessful()}finally{db.endTransaction()}
+    private fun putFolder(db: SQLiteDatabase, folder: ServerFolder) {
+        db.replaceOrThrow("server_folders", null, ContentValues().apply {
+            put("account_id", folder.accountId)
+            put("path", folder.path)
+            put("data", folder.json().toString())
+        })
+    }
+    @Synchronized fun replaceFolders(accountId: String,items: List<ServerFolder>,obsolete: Set<String>) {
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("server_folders","account_id=?",arrayOf(accountId))
+            items.forEach{putFolder(db,it)}
+            obsolete.forEach{db.delete("messages","account_id=? AND id=?",arrayOf(accountId,it))}
+            db.setTransactionSuccessful()
+        }finally{db.endTransaction()}
     }
     @Synchronized fun compact(){writableDatabase.execSQL("VACUUM")}
     @Synchronized fun actions(): List<MailAction> = readableDatabase.rawQuery("SELECT data FROM mail_actions ORDER BY rowid",null).use{c->buildList{while(c.moveToNext())add(actionFromJson(JSONObject(c.getString(0))))}}
@@ -95,28 +155,61 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         }
         return items
     }
+    @Synchronized internal fun inboxRows(accountIds: Set<String>,after: LocalInboxCursor?,limit: Int): List<MailItem> {
+        require(limit>0)
+        if(accountIds.isEmpty())return emptyList()
+        val placeholders=accountIds.joinToString(","){"?"}
+        val cursorClause=if(after==null)"" else " AND m.message_date<=? AND (m.message_date<? OR m.id<?)"
+        val args=accountIds.toList()+listOfNotNull(after?.date?.toString(),after?.date?.toString(),after?.id)+limit.toString()
+        return readableDatabase.rawQuery("""
+            SELECT COALESCE(m.preview,m.data) FROM messages m
+            WHERE m.folder='inbox' AND m.account_id IN ($placeholders)$cursorClause
+            AND NOT EXISTS (SELECT 1 FROM messages d WHERE d.folder='drafts' AND d.source_draft_id=m.id)
+            ORDER BY m.message_date DESC,m.id DESC LIMIT ?
+        """.trimIndent(),args.toTypedArray()).use{cursor->
+            buildList{while(cursor.moveToNext())add(decodeMessage(JSONObject(cursor.getString(0)),preview=true))}
+        }
+    }
     @Synchronized fun message(id: String): MailItem?=readableDatabase.rawQuery("SELECT data FROM messages WHERE id = ?",arrayOf(id)).use{c->
         if(c.moveToFirst())decodeMessage(JSONObject(c.getString(0)))else null
     }
-    @Synchronized fun search(query: String,checkCancelled: ()->Unit): Set<String> {
-        val terms=query.lowercase().trim().split(Regex("\\s+")).filter(String::isNotBlank)
-        if(terms.isEmpty())return emptySet()
-        return readableDatabase.rawQuery("SELECT data FROM messages",null).use{c->buildSet{
-            while(c.moveToNext()){
-                checkCancelled()
-                val m=decodeMessage(JSONObject(c.getString(0)))
-                if(MailContent.matches(m,terms))add(m.id)
-            }
-        }}
+    // Keep legacy rows from moving to the index partway through a paged SQLite cursor.
+    // Mail writes use their own transactions and can still commit under WAL.
+    fun search(query: String,checkCancelled: ()->Unit): Set<String> = synchronized(searchBackfillLock) {
+        MailSearch.find(readableDatabase,query,checkCancelled)
     }
-    @Synchronized fun putMessage(m: MailItem) { putMessage(writableDatabase,m) }
+
+    internal fun indexSearchBatch(checkCancelled: ()->Unit): Boolean = synchronized(searchBackfillLock) {
+        MailSearch.indexBatch(writableDatabase,checkCancelled)
+    }
+
+    @Synchronized fun putMessage(m: MailItem) {
+        val db=writableDatabase
+        db.beginTransactionNonExclusive()
+        try {
+            putMessage(db,m)
+            db.setTransactionSuccessful()
+        }finally{db.endTransaction()}
+    }
     private fun putMessage(db: SQLiteDatabase,m: MailItem) {
-        // A flag/header update from a list preview must never overwrite the stored full body.
-        val stored=if(m.previewOnly)db.rawQuery("SELECT data FROM messages WHERE id = ?",arrayOf(m.id)).use{c->if(c.moveToFirst())JSONObject(c.getString(0)) else null}else null
+        // List preview updates preserve the full body and HTML.
+        val stored=if(m.previewOnly)db.rawQuery("SELECT data FROM messages WHERE id=?",arrayOf(m.id)).use{
+            if(it.moveToFirst())JSONObject(it.getString(0))else null
+        }else null
         val full=MailContent.forStorage(m,stored?.getString("body"),stored?.optString("htmlBody"),stored?.optInt("contentVersion")).let{it.copy(composer=if(m.previewOnly)stored?.optJSONObject("composer")?.let(ComposeCodec::decode)?:m.composer else m.composer,headers=m.headers?:stored?.optJSONObject("headers")?.let(ComposeCodec::headers),cacheBytes=if(it.contentCached)MailContent.bytes(it)else it.cacheBytes,cachedAt=it.cachedAt.takeIf{time->time>0}?:System.currentTimeMillis())}
-        db.insertWithOnConflict("messages",null,ContentValues().apply {
-            put("id",full.id); put("account_id",full.accountId); put("folder",full.localFolder); put("data",encodeMessage(full).toString());put("preview",encodeMessage(MailContent.preview(full)).toString())
-        },SQLiteDatabase.CONFLICT_REPLACE)
+        val row=encodeMessage(full)
+        val values=ContentValues().apply {
+            put("id",full.id)
+            put("account_id",full.accountId)
+            put("folder",full.localFolder)
+            put("message_date",full.date)
+            put("source_draft_id",full.sourceDraftId)
+            put("data",row.toString())
+            put("preview",encodeMessage(MailContent.preview(full)).toString())
+            put("search_pending",0)
+        }
+        if(db.update("messages",values,"id=?",arrayOf(full.id))==0)db.insertOrThrow("messages",null,values)
+        MailSearch.put(db,full.id,row)
     }
     @Synchronized fun removeMessage(id: String) { writableDatabase.delete("messages","id = ?",arrayOf(id)) }
     @Synchronized fun removeMessages(ids: Set<String>) {
@@ -132,16 +225,38 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
-    @Synchronized fun applyInbox(previous: List<MailItem>,items: List<MailItem>) {
-        val db=writableDatabase
-        val old=previous.associateBy{it.id}
-        val ids=items.map{it.id}.toSet()
+    @Synchronized fun applyInbox(previous: List<MailItem>, items: List<MailItem>) {
+        val db = writableDatabase
         db.beginTransaction()
         try {
-            previous.filter{it.id !in ids}.forEach{db.delete("messages","id = ?",arrayOf(it.id))}
-            items.filter{old[it.id]!=it}.forEach{putMessage(db,it)}
+            applyMessageChanges(db, previous, items)
             db.setTransactionSuccessful()
-        } finally {db.endTransaction()}
+        } finally {
+            db.endTransaction()
+        }
+    }
+    @Synchronized fun applyFolderSync(
+        previous: List<MailItem>,
+        items: List<MailItem>,
+        folder: ServerFolder,
+        flagActions: List<MailAction>
+    ) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            applyMessageChanges(db, previous, items)
+            flagActions.forEach { putAction(db, it) }
+            putFolder(db, folder)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+    private fun applyMessageChanges(db: SQLiteDatabase, previous: List<MailItem>, items: List<MailItem>) {
+        val old = previous.associateBy { it.id }
+        val ids = items.map { it.id }.toSet()
+        previous.filter { it.id !in ids }.forEach { db.delete("messages", "id = ?", arrayOf(it.id)) }
+        items.filter { old[it.id] != it }.forEach { putMessage(db, it) }
     }
     @Synchronized fun putMessages(items: List<MailItem>) {
         val db=writableDatabase
@@ -165,7 +280,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             HeaderText.decode(j.getString("sender")),j.getString("email"),HeaderText.recipients(j.getString("to")),HeaderText.decode(j.getString("subject")),j.getString("body").let{if(preview)it.take(MailContent.PREVIEW_LENGTH)else it},j.getLong("date"),
             j.getBoolean("unread"),j.getBoolean("starred"),j.getString("folder"),
             List(attachments.length()) { i-> val a=attachments.getJSONObject(i);Attachment(a.getString("path"),a.getString("name"),a.getString("mime"),a.getInt("size"),a.optString("contentId")) },
-            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size"),a.optString("contentId")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true),forwarding=j.optJSONObject("forwarding")?.let(::decodeForward),internetMessageId=j.optString("internetMessageId").ifBlank{if(j.getString("folder") in setOf("drafts","sent","outbox"))MessageIdentity.forDraft(j.getString("id"))else ""},sourceDraftId=j.optString("sourceDraftId").takeIf{it.isNotBlank() && it!="null"},editRevision=j.optLong("editRevision"),pendingDelete=j.optBoolean("pendingDelete"),cacheBytes=if(j.has("cacheBytes"))j.optLong("cacheBytes")else j.getString("body").length*2L,cachedAt=j.optLong("cachedAt",j.optLong("date")),htmlBody=if(preview)"" else j.optString("htmlBody"),contentVersion=j.optInt("contentVersion"),answered=j.optBoolean("answered"),forwarded=j.optBoolean("forwarded"),responseTo=j.optString("responseTo").takeIf{it.isNotBlank() && it!="null"},responseKind=j.optString("responseKind"),cc=HeaderText.recipients(j.optString("cc")),bcc=j.optString("bcc"),headers=j.optJSONObject("headers")?.let(ComposeCodec::headers),composer=if(preview)null else j.optJSONObject("composer")?.let(ComposeCodec::decode))
+            List(outgoing.length()) { i-> val a=outgoing.getJSONObject(i);OutgoingFile(a.getString("uri"),a.getString("name"),a.getString("mime"),a.getLong("size"),a.optString("contentId")) },j.optString("delivery"),previewOnly=preview,contentCached=j.optBoolean("contentCached",true),forwarding=j.optJSONObject("forwarding")?.let(::decodeForward),internetMessageId=j.optString("internetMessageId").ifBlank{if(j.getString("folder") in setOf("drafts","sent","outbox"))MessageIdentity.forDraft(j.getString("id"))else ""},sourceDraftId=draftSource(j),editRevision=j.optLong("editRevision"),pendingDelete=j.optBoolean("pendingDelete"),cacheBytes=if(j.has("cacheBytes"))j.optLong("cacheBytes")else j.getString("body").length*2L,cachedAt=j.optLong("cachedAt",j.optLong("date")),htmlBody=if(preview)"" else j.optString("htmlBody"),contentVersion=j.optInt("contentVersion"),answered=j.optBoolean("answered"),forwarded=j.optBoolean("forwarded"),responseTo=j.optString("responseTo").takeIf{it.isNotBlank() && it!="null"},responseKind=j.optString("responseKind"),cc=HeaderText.recipients(j.optString("cc")),bcc=j.optString("bcc"),headers=j.optJSONObject("headers")?.let(ComposeCodec::headers),composer=if(preview)null else j.optJSONObject("composer")?.let(ComposeCodec::decode))
     }
     private fun encodeForward(p: ForwardPlan)=JSONObject().put("account",p.accountId).put("message",p.messageId)
         .put("uid",p.uid).put("validity",p.validity).put("folder",p.remoteFolder).put("sourceKey",p.sourceKey)

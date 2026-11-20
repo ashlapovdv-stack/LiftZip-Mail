@@ -4,15 +4,33 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InboxInteractionTest {
-    @Test fun scrollingViewportNeverChangesHeightAsThePanelsFade() {
-        for(step in 0..100)assertEquals(800,InboxInteractionRules.viewport(800,218,152,step/100f).listHeight)
+    @Test fun bottomControlsWaitForAboutTwoCardsInEachDirection() {
+        val chrome=InboxChromeController()
+        assertTrue(chrome.bottomVisibility(true,-120f,120f))
+        assertTrue(chrome.bottomVisibility(true,-118f,120f))
+        assertFalse(chrome.bottomVisibility(true,-3f,120f))
+        assertFalse(chrome.bottomVisibility(false,80f,160f))
+        assertFalse(chrome.bottomVisibility(false,120f,120f))
+        assertTrue(chrome.bottomVisibility(false,60f,120f))
     }
-    @Test fun bottomControlsStayFixedWhileTheListCoversTheHeader() {
-        for(step in 0..100) {
-            val g=InboxInteractionRules.viewport(800,218,152,step/100f)
-            assertEquals(648,g.bottomY)
-            assertEquals(800-kotlin.math.round(152*step/100f).toInt(),g.listHeight+g.listY-g.listBottomPadding)
+    @Test fun smallBackAndForthMovementsCancelBeforeSwitching() {
+        val chrome=InboxChromeController()
+        repeat(500){
+            assertTrue(chrome.bottomVisibility(true,-10f,100f))
+            assertTrue(chrome.bottomVisibility(true,10f,100f))
         }
+        assertTrue(chrome.bottomVisibility(true,-195f,100f))
+        assertTrue(chrome.bottomVisibility(true,10f,100f))
+        assertTrue(chrome.bottomVisibility(true,-10f,100f))
+        assertFalse(chrome.bottomVisibility(true,-6f,100f))
+    }
+    @Test fun returningToStartOrForcingPanelsResetsTheTravel() {
+        val chrome=InboxChromeController()
+        assertTrue(chrome.bottomVisibility(true,-190f,100f))
+        assertTrue(chrome.bottomVisibility(true,0f,100f,forceVisible=true))
+        assertTrue(chrome.bottomVisibility(true,-20f,100f))
+        assertFalse(chrome.bottomVisibility(false,Float.NaN,100f))
+        assertTrue(chrome.bottomVisibility(false,0f,100f,forceVisible=true))
     }
     @Test fun aHiddenHeaderWaitsForTheClippedRowAndUsesOnlyTheRemainingDrag() {
         assertEquals(30f,InboxInteractionRules.revealAlignment(30f,0f,80),0f)
@@ -34,14 +52,12 @@ class InboxInteractionTest {
         assertEquals(0f,InboxInteractionRules.hideAlignment(-50f,0.5f,80,200),0f)
         assertEquals(0f,InboxInteractionRules.hideAlignment(50f,1f,80,200),0f)
     }
-    @Test fun reversingTheAnimationHasNoViewportResizeOrPositionJumpAtTheEndpoints() {
+    @Test fun headerOffsetIsSmoothAndClamped() {
         val fractions=(0..100).map{it/100f}+(100 downTo 0).map{it/100f}
-        val positions=fractions.map{InboxInteractionRules.viewport(800,218,152,it)}
-        positions.zipWithNext().forEach{(a,b)->assertTrue(kotlin.math.abs(a.listY-b.listY)<=3);assertEquals(a.listHeight,b.listHeight);assertEquals(a.bottomY,b.bottomY)}
-    }
-    @Test fun animationProgressIsClampedAtItsVisibleAndHiddenStates() {
-        assertEquals(0,InboxInteractionRules.viewport(800,218,152,-1f).listY)
-        assertEquals(218,InboxInteractionRules.viewport(800,218,152,2f).listY)
+        val offsets=fractions.map{InboxInteractionRules.headerOffset(218,it)}
+        offsets.zipWithNext().forEach{(a,b)->assertTrue(kotlin.math.abs(a-b)<=3)}
+        assertEquals(0,InboxInteractionRules.headerOffset(218,-1f))
+        assertEquals(218,InboxInteractionRules.headerOffset(218,2f))
     }
     @Test fun reversingAnAccidentalPullRetractsTheHintAndReturnsToRest() {
         assertEquals(0.9f,InboxInteractionRules.pullProgress(0.9f,false,false,true),0f)

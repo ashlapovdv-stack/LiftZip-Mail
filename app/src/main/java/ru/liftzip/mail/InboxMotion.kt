@@ -4,8 +4,6 @@ package ru.liftzip.mail
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.runtime.State
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -22,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.MutableState
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -41,15 +40,17 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /** Distinguishes native fling deltas from unrelated programmatic positioning. */
-class InboxScrollConnection(private val controller: InboxChromeController,private val progress: MutableFloatState,
+class InboxScrollConnection(private val controller: InboxChromeController,private val progress: MutableFloatState,private val bottomVisible: MutableState<Boolean>,
     private val forced: ()->Boolean,private val canPull: ()->Boolean,private val refreshing: ()->Boolean,
-    private val onHide: ()->Unit,private val onPull: ()->Unit,private val listState: LazyListState?=null): NestedScrollConnection {
+    private val onHide: ()->Unit,private val onPull: ()->Unit,private val listState: LazyListState?=null,private val fallbackRowHeight: Float=96f): NestedScrollConnection {
     override fun onPreScroll(available: Offset,source: NestedScrollSource): Offset {
         if(source==NestedScrollSource.UserInput)controller.endFling()
         val before=controller.fraction
         val force=forced()
         val userInput=source==NestedScrollSource.UserInput
-        val alignment=if(!force && listState!=null && controller.follows(userInput)) {
+        val follows=controller.follows(userInput)
+        if(force || follows && available.y>0f && canPull())updateBottom(0f,forceVisible=true)
+        val alignment=if(!force && listState!=null && follows) {
             val offset=listState.firstVisibleItemScrollOffset
             val first=listState.layoutInfo.visibleItemsInfo.firstOrNull{it.index==listState.firstVisibleItemIndex}
             InboxInteractionRules.revealAlignment(available.y,before,offset)+InboxInteractionRules.hideAlignment(available.y,before,offset,first?.size?:0)
@@ -57,40 +58,55 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
         // dispatchRawDelta handles only this row fragment; the remaining motion is still
         // distributed through nested scroll, so neither the row nor the header moves twice.
         val aligned=if(alignment!=0f && listState!=null)-listState.dispatchRawDelta(-alignment)else 0f
+        // Count the row fragment here and the rest of the list travel after nested scroll.
+        if(aligned!=0f)updateBottom(aligned)
         val consumed=controller.scroll(available.y-aligned,forced=force,userInput=userInput)
         progress.floatValue=controller.fraction
         if(before==1f && controller.fraction<1f)onHide()
         return Offset(0f,aligned+consumed)
     }
     override fun onPostScroll(consumed: Offset,available: Offset,source: NestedScrollSource): Offset {
-        if(source==NestedScrollSource.UserInput && available.y>0 && canPull() && !refreshing() && controller.fraction>=1f)onPull()
+        val userInput=source==NestedScrollSource.UserInput
+        val atTop=canPull()
+        if(controller.follows(userInput) && consumed.y!=0f && !forced()) {
+            updateBottom(consumed.y,forceVisible=consumed.y>0f && atTop)
+        }
+        if(userInput && available.y>0 && atTop && !refreshing() && controller.fraction>=1f)onPull()
         return Offset.Zero
+    }
+    private fun updateBottom(delta: Float,forceVisible: Boolean=false) {
+        val rowHeight=listState?.let { list->
+            list.layoutInfo.visibleItemsInfo.firstOrNull{it.index==list.firstVisibleItemIndex}?.size?.takeIf{it>0}?.toFloat()
+        }?:fallbackRowHeight
+        bottomVisible.value=controller.bottomVisibility(bottomVisible.value,delta,rowHeight,forceVisible)
     }
     override suspend fun onPreFling(available: Velocity): Velocity {controller.beginFling(available.y);return Velocity.Zero}
     override suspend fun onPostFling(consumed: Velocity,available: Velocity): Velocity {controller.endFling();return Velocity.Zero}
 }
 
 /** Stable insets are read by LazyColumn in measurement, never by the screen's composition. */
-@Composable fun InboxViewport(fraction: ()->Float,onHeaderMeasured: (Float)->Unit,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable (contentAlpha: ()->Float)->Unit,
+@Composable fun InboxViewport(fraction: ()->Float,onHeaderMeasured: (Float)->Unit,modifier: Modifier=Modifier,header: @Composable ()->Unit,bottom: @Composable ()->Unit,bottomVisible: State<Boolean>,
     list: @Composable (bottomPadding: PaddingValues)->Unit,onPanelsMeasured: (InboxPanelMetrics)->Unit={},endInset: Dp=0.dp,nearEnd: ()->Boolean={true},overlay: @Composable ()->Unit={}) {
     val density=LocalDensity.current
     val headerHeight=remember{mutableIntStateOf(0)}
     val bottomHeight=remember{mutableIntStateOf(0)}
-    val insets=remember(fraction,density,endInset,nearEnd){object: PaddingValues {
+    val insets=remember(fraction,bottomVisible,density,endInset,nearEnd){object: PaddingValues {
         override fun calculateTopPadding()=0.dp
         override fun calculateLeftPadding(layoutDirection: LayoutDirection)=0.dp
         override fun calculateRightPadding(layoutDirection: LayoutDirection)=0.dp
         override fun calculateBottomPadding(): Dp {
             // Away from the end, reserve the maximum once instead of remeasuring
             // every visible card for each pixel of panel animation.
-            val progress=if(nearEnd())fraction().coerceIn(0f,1f)else 1f
-            return with(density){((headerHeight.intValue+bottomHeight.intValue)*progress).toDp()}+endInset*(1f-progress)+12.dp
+            val atEnd=nearEnd()
+            val headerPixels=InboxInteractionRules.headerOffset(headerHeight.intValue,if(atEnd)fraction()else 1f)
+            val bottomPadding=if(!atEnd || bottomVisible.value)with(density){bottomHeight.intValue.toDp()}else endInset
+            return with(density){headerPixels.toDp()}+bottomPadding+12.dp
         }
     }}
     Layout(modifier=modifier.clipToBounds(),content={
         Box(Modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}){header()}
         Box(Modifier.background(MaterialTheme.colorScheme.surface).clipToBounds()){list(insets)}
-        Box{bottom(fraction)}
+        Box{bottom()}
         Box{overlay()}
     }){children,constraints->
         val width=constraints.maxWidth;val height=constraints.maxHeight
@@ -104,19 +120,11 @@ class InboxScrollConnection(private val controller: InboxChromeController,privat
         val floating=children[3].measure(Constraints.fixed(width,height))
         layout(width,height) {
             val progress=fraction().coerceIn(0f,1f)
-            val geometry=InboxInteractionRules.viewport(height,top.height,controls.height,progress)
             if(progress>0.001f)top.placeRelative(0,0,zIndex=0f)
-            mail.placeRelative(0,geometry.listY,zIndex=1f)
-            if(progress>0.001f)controls.placeRelative(0,geometry.bottomY,zIndex=2f)
+            mail.placeRelative(0,InboxInteractionRules.headerOffset(top.height,progress),zIndex=1f)
+            if(bottomVisible.value)controls.placeRelative(0,height-controls.height,zIndex=2f)
             floating.placeRelative(0,0,zIndex=3f)
         }
-    }
-}
-
-/** Fade the complete control, including its background, over the message list. */
-@Composable fun InboxFadingControl(fraction: ()->Float,modifier: Modifier=Modifier,shape: Shape=RectangleShape,content: @Composable ()->Unit) {
-    Box(modifier.graphicsLayer{alpha=fraction().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface,shape)) {
-        content()
     }
 }
 

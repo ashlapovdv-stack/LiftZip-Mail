@@ -6,8 +6,18 @@ class InboxChromeController(initialFraction: Float=1f) {
         private set
     private var headerHeight=0f
     private var flingActive=false
+    private var bottomTravel=0.0
     fun measureHeader(height: Float){headerHeight=height.takeIf{it.isFinite() && it>0f}?:0f}
-    fun show(){fraction=1f}
+    fun show(){fraction=1f;bottomTravel=0.0}
+    fun bottomVisibility(visible: Boolean,delta: Float,rowHeight: Float,forceVisible: Boolean=false): Boolean {
+        if(forceVisible){bottomTravel=0.0;return true}
+        if(!delta.isFinite() || !rowHeight.isFinite() || rowHeight<=0f)return visible
+        val towardsSwitch=if(visible)-delta else delta
+        bottomTravel=(bottomTravel+towardsSwitch.toDouble()/rowHeight).coerceAtLeast(0.0)
+        if(bottomTravel<2.0)return visible
+        bottomTravel=0.0
+        return !visible
+    }
     fun beginFling(velocity: Float){flingActive=velocity.isFinite() && kotlin.math.abs(velocity)>0.01f}
     fun endFling(){flingActive=false}
     fun follows(userInput: Boolean)=userInput || flingActive
@@ -32,19 +42,13 @@ object InboxInteractionRules {
     fun hideAlignment(delta: Float,fraction: Float,rowOffset: Int,rowSize: Int)=
         if(delta.isFinite() && delta<0f && fraction==1f && rowOffset>0 && rowSize>rowOffset)
             -minOf(-delta,(rowSize-rowOffset).toFloat()) else 0f
-    fun viewport(height: Int,header: Int,bottom: Int,fraction: Float): InboxViewportGeometry {
-        val progress=fraction.coerceIn(0f,1f)
-        val offset=kotlin.math.round(header*progress).toInt()
-        return InboxViewportGeometry(height,offset,height-bottom,offset+kotlin.math.round(bottom*progress).toInt())
-    }
+    fun headerOffset(header: Int,fraction: Float)=kotlin.math.round(header*fraction.coerceIn(0f,1f)).toInt()
     fun pullProgress(distance: Float,refreshing: Boolean,accepted: Boolean,gestureArmed: Boolean)=if(refreshing || accepted || !gestureArmed)0f else distance.coerceIn(0f,1f)
     fun noticeBottom(rootHeight: Int,route: String,anchor: NoticeAnchor?,safeBottom: Int,gap: Int): Int {
         val obstruction=anchor?.takeIf{it.owner==route && it.top>=0f && it.top<rootHeight}?.let{rootHeight-it.top.toInt()}?:0
         return maxOf(safeBottom,obstruction).coerceAtLeast(0)+gap
     }
 }
-
-data class InboxViewportGeometry(val listHeight: Int,val listY: Int,val bottomY: Int,val listBottomPadding: Int)
 
 /** Space available with both panels fully visible, independent of the current fade. */
 data class InboxPanelMetrics(val viewportHeight: Int,val headerHeight: Int,val bottomHeight: Int,val edgeGap: Int=0) {

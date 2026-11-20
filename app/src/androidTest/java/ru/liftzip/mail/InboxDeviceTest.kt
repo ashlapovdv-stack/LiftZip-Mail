@@ -52,18 +52,19 @@ class InboxDeviceTest {
 
     @Test fun nativeFlingMovesPanelsAndDoesNotRecomposeHeaderEveryFrame() {
         val progress=mutableFloatStateOf(1f);val controller=InboxChromeController()
+        val bottomVisible=mutableStateOf(true)
         val headerCompositions=AtomicInteger();val bottomCompositions=AtomicInteger();val listCompositions=AtomicInteger()
         val listState=LazyListState()
         rule.setContent {
             val fraction=remember{ {progress.floatValue} }
-            val connection=remember{InboxScrollConnection(controller,progress,{false},{!listState.canScrollBackward},{false},{},{})}
+            val connection=remember{InboxScrollConnection(controller,progress,bottomVisible,{false},{!listState.canScrollBackward},{false},{},{})}
             MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={
                 SideEffect{headerCompositions.incrementAndGet()}
                 Surface{Text("Inbox",Modifier.fillMaxWidth().height(240.dp))}
-            },bottom={alpha->InboxFadingControl(alpha){
+            },bottomVisible=bottomVisible,bottom={
                 SideEffect{bottomCompositions.incrementAndGet()}
                 Surface{Text("Navigation",Modifier.fillMaxWidth().height(64.dp))}
-            }},list={padding->
+            },list={padding->
                 SideEffect{listCompositions.incrementAndGet()}
                 PullToRefreshBox(isRefreshing=false,onRefresh={},indicator={}) {
                     LazyColumn(Modifier.fillMaxSize().testTag("letters").nestedScroll(connection),state=listState,contentPadding=padding) {
@@ -87,21 +88,23 @@ class InboxDeviceTest {
 
     @Test fun pausedPartialProgressStaysFixedAndInvisiblePanelsDoNotBlockLetters() {
         val progress=mutableFloatStateOf(0.5f);val controller=InboxChromeController(0.5f)
+        val bottomVisible=mutableStateOf(true)
         rule.setContent {
             val fraction=remember{ {progress.floatValue} }
-            MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={Text("Header",Modifier.height(200.dp))},bottom={alpha->InboxFadingControl(alpha){Text("Bottom",Modifier.height(64.dp))}},list={padding->
+            MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={Text("Header",Modifier.height(200.dp))},bottomVisible=bottomVisible,bottom={Text("Bottom",Modifier.height(64.dp))},list={padding->
                 LazyColumn(Modifier.fillMaxSize().testTag("letters"),contentPadding=padding){items(30){Text("Letter $it",Modifier.height(64.dp))}}
             })}
         }
         rule.mainClock.advanceTimeBy(1000);rule.runOnIdle{assertEquals(0.5f,progress.floatValue,0f)}
-        rule.runOnIdle{progress.floatValue=0f};rule.waitForIdle()
+        rule.runOnIdle{progress.floatValue=0f;bottomVisible.value=false};rule.waitForIdle()
         rule.onNodeWithText("Header").assertIsNotDisplayed()
         rule.onNodeWithText("Bottom").assertIsNotDisplayed()
         rule.onNodeWithTag("letters").assertIsDisplayed()
     }
 
-    @Test fun partiallyHiddenPanelShowsLettersThroughItsBackground() {
+    @Test fun bottomControlsAreOpaqueOrAbsentEvenWhenHeaderIsPartiallyHidden() {
         val progress=mutableFloatStateOf(0.5f)
+        val bottomVisible=mutableStateOf(true)
         var density=1f
         rule.setContent {
             density=LocalDensity.current.density
@@ -109,7 +112,7 @@ class InboxDeviceTest {
             MaterialTheme(colorScheme=lightColorScheme(surface=Color.White)) {
                 InboxViewport(fraction,{},Modifier.fillMaxSize().background(Color.White),header={
                     Box(Modifier.fillMaxWidth().height(160.dp).background(Color.Blue))
-                },bottom={alpha->InboxFadingControl(alpha){Box(Modifier.fillMaxWidth().height(80.dp).background(Color.Green))}},list={padding->
+                },bottomVisible=bottomVisible,bottom={Box(Modifier.fillMaxWidth().height(80.dp).background(Color.Green))},list={padding->
                     LazyColumn(Modifier.fillMaxSize(),contentPadding=padding) {
                         item(key="gap"){Box(Modifier.fillMaxWidth().height(100.dp))}
                         item(key="mail"){Box(Modifier.fillMaxWidth().height(2000.dp).background(Color.Red))}
@@ -122,26 +125,65 @@ class InboxDeviceTest {
         val gap=pixels[pixels.width/2,(90*density).toInt()]
         assertEquals(1f,gap.red,0.04f);assertEquals(1f,gap.green,0.04f);assertEquals(1f,gap.blue,0.04f)
         val bottom=pixels[pixels.width/2,pixels.height-(40*density).toInt()]
-        assertEquals(0.5f,bottom.red,0.04f);assertEquals(0.5f,bottom.green,0.04f);assertEquals(0f,bottom.blue,0.04f)
+        assertEquals(0f,bottom.red,0.04f);assertEquals(1f,bottom.green,0.04f);assertEquals(0f,bottom.blue,0.04f)
         saveDeviceScreenshot(rule,"partial-panels")
-        rule.runOnIdle{progress.floatValue=0f};rule.waitForIdle()
+        rule.runOnIdle{bottomVisible.value=false};rule.waitForIdle()
         val hidden=rule.onRoot().captureToImage().toPixelMap()
         val uncovered=hidden[hidden.width/2,hidden.height-(40*density).toInt()]
         assertEquals(1f,uncovered.red,0.04f);assertEquals(0f,uncovered.green,0.04f);assertEquals(0f,uncovered.blue,0.04f)
         saveDeviceScreenshot(rule,"hidden-panels")
     }
 
+    @Test fun bottomControlsWaitForActualListTravelInBothDirections() {
+        val progress=mutableFloatStateOf(0f)
+        val bottomVisible=mutableStateOf(true)
+        val controller=InboxChromeController(0f)
+        val listState=LazyListState(10)
+        var dragPixels=0f
+        rule.setContent {
+            dragPixels=with(LocalDensity.current){100.dp.toPx()}
+            val fraction=remember{{progress.floatValue}}
+            val connection=remember{
+                InboxScrollConnection(controller,progress,bottomVisible,{false},
+                    {!listState.canScrollBackward},{false},{},{},listState)
+            }
+            MaterialTheme {
+                InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={},
+                    bottom={Text("Tabs",Modifier.height(80.dp))},bottomVisible=bottomVisible,list={padding->
+                        LazyColumn(Modifier.fillMaxSize().testTag("letters").nestedScroll(connection),state=listState,contentPadding=padding) {
+                            items(100,key={it}){Text("Card $it",Modifier.fillMaxWidth().height(120.dp))}
+                        }
+                    })
+            }
+        }
+        val list=rule.onNodeWithTag("letters")
+        val tabs=rule.onNodeWithText("Tabs")
+        fun drag(direction: Int) {
+            list.performTouchInput{down(center);moveBy(Offset(0f,direction*dragPixels));advanceEventTime(500);up()}
+        }
+        repeat(2){drag(-1)}
+        tabs.assertIsDisplayed()
+        drag(-1)
+        tabs.assertIsNotDisplayed()
+        repeat(2){drag(1)}
+        tabs.assertIsNotDisplayed()
+        drag(1)
+        tabs.assertIsDisplayed()
+        rule.runOnIdle{assertTrue(listState.firstVisibleItemIndex>0)}
+    }
+
     @Test fun filteringALongListToOneMessageRestoresPanelsAndKeepsThemVisibleOnDrag() {
         val progress=mutableFloatStateOf(0.4f);val controller=InboxChromeController(0.4f)
+        val bottomVisible=mutableStateOf(false)
         val list=LazyListState();val count=mutableIntStateOf(200)
         val metrics=mutableStateOf<InboxPanelMetrics?>(null);val scrollable=mutableStateOf<Boolean?>(null)
         rule.setContent {
             val fraction=remember{ {progress.floatValue} }
             val keys=remember(count.intValue){(1..count.intValue).toSet<Any>()}
-            ObserveInboxScrollability(list,keys,count.intValue,metrics){long->scrollable.value=long;if(!long){controller.show();progress.floatValue=1f}}
-            val connection=remember{InboxScrollConnection(controller,progress,{scrollable.value==false},{!list.canScrollBackward},{false},{},{})}
+            ObserveInboxScrollability(list,keys,count.intValue,metrics){long->scrollable.value=long;if(!long){controller.show();progress.floatValue=1f;bottomVisible.value=true}}
+            val connection=remember{InboxScrollConnection(controller,progress,bottomVisible,{scrollable.value==false},{!list.canScrollBackward},{false},{},{})}
             MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),header={Text("Header",Modifier.fillMaxWidth().height(160.dp))},
-                bottom={alpha->InboxFadingControl(alpha){Text("Navigation",Modifier.fillMaxWidth().height(80.dp))}},onPanelsMeasured={metrics.value=it},list={padding->
+                bottomVisible=bottomVisible,bottom={Text("Navigation",Modifier.fillMaxWidth().height(80.dp))},onPanelsMeasured={metrics.value=it},list={padding->
                     LazyColumn(Modifier.fillMaxSize().testTag("filtered-letters").nestedScroll(connection),state=list,contentPadding=padding) {
                         items(count.intValue,key={it+1}){Text("Letter ${it+1}",Modifier.fillMaxWidth().height(100.dp))}
                     }
@@ -155,12 +197,13 @@ class InboxDeviceTest {
     }
     @Test fun reversingAHiddenListFinishesTheWholeCardBeforeRevealingPanels() {
         val progress=mutableFloatStateOf(0f);val controller=InboxChromeController(0f)
+        val bottomVisible=mutableStateOf(false)
         val list=LazyListState(10,100)
         rule.setContent {
             val fraction=remember{{progress.floatValue}}
-            val connection=remember{InboxScrollConnection(controller,progress,{false},{!list.canScrollBackward},{false},{},{},list)}
+            val connection=remember{InboxScrollConnection(controller,progress,bottomVisible,{false},{!list.canScrollBackward},{false},{},{},list)}
             MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),
-                header={Text("Header",Modifier.fillMaxWidth().height(180.dp))},bottom={alpha->InboxFadingControl(alpha){Text("Tabs",Modifier.height(80.dp))}},list={padding->
+                header={Text("Header",Modifier.fillMaxWidth().height(180.dp))},bottomVisible=bottomVisible,bottom={Text("Tabs",Modifier.height(80.dp))},list={padding->
                     LazyColumn(Modifier.fillMaxSize().testTag("boundary-list").nestedScroll(connection),state=list,contentPadding=padding) {
                         items(100,key={it}){Text("Card $it",Modifier.fillMaxWidth().height(120.dp))}
                     }
@@ -169,7 +212,7 @@ class InboxDeviceTest {
         rule.waitForIdle()
         rule.onNodeWithTag("boundary-list").performTouchInput{down(center);moveBy(Offset(0f,60f));advanceEventTime(500);up()}
         rule.waitForIdle()
-        rule.runOnIdle{assertEquals(0f,progress.floatValue,0f);assertTrue(list.firstVisibleItemScrollOffset in 1..99)}
+        rule.runOnIdle{assertEquals(0f,progress.floatValue,0f);assertFalse(bottomVisible.value);assertTrue(list.firstVisibleItemScrollOffset in 1..99)}
         rule.onNodeWithTag("boundary-list").performTouchInput{down(center);moveBy(Offset(0f,160f));advanceEventTime(500);up()}
         rule.waitForIdle()
         rule.runOnIdle{assertTrue(progress.floatValue>0f);assertEquals(10,list.firstVisibleItemIndex);assertEquals(0,list.firstVisibleItemScrollOffset)}
@@ -177,12 +220,13 @@ class InboxDeviceTest {
     }
     @Test fun hidingPanelsFirstMovesAClippedCardToTheNextBoundary() {
         val progress=mutableFloatStateOf(1f);val controller=InboxChromeController(1f)
+        val bottomVisible=mutableStateOf(true)
         val list=LazyListState(10,100)
         rule.setContent {
             val fraction=remember{{progress.floatValue}}
-            val connection=remember{InboxScrollConnection(controller,progress,{false},{!list.canScrollBackward},{false},{},{},list)}
+            val connection=remember{InboxScrollConnection(controller,progress,bottomVisible,{false},{!list.canScrollBackward},{false},{},{},list)}
             MaterialTheme {InboxViewport(fraction,controller::measureHeader,Modifier.fillMaxSize(),
-                header={Text("Header",Modifier.fillMaxWidth().height(180.dp))},bottom={alpha->InboxFadingControl(alpha){Text("Tabs",Modifier.height(80.dp))}},list={padding->
+                header={Text("Header",Modifier.fillMaxWidth().height(180.dp))},bottomVisible=bottomVisible,bottom={Text("Tabs",Modifier.height(80.dp))},list={padding->
                     LazyColumn(Modifier.fillMaxSize().testTag("hide-boundary-list").nestedScroll(connection),state=list,contentPadding=padding) {
                         items(100,key={it}){Text("Card $it",Modifier.fillMaxWidth().height(120.dp))}
                     }
@@ -192,7 +236,7 @@ class InboxDeviceTest {
         var remaining=0
         rule.runOnIdle{val info=list.layoutInfo.visibleItemsInfo.first{it.index==list.firstVisibleItemIndex};remaining=info.size-list.firstVisibleItemScrollOffset;assertTrue(remaining>100)}
         rule.onNodeWithTag("hide-boundary-list").performTouchInput{down(center);moveBy(Offset(0f,-60f));advanceEventTime(500);up()}
-        rule.waitForIdle();rule.runOnIdle{assertEquals(1f,progress.floatValue,0f);assertTrue(list.firstVisibleItemScrollOffset>100)}
+        rule.waitForIdle();rule.runOnIdle{assertEquals(1f,progress.floatValue,0f);assertTrue(bottomVisible.value);assertTrue(list.firstVisibleItemScrollOffset>100)}
         rule.onNodeWithTag("hide-boundary-list").performTouchInput{down(center);moveBy(Offset(0f,-(remaining+160).toFloat()));advanceEventTime(500);up()}
         rule.waitForIdle();rule.runOnIdle{assertTrue(progress.floatValue<1f);assertEquals(11,list.firstVisibleItemIndex);assertEquals(0,list.firstVisibleItemScrollOffset)}
         saveDeviceScreenshot(rule,"hide-row-boundary")

@@ -70,3 +70,54 @@ jobs:
             app/build/outputs/androidTest-results/
             app/build/reports/androidTests/
           retention-days: 7
+
+  isolated-history:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - pinchOnHistoryDoesNotOpenIt
+          - htmlHistoryControlRemainsVisibleWhenZoomHidesReaderChrome
+          - smallPinchBelowZoomThresholdKeepsHistoryAndGeometryStable
+          - receivedRichReplyExpandsAsHtmlAndBothPresentationsCanBeToggled
+          - longHtmlCitationSharesScrollingAndRevealsItsFinalLine
+          - replyingAgainKeepsTheHistoryButtonForAFlattenedProviderAlternative
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Enable emulator acceleration
+        run: sudo chmod 666 /dev/kvm
+      - name: Run one reader regression on a clean emulator
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -no-metrics
+          script: |
+            bash scripts/isolated-reader-test.sh "${{ matrix.test }}"
+      - name: Preserve isolated failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: isolated-${{ matrix.test }}
+          path: |
+            isolated-evidence/
+            isolated-ui/
+            isolated-log.txt
+            isolated-window.txt
+            isolated-activities.txt
+            isolated-processes.txt
+            app/build/outputs/androidTest-results/
+            app/build/reports/androidTests/
+          retention-days: 7

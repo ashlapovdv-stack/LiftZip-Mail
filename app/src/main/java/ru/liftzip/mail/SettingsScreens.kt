@@ -117,9 +117,9 @@ import java.util.Locale
     }
 }
 
-@Composable fun DiagnosticsScreen(s: UiState,onBack: ()->Unit,onPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit,onTestBackground: ()->Unit,onRestore: ()->Unit,onRetryBodies: ()->Unit) {
+@Composable internal fun DiagnosticsScreen(s: UiState,backgroundEvents: List<BackgroundEvent>,onBack: ()->Unit,onPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit,onTestBackground: ()->Unit,onRestore: ()->Unit,onRetryBodies: ()->Unit) {
     SettingsPage("Диагностика",onBack) {
-        BackgroundSettings(s,onPermission,onTestNotification,onCheck,onTestBackground,onRestore,onRetryBodies)
+        BackgroundSettings(s,backgroundEvents,onPermission,onTestNotification,onCheck,onTestBackground,onRestore,onRetryBodies)
         HorizontalDivider(Modifier.padding(vertical=8.dp))
         Text("Проверки ящиков",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)
         s.accounts.forEach{a->
@@ -134,7 +134,7 @@ import java.util.Locale
 
 @Composable fun AboutSettingsScreen(onBack: ()->Unit) {
     SettingsPage("О приложении",onBack) {
-        Text("Почта · 0.5.10",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
+        Text("Почта · ${BuildConfig.VERSION_NAME}",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
         Text("Поиск работает по загруженным письмам. Черновики и отправленные сохраняются на устройстве и синхронизируются с папками сервера. Состояние видно в «Исходящих и синхронизации».")
         Text("Вложения открываются нажатием на файл; значок загрузки сохраняет копию. PDF и изображения можно смотреть внутри приложения. Для других форматов используется установленная программа.")
         Text("Пароли защищены Android Keystore. Резервное копирование почтовых данных отключено. Внешний сервер приложения не используется.")

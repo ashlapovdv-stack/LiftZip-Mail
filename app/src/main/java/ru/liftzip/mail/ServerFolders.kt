@@ -10,6 +10,7 @@ data class ServerFolder(val accountId: String,val path: String,val name: String,
 }
 
 object FolderRules {
+    const val DISCOVERY_MAX_AGE_MS=15*60_000L
     fun role(path: String,attributes: Collection<String>): FolderRole {
         if(path.equals("INBOX",true))return FolderRole.INBOX
         val attrs=attributes.map{it.lowercase()}.toSet()

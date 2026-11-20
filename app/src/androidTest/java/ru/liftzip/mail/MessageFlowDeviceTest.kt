@@ -134,6 +134,68 @@ class MessageFlowDeviceTest {
         rule.onNodeWithTag("mail-row:scroll-20").assertIsDisplayed()
     }
 
+    @Test fun startupInboxShowsCachedRowsAndKeepsPositionWhenFullPagingStarts() {
+        val memory=InboxMemory()
+        val letters=(1..80).map{i->mail.copy(id="startup-$i",date=100L-i)}
+        var model by mutableStateOf(UiState(accounts=listOf(account),messages=letters.take(LOCAL_INBOX_PAGE_SIZE),startupInbox=true))
+        var reads=0
+        rule.setContent {
+            val state=model
+            MailTheme {
+                InboxScreen(state,null,MailFolder.INBOX,null,memory,onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},
+                    onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},
+                    onDelete={_,_->},onSearch={},onOpen={},readLocalInboxPage={_,after,limit->
+                        check(!state.startupInbox)
+                        reads++
+                        val remaining=letters.drop(if(after==null)0 else letters.indexOfFirst{it.id==after.id}+1)
+                        val items=remaining.take(limit)
+                        LocalInboxPage(items,if(remaining.size>items.size)items.last().inboxCursor()else null)
+                    })
+            }
+        }
+        rule.onNodeWithTag("mail-row:startup-1").assertIsDisplayed()
+        rule.onNodeWithTag("inbox-list").performScrollToIndex(12)
+        rule.onNodeWithTag("mail-row:startup-13").assertIsDisplayed()
+        rule.runOnIdle {
+            assertEquals(0,reads)
+            model=model.copy(loaded=true,messages=letters,startupInbox=false)
+        }
+        rule.waitUntil(10_000){reads>0}
+        rule.onNodeWithTag("mail-row:startup-13").assertIsDisplayed()
+        rule.runOnIdle{assertEquals("startup-13",memory.list.layoutInfo.visibleItemsInfo.first().key)}
+    }
+
+    @Test fun localInboxLoadsMoreNearTheEndAndKeepsTheVisibleRowOnArrival() {
+        val memory=InboxMemory()
+        val letters=(1..100).map{i->mail.copy(id="page-$i",subject="Письмо $i",date=200L-i)}
+        var model by mutableStateOf(UiState(loaded=true,accounts=listOf(account),messages=letters))
+        val requests=mutableListOf<Pair<LocalInboxCursor?,Int>>()
+        rule.setContent {
+            val state=model
+            MailTheme {
+                InboxScreen(state,"a",MailFolder.INBOX,null,memory,onAccount={},onEnable={_,_->},onFolder={},onServerFolder={},onQueue={},
+                    onAdd={},onExit={},onNoticeAnchor={},onSettings={},onDelivery={},onRefresh={},onCompose={},onStar={},onMarkRead={_,_,_->},
+                    onDelete={_,_->},onSearch={},onOpen={},readLocalInboxPage={_,cursor,limit->
+                        requests+=cursor to limit
+                        val start=if(cursor==null)0 else model.messages.indexOfFirst{it.id==cursor.id}+1
+                        val items=model.messages.drop(start).take(limit)
+                        LocalInboxPage(items,if(start+items.size<model.messages.size)items.last().inboxCursor()else null)
+                    })
+            }
+        }
+        rule.waitUntil(10_000){memory.visibleRows?.size==40}
+        rule.runOnIdle{assertEquals(listOf(null to 40),requests)}
+        rule.onNodeWithTag("inbox-list").performScrollToIndex(35)
+        rule.waitUntil(10_000){memory.visibleRows?.size==80}
+        val row=rule.onNodeWithTag("mail-row:page-36")
+        row.assertIsDisplayed()
+        val top=row.fetchSemanticsNode().boundsInRoot.top
+        rule.runOnIdle{model=model.copy(messages=listOf(mail.copy(id="page-new",date=300))+model.messages)}
+        rule.waitUntil(10_000){memory.visibleRows?.firstOrNull()?.id=="page-new"}
+        row.assertIsDisplayed()
+        assertEquals(top,row.fetchSemanticsNode().boundsInRoot.top,2f)
+    }
+
     @Test fun hiddenPanelsAndExactScreenPositionSurviveAndroidBack() {
         var route by mutableStateOf("inbox")
         val memory=InboxMemory()
@@ -148,9 +210,12 @@ class MessageFlowDeviceTest {
             }
         }
         rule.waitUntil(15000){rule.onAllNodesWithTag("mail-row:hidden-0").fetchSemanticsNodes().isNotEmpty()}
-        rule.onNodeWithTag("inbox-list").performScrollToIndex(20)
-        rule.onNodeWithTag("inbox-list").performTouchInput{swipe(center,center+Offset(0f,-600f),600)}
-        rule.waitUntil(10000){memory.controlsProgress.floatValue==0f}
+        val list=rule.onNodeWithTag("inbox-list")
+        list.performScrollToIndex(20)
+        repeat(4){
+            if(memory.bottomVisible.value)list.performTouchInput{swipeUp(durationMillis=450)}
+        }
+        rule.waitUntil(10000){memory.controlsProgress.floatValue==0f && !memory.bottomVisible.value}
         rule.waitForIdle()
         var id="";var top=0f
         rule.runOnIdle{id=memory.list.layoutInfo.visibleItemsInfo.first{it.key is String && it.offset>=0 && it.offset+it.size<=memory.list.layoutInfo.viewportEndOffset}.key as String}

@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkManager
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -18,12 +19,17 @@ data class UiState(val loaded: Boolean=false,val accounts: List<MailAccount> = e
     val opened: MailItem?=null,val searchQuery: String="",val searchIds: Set<String> = emptySet(),val searching: Boolean=false,
     val refreshing: Boolean=false,val unreadRefreshing: Boolean=false,val busy: Boolean=false,val notice: ServiceNotice?=null,
     val forwarding: Map<String,ForwardPlan> = emptyMap(),val attachmentBusy: Set<String> = emptySet(),val autoHidePanels: Boolean=true,val folders: List<ServerFolder> = emptyList(),val actions: List<MailAction> = emptyList(),val storage: StorageStatus=StorageStatus(),val fastMail: FastMailStatus=FastMailStatus(),val style: MailStyle=MailStyle.STANDARD,
-    val openingError: Pair<String,String>?=null)
+    val openingError: Pair<String,String>?=null,val startupInbox: Boolean=false) {
+    internal fun withSnapshot(snapshot: MailSnapshot)=copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
+        poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,
+        autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage,style=snapshot.style)
+}
 
 private data class UnreadScope(val enabled: Boolean=false,val accountId: String?=null)
 
 class MailViewModel(app: Application): AndroidViewModel(app) {
-    private val repo=(app as MailApplication).repository
+    private val mailApp=app as MailApplication
+    private val repo=mailApp.repository
     private val mutable=MutableStateFlow(UiState())
     private var foreground: Job?=null
     private var checking: Job?=null
@@ -34,15 +40,14 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     private val query=MutableStateFlow("")
     private val unreadScope=MutableStateFlow(UnreadScope())
     val state=mutable.asStateFlow()
+    internal val backgroundEvents=mailApp.backgroundJournal.events
     init {
         viewModelScope.launch{(getApplication<Application>() as MailApplication).fastMail.state.collect{value->mutable.update{it.copy(fastMail=value)}}}
         viewModelScope.launch{repo.forwardingProgress.collect{progress->mutable.update{it.copy(forwarding=progress)}}}
         viewModelScope.launch {
-            combine(WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.NAME),WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.TEST_NAME)){infos,tests->infos to tests}.collect{(infos,tests)->
-                val active=infos.firstOrNull{it.state==androidx.work.WorkInfo.State.RUNNING}?:infos.firstOrNull{!it.state.isFinished}
+            combine(mailApp.periodicMailState,WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(MailWorker.TEST_NAME)){periodic,tests->periodic to tests}.collect{(periodic,tests)->
                 val test=tests.firstOrNull{!it.state.isFinished}?:tests.firstOrNull()
-                val runtime=(if(active==null)BackgroundRuntime("STOPPED")else BackgroundRuntime(active.state.name,active.runAttemptCount,active.nextScheduleTimeMillis.takeIf{it<Long.MAX_VALUE}?:0,
-                    active.stopReason.takeIf{it!=androidx.work.WorkInfo.STOP_REASON_NOT_STOPPED})).copy(testState=test?.state?.name?:"STOPPED")
+                val runtime=(periodic?.runtime?:BackgroundRuntime()).copy(testState=test?.state?.name?:"STOPPED")
                 mutable.update{it.copy(backgroundRuntime=runtime)}
             }
         }
@@ -52,11 +57,20 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             }.distinctUntilChanged().collect{work->mutable.update{it.copy(historyWork=work)}}
         }
         viewModelScope.launch {
-            repo.snapshot.collect { _->(getApplication<Application>() as MailApplication).fastMail.ensure();mutable.update { val snapshot=repo.snapshot.value;it.copy(accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
-                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage,style=snapshot.style) } }
+            repo.snapshot.collect { snapshot->
+                (getApplication<Application>() as MailApplication).fastMail.ensure()
+                mutable.update { if(it.loaded)it.withSnapshot(snapshot)else it }
+            }
         }
         viewModelScope.launch {
-            combine(query,repo.snapshot){q,snapshot->q to snapshot.messages}.distinctUntilChanged().collectLatest{(text,_)->
+            repo.startupInbox.filterNotNull().collect { preview->
+                val access=MailNotifications.access(getApplication())
+                mutable.update { if(it.loaded)it else it.withSnapshot(preview).copy(startupInbox=true,notificationAccess=access) }
+            }
+        }
+        viewModelScope.launch {
+            combine(query,repo.snapshot){q,snapshot->q to snapshot.messages.takeIf{q.isNotBlank()}}
+                .distinctUntilChanged().flowOn(Dispatchers.Default).collectLatest{(text,_)->
                 mutable.update{it.copy(searchQuery=text,searchIds=if(text==it.searchQuery)it.searchIds else emptySet(),searching=text.isNotBlank())}
                 if(text.isBlank())mutable.update{it.copy(searchIds=emptySet(),searching=false)}else {
                     delay(200)
@@ -76,14 +90,14 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         }
         work {
             repo.load()
-            val snapshot=repo.snapshot.value
-            mutable.update { it.copy(loaded=true,accounts=snapshot.accounts,messages=snapshot.messages,history=snapshot.history,defaultAccountId=snapshot.defaultAccountId,
-                poll=snapshot.poll,historyDownload=snapshot.historyDownload,checks=snapshot.checks,background=snapshot.background,bodyCache=snapshot.bodyCache,
-                notificationAccess=MailNotifications.access(getApplication()),autoHidePanels=snapshot.autoHidePanels,folders=snapshot.folders,actions=snapshot.actions,storage=snapshot.storage,style=snapshot.style) }
+            val access=MailNotifications.access(getApplication())
+            mutable.update { it.withSnapshot(repo.snapshot.value).copy(loaded=true,startupInbox=false,notificationAccess=access) }
             repo.notificationEnvironmentChanged()
-            if(repo.snapshot.value.accounts.any{it.enabled})MailWorker.schedule(getApplication())else MailWorker.cancel(getApplication())
         }
     }
+    internal suspend fun localInboxPage(accountId: String?,after: LocalInboxCursor?,limit: Int)=
+        repo.localInboxPage(accountId,after,limit)
+
     fun search(text: String){query.value=text}
     fun canOpen(id: String): Boolean {
         val snapshot=repo.snapshot.value
@@ -148,7 +162,7 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
     }
     fun testBackground(){MailWorker.test(getApplication());notice("Проверка запланирована. Сверните приложение; результат появится здесь после запуска задания Android.")}
     fun restoreBackground(){
-        MailWorker.schedule(getApplication());notificationEnvironmentChanged()
+        MailWorker.schedule(getApplication(),"восстановление вручную");notificationEnvironmentChanged()
         notice("Расписание фоновой проверки восстановлено")
     }
     fun retryBodies(){viewModelScope.launch{try{repo.retryBodyWarmup()}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}}}
@@ -159,7 +173,10 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         mutable.update{it.copy(busy=true)}
         viewModelScope.launch {
             try{action()}catch(e: CancellationException){throw e}catch(e: Exception){notice(friendlyError(e),error=true)}
-            finally{mutable.update{it.copy(busy=false,loaded=true)}}
+            finally{mutable.update{
+                if(it.loaded)it.copy(busy=false)
+                else it.withSnapshot(repo.snapshot.value).copy(busy=false,loaded=true,startupInbox=false)
+            }}
         }
     }
     fun addAccount(a: MailAccount,password: String,onDone: ()->Unit) = work {
@@ -201,11 +218,9 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
         folderTarget=target
         folderOpening=viewModelScope.launch {
             try {
-                repo.discoverFolders(accountId)
                 val role=when(folder){MailFolder.SENT->FolderRole.SENT;MailFolder.DRAFTS->FolderRole.DRAFTS;else->null}
-                val targets=repo.snapshot.value.folders.filter{(accountId==null || it.accountId==accountId) && if(path!=null)it.path==path else it.role==role}
-                for(f in targets)repo.syncFolder(f.accountId,f.path)
-                if(manual)notice(if(targets.any{f->repo.snapshot.value.folders.any{it.accountId==f.accountId && it.path==f.path && it.error.isNotBlank()}})"Некоторые папки не обновились. Подробности указаны в папке." else "Папка обновлена")
+                val errors=repo.syncVisibleFolders(accountId,path,role)
+                if(manual)notice(if(errors.isEmpty())"Папка обновлена" else errors.joinToString("\n"),error=errors.isNotEmpty())
             }catch(e: CancellationException){throw e}catch(e: Exception){if(manual)notice(friendlyError(e),error=true)}
         }
     }

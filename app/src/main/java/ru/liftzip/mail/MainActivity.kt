@@ -25,7 +25,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
@@ -107,6 +106,14 @@ class MainActivity: ComponentActivity() {
         intent.data=null
         intent.removeExtra(MailNotifications.MESSAGE_EXTRA)
         intent.removeExtra("mail-open-inbox")
+    }
+    override fun onStart() {
+        (application as MailApplication).logMailVisibility(true)
+        super.onStart()
+    }
+    override fun onStop() {
+        (application as MailApplication).logMailVisibility(false)
+        super.onStop()
     }
     override fun onNewIntent(intent: Intent){super.onNewIntent(intent);setIntent(intent);handleNotification(intent)}
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -224,10 +231,10 @@ private val Paper=Color(0xFFF8F9F6)
         }
     }
     LaunchedEffect(s.notice?.id){s.notice?.let { snack.showSnackbar(NoticeVisuals(it));vm.dismissNotice(it.id) }}
-    LaunchedEffect(route,selected){if(route=="reader")selected?.let(vm::openMessage)}
-    LaunchedEffect(route,folder,currentAccount,serverPath){
+    LaunchedEffect(route,selected,s.loaded){if(s.loaded && route=="reader")selected?.let(vm::openMessage)}
+    LaunchedEffect(route,folder,currentAccount,serverPath,s.loaded){
         vm.showUnread(route=="inbox" && serverPath==null && folder==MailFolder.UNREAD,currentAccount)
-        if(route=="inbox")vm.showFolders(folder,currentAccount,serverPath)
+        if(s.loaded && route=="inbox")vm.showFolders(folder,currentAccount,serverPath)
     }
     RouteBackHandler(route,onPreview={preview=null;route="reader"},onMessage={goInbox()},onCompose={
         val d=draft?.let(editorSession::snapshot)
@@ -235,13 +242,14 @@ private val Paper=Color(0xFFF8F9F6)
             editorSession.flush(d){latest->vm.saveDraft(latest){if(route=="compose" && draft?.id==d.id){draft=null;goInbox()}}}
         else {draft=null;goInbox()}
     },onHome={systemInbox()})
-    if(route!="inbox" || !s.loaded || s.accounts.isEmpty())SystemBarIcons(forceLightSurface=route=="compose")
+    val openingCachedInbox=s.startupInbox && route=="inbox" && folder==MailFolder.INBOX && currentAccount==null && serverPath==null
+    if(route!="inbox" || (!s.loaded && !openingCachedInbox) || s.accounts.isEmpty())SystemBarIcons(forceLightSurface=route=="compose")
     Scaffold(modifier=Modifier.onSizeChanged{rootHeight=it.height},snackbarHost={
         SnackbarHost(snack,Modifier.fillMaxWidth().padding(start=16.dp,end=16.dp,bottom=noticeBottom)){ServiceSnackbar(it)}
     },contentWindowInsets=WindowInsets(0,0,0,0)) { outer->
         Box(Modifier.fillMaxSize().padding(outer)) {
             when {
-                !s.loaded -> Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){CircularProgressIndicator()}
+                !s.loaded && !openingCachedInbox -> Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){CircularProgressIndicator()}
                 route=="add" -> AddAccount(s.busy,onBack={goInbox()},onAdd={a,p->vm.addAccount(a,p){
                     if(route=="add"){currentAccount=a.id;goInbox()}
                     if(Build.VERSION.SDK_INT>=33)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -308,7 +316,8 @@ private val Paper=Color(0xFFF8F9F6)
                         HorizontalDivider()
                     }
                     Box(Modifier.weight(1f)) {
-                        DiagnosticsScreen(s,onBack={route="settings"},onPermission={
+                        val backgroundEvents by vm.backgroundEvents.collectAsStateWithLifecycle()
+                        DiagnosticsScreen(s,backgroundEvents,onBack={route="settings"},onPermission={
                             if(Build.VERSION.SDK_INT>=33 && !s.notificationAccess.permission)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                             else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName))
                         },onTestNotification=vm::testNotification,onCheck=vm::refresh,onTestBackground=vm::testBackground,onRestore=vm::restoreBackground,onRetryBodies=vm::retryBodies)
@@ -349,10 +358,10 @@ private val Paper=Color(0xFFF8F9F6)
                 else -> {
                     val memoryKey="${currentAccount?:"all"}:${folder.name}:${serverPath.orEmpty()}"
                     val memory=inboxMemory.getOrPut(memoryKey){InboxMemory()}
-                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,serverPath,memory,drawerState=inboxDrawer,onAccount={currentAccount=it;serverPath=null},onEnable=vm::setAccountEnabled,onFolder={folder=it;serverPath=null},
+                    savedScreens.SaveableStateProvider(memoryKey){InboxScreen(s,currentAccount,folder,serverPath,memory,drawerState=inboxDrawer,readLocalInboxPage=vm::localInboxPage,onAccount={currentAccount=it;serverPath=null},onEnable=vm::setAccountEnabled,onFolder={folder=it;serverPath=null},
                     onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path},onQueue={route="actions"},onAdd={route="add"},onExit={(context as? ComponentActivity)?.finish()},
                     onNoticeAnchor={anchor("inbox",it)},onSettings={route="settings"},onDelivery={route="delivery"},onRefresh={if(serverPath!=null || folder in setOf(MailFolder.SENT,MailFolder.DRAFTS))vm.refreshFolders(folder,currentAccount,serverPath)else vm.refresh()},onCompose={compose()},onStar=vm::star,onMarkRead=vm::markRead,onDelete=vm::deleteMessages,onSpam=vm::spamMessages,onSearch=vm::search,onOpen={m->
-                        if(!vm.canOpen(m.id))return@InboxScreen
+                        if(s.loaded && !vm.canOpen(m.id))return@InboxScreen
                         selected=m.id
                         if(FolderRules.draft(m))vm.openDraft(m.id){full->if(route=="inbox" && selected==m.id)compose(full)}
                         else route="reader"
@@ -438,7 +447,7 @@ private val Paper=Color(0xFFF8F9F6)
                     Text(unread.toString(),Modifier.padding(horizontal=8.dp,vertical=4.dp),fontWeight=if(unread>0)FontWeight.Bold else FontWeight.Normal,
                         style=MaterialTheme.typography.labelMedium,color=color.foreground)
                 }
-                Switch(checked=a.enabled,onCheckedChange={onEnable(a.id,it)},modifier=Modifier.semantics{contentDescription="Синхронизация ящика ${a.name}"})
+                Switch(checked=a.enabled,onCheckedChange={onEnable(a.id,it)},enabled=!s.startupInbox,modifier=Modifier.semantics{contentDescription="Синхронизация ящика ${a.name}"})
             }}
             item { HorizontalDivider(Modifier.padding(horizontal=24.dp,vertical=12.dp)) }
             if(current!=null) {
@@ -455,7 +464,7 @@ private val Paper=Color(0xFFF8F9F6)
             TextButton(onClick={scope.launch{drawer.close();onAdd()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Add,null);Spacer(Modifier.width(12.dp));Text("Добавить ящик")}
 
             TextButton(onClick={scope.launch{drawer.close();onSettings()}},modifier=Modifier.padding(12.dp)){Icon(Icons.Outlined.Settings,null);Spacer(Modifier.width(12.dp));Text("Настройки")}
-            Text("Почта · 0.5.19",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Почта · ${BuildConfig.VERSION_NAME}",Modifier.padding(24.dp),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             }
         }
@@ -465,7 +474,8 @@ private val Paper=Color(0xFFF8F9F6)
     onServerFolder: (ServerFolder)->Unit,onQueue: ()->Unit,
     onAdd: ()->Unit,onExit: ()->Unit,onNoticeAnchor: (Float?)->Unit,onSettings: ()->Unit,onDelivery: ()->Unit,onRefresh: ()->Unit,onCompose: ()->Unit,onStar: (MailItem)->Unit,
     onMarkRead: (Set<String>,Boolean,(Set<String>)->Unit)->Unit,onDelete: (Set<String>,(Set<String>)->Unit)->Unit,onSearch: (String)->Unit,onOpen: (MailItem)->Unit,
-    onSpam: (Set<String>,Boolean,(Set<String>)->Unit)->Unit={_,_,_->},drawerState: DrawerState?=null) {
+    onSpam: (Set<String>,Boolean,(Set<String>)->Unit)->Unit={_,_,_->},drawerState: DrawerState?=null,
+    readLocalInboxPage: (suspend (String?,LocalInboxCursor?,Int)->LocalInboxPage)?=null) {
     val style=LocalMailStyle.current
     val navigationAccent=if(isSystemInDarkTheme())MaterialTheme.colorScheme.primary else style.navAccent
     val localDrawer=rememberDrawerState(DrawerValue.Closed)
@@ -476,7 +486,8 @@ private val Paper=Color(0xFFF8F9F6)
     var exitRequested by rememberSaveable { mutableStateOf(false) }
     var deleting by remember{mutableStateOf<Set<String>?>(null)}
     var selectionMenu by remember{mutableStateOf(false)}
-    val controlsProgress=remember(memory){memory.controlsProgress}
+    val controlsProgress=memory.controlsProgress
+    val bottomVisible=memory.bottomVisible
     val focus=LocalFocusManager.current
     val keyboard=LocalSoftwareKeyboardController.current
     val density=LocalDensity.current
@@ -494,46 +505,114 @@ private val Paper=Color(0xFFF8F9F6)
     val latestRefreshing by rememberUpdatedState(refreshing)
     ObservePullRefresh(pullState,refreshing,onRefreshing={pullGestureArmed=false},onRest={pullAccepted=false;pullGestureArmed=false})
     val chrome=remember(memory){InboxChromeController(controlsProgress.floatValue)}
+    fun showPanels(){
+        chrome.show()
+        controlsProgress.floatValue=1f
+        bottomVisible.value=true
+    }
 
-    LaunchedEffect(query){onSearch(query)}
-    val visibleState=remember(accountId,folder,serverPath,query){mutableStateOf<List<MailItem>?>(if(query.isBlank())memory.visibleRows else null)}
+    LaunchedEffect(query,s.startupInbox){if(!s.startupInbox)onSearch(query)}
+    var usingStartupRows by remember{mutableStateOf(s.startupInbox)}
+    val visibleState=remember(accountId,folder,serverPath,query){
+        mutableStateOf(if(s.startupInbox)InboxRows(s.messages) else if(query.isBlank())memory.rows else null)
+    }
     var pinFirstId by remember(accountId,folder,serverPath,query){mutableStateOf<String?>(null)}
-    LaunchedEffect(s.messages,s.accounts,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
+    val usesLocalPages=readLocalInboxPage!=null && folder==MailFolder.INBOX && serverPath==null && query.isBlank()
+    LaunchedEffect(s.startupInbox,s.messages,s.accounts,s.actions,accountId,folder,query,s.searchIds,s.searchQuery,serverPath) {
+        fun publish(updated: InboxRows) {
+            val atTop=!memory.list.isScrollInProgress && memory.list.firstVisibleItemIndex==0 && memory.list.firstVisibleItemScrollOffset==0
+            val first=updated.ids.firstOrNull()
+            val pinNewFirst=atTop && memory.restore==null && first!=null && visibleState.value?.ids?.firstOrNull()!=first
+            visibleState.value=updated
+            usingStartupRows=false
+            pinFirstId=first.takeIf{pinNewFirst}
+            if(query.isBlank())memory.rows=updated
+        }
+        if(s.startupInbox) {
+            usingStartupRows=true
+            visibleState.value=InboxRows(s.messages)
+            return@LaunchedEffect
+        }
+        if(readLocalInboxPage!=null && usesLocalPages) {
+            try {
+                // Retain the loaded window on refresh or when returning to a lower row.
+                val limit=maxOf(LOCAL_INBOX_PAGE_SIZE,memory.rows?.items?.size?:0,
+                    (memory.restore?.index?:0)+LOCAL_INBOX_PAGE_SIZE)
+                val anchor=memory.restore?.takeUnless{it.atTop}?.id ?: memory.list.let{list->
+                    if(list.firstVisibleItemIndex!=0 || list.firstVisibleItemScrollOffset!=0)
+                        visibleState.value?.ids?.getOrNull(list.firstVisibleItemIndex) else null
+                }
+                var page=readLocalInboxPage(accountId,null,limit)
+                val window=page.items.toMutableList()
+                if(anchor!=null && s.messages.any{it.id==anchor && !it.pendingDelete && it.localFolder=="inbox"}) {
+                    while(window.none{it.id==anchor}) {
+                        val cursor=page.next?:break
+                        page=readLocalInboxPage(accountId,cursor,LOCAL_INBOX_PAGE_SIZE)
+                        window+=page.items
+                    }
+                }
+                publish(InboxRows(window))
+                if(page.next!=null)snapshotFlow {
+                    val count=visibleState.value?.items?.size?:0
+                    val last=memory.list.layoutInfo.visibleItemsInfo.lastOrNull()?.index?:-1
+                    count.takeIf{it>0 && last>=it-8}
+                }.collect { nearEnd->
+                    val cursor=page.next
+                    if(nearEnd!=null && cursor!=null) {
+                        page=readLocalInboxPage(accountId,cursor,LOCAL_INBOX_PAGE_SIZE)
+                        val existing=visibleState.value?.items.orEmpty()
+                        val priorIds=visibleState.value?.byId.orEmpty()
+                        publish(InboxRows(existing+page.items.filterNot{it.id in priorIds}))
+                    }
+                }
+                return@LaunchedEffect
+            }catch(e: CancellationException){throw e}
+            catch(_: android.database.SQLException){
+                // The current session already has a complete snapshot for synchronization.
+                // Keep the list accessible if the paged query fails.
+            }
+        }
         val updated=withContext(kotlinx.coroutines.Dispatchers.Default) {
             val active=SyncRules.activeMessages(s.messages,s.accounts,accountId)
             val source=if(query.isBlank())active else active.filter{s.searchQuery==query && it.id in s.searchIds}
-            if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
+            val items=if(serverPath==null)MailRules.filter(source,accountId,folder,"")else FolderRules.deduplicate(FolderRules.display(source).filter{it.remoteFolder==serverPath && (accountId==null || it.accountId==accountId)},preferDraft=true)
+            InboxRows(items)
         }
-        val atTop=!memory.list.isScrollInProgress && memory.list.firstVisibleItemIndex==0 && memory.list.firstVisibleItemScrollOffset==0
-        val pinNewFirst=atTop && memory.restore==null && visibleState.value?.firstOrNull()?.id!=updated.firstOrNull()?.id && updated.isNotEmpty()
-        visibleState.value=updated
-        pinFirstId=if(pinNewFirst)updated.firstOrNull()?.id else null
-        if(query.isBlank())memory.visibleRows=visibleState.value
+        publish(updated)
     }
-    val visible=visibleState.value.orEmpty()
-    val visibleIds=remember(visible){visible.map{it.id}}
-    val visibleUnread=remember(visible){visible.count{it.unread}}
-    val selected=checked.toSet().intersect(visibleIds.toSet())
+    val rows=visibleState.value
+    val visible=rows?.items.orEmpty()
+    val visibleIds=rows?.ids.orEmpty()
+    val visibleUnread=rows?.unread?:0
+    val visibleById=rows?.byId.orEmpty()
+    // Bulk selection includes all saved inbox messages, even past the loaded UI pages.
+    val hasSelectionOutsidePage=usesLocalPages && checked.any{it !in visibleById}
+    val selectionById=remember(rows,s.messages.takeIf{hasSelectionOutsidePage},s.accounts,accountId){
+        if(hasSelectionOutsidePage)SyncRules.activeMessages(s.messages,s.accounts,accountId)
+            .filter{it.localFolder=="inbox"}.associateBy{it.id}
+        else visibleById
+    }
+    val selected=remember(checked,selectionById){checked.filterTo(mutableSetOf()){it in selectionById}}
     val selectionMode=selected.isNotEmpty()
     val chromeFraction=remember(controlsProgress){ {controlsProgress.floatValue} }
     val panelMetrics=remember(memory){mutableStateOf<InboxPanelMetrics?>(null)}
     val nearEnd=remember(memory){derivedStateOf{val info=memory.list.layoutInfo;info.totalItemsCount==0 || (info.visibleItemsInfo.lastOrNull()?.index?:0)>=info.totalItemsCount-3}}
     val nearEndValue=remember(nearEnd){{nearEnd.value}}
     var scrollableContent by remember(memory){mutableStateOf<Boolean?>(null)}
-    val historyFooter=folder==MailFolder.INBOX && serverPath==null
+    val historyFooter=folder==MailFolder.INBOX && serverPath==null && !s.startupInbox
     val itemKeys=remember(visibleIds,historyFooter){buildSet<Any>{if(visibleIds.isEmpty())add("empty")else addAll(visibleIds);if(historyFooter)add("history-footer")}}
     if(visibleState.value!=null)ObserveInboxScrollability(memory.list,itemKeys,visibleIds to LocalDensity.current.fontScale,panelMetrics){scrollable->
         scrollableContent=scrollable
-        if(!scrollable){chrome.show();controlsProgress.floatValue=1f}
+        if(!scrollable)showPanels()
     }
     val forceControls by rememberUpdatedState(!s.autoHidePanels || scrollableContent==false)
     LaunchedEffect(selectionMode){if(!selectionMode)selectionMenu=false}
-    LaunchedEffect(selectionMode){snapshotFlow{if(controlsProgress.floatValue>0.02f)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
-    val scrollControls=remember(memory,chrome,focus,keyboard){InboxScrollConnection(chrome,controlsProgress,
+    LaunchedEffect(selectionMode){snapshotFlow{if(bottomVisible.value)listOfNotNull(navigationTop,fabTop.takeUnless{selectionMode}).minOrNull()else null}.distinctUntilChanged().collect{anchorCallback(it)}}
+    val scrollControls=remember(memory,chrome,focus,keyboard,density){InboxScrollConnection(chrome,controlsProgress,bottomVisible,
         forced={forceControls},canPull={!memory.list.canScrollBackward},refreshing={latestRefreshing},
-        onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true},listState=memory.list)}
+        onHide={focus.clearFocus();keyboard?.hide()},onPull={pullGestureArmed=true},listState=memory.list,fallbackRowHeight=with(density){96.dp.toPx()})}
     // Selecting rows must not reveal hidden panels and move the list underneath the finger.
-    LaunchedEffect(drawer.currentValue,s.autoHidePanels){if(!s.autoHidePanels || drawer.currentValue==DrawerValue.Open){chrome.show();controlsProgress.floatValue=1f}}
+    LaunchedEffect(drawer.currentValue,s.autoHidePanels){if(!s.autoHidePanels || drawer.currentValue==DrawerValue.Open)showPanels()}
 
     val current=s.accounts.find{it.id==accountId}
     val selectedAccounts=remember(s.accounts,accountId){s.accounts.filter{if(accountId==null)it.enabled else it.id==accountId}}
@@ -544,7 +623,7 @@ private val Paper=Color(0xFFF8F9F6)
     fun toggle(id: String){checked=ArrayList(if(id in selected)selected-id else selected+id)}
     fun mark(unread: Boolean){onMarkRead(selected,unread){updated->checked=ArrayList(checked.filter{it !in updated})}}
     fun spam(toInbox: Boolean){onSpam(selected,toInbox){updated->checked=ArrayList(checked.filter{it !in updated})}}
-    val selectedRows=visible.filter{it.id in selected}
+    val selectedRows=remember(selectionById,selected){selected.mapNotNull(selectionById::get)}
     val canSpam=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,false)}
     val canRestore=selectedRows.isNotEmpty() && selectedRows.all{SpamRules.eligible(it,true)}
     val selectionActions: @Composable ()->Unit = {
@@ -554,7 +633,12 @@ private val Paper=Color(0xFFF8F9F6)
                     Box {
                         IconButton(onClick={selectionMenu=true},enabled=!s.busy){Icon(Icons.Outlined.MoreVert,"Действия с выбранными письмами")}
                         DropdownMenu(expanded=selectionMenu,onDismissRequest={selectionMenu=false}) {
-                            DropdownMenuItem(text={Text("Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={selectionMenu=false;checked=ArrayList(visibleIds)})
+                            DropdownMenuItem(text={Text("Выбрать все загруженные")},leadingIcon={Icon(Icons.Outlined.SelectAll,null)},onClick={
+                                selectionMenu=false
+                                val ids=if(usesLocalPages)SyncRules.activeMessages(s.messages,s.accounts,accountId)
+                                    .filter{it.localFolder=="inbox"}.map{it.id} else visibleIds
+                                checked=ArrayList(ids)
+                            })
                             DropdownMenuItem(text={Text("Отметить прочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailRead,null)},onClick={selectionMenu=false;mark(false)})
                             DropdownMenuItem(text={Text("Отметить непрочитанными")},leadingIcon={Icon(Icons.Outlined.MarkEmailUnread,null)},onClick={selectionMenu=false;mark(true)})
                             if(canSpam)DropdownMenuItem(text={Text("В спам")},leadingIcon={Icon(Icons.Outlined.Report,null)},onClick={selectionMenu=false;spam(false)})
@@ -571,9 +655,9 @@ private val Paper=Color(0xFFF8F9F6)
             if(rows.any(TrashRules::local))Text("Черновики будут удалены; удаление серверной копии выполнится при подключении к сети.")
         }},confirmButton={TextButton(onClick={deleting=null;onDelete(ids){removed->checked=ArrayList(checked.filter{it !in removed})}},enabled=rows.isNotEmpty() && !s.busy){Text("Удалить")}},dismissButton={TextButton(onClick={deleting=null}){Text("Отмена")}})
     }
-    LaunchedEffect(visibleIds){checked=ArrayList(checked.filter{it in visibleIds})}
-    LaunchedEffect(memory,visibleIds.firstOrNull()) {
-        if(visibleIds.isNotEmpty()) {
+    LaunchedEffect(selectionById){checked=ArrayList(checked.filter{it in selectionById})}
+    LaunchedEffect(memory,visibleIds.firstOrNull(),usingStartupRows) {
+        if(!usingStartupRows && visibleIds.isNotEmpty()) {
             val restore=memory.restore
             if(restore!=null){memory.list.scrollToItem(restore.indexIn(visibleIds),if(restore.atTop)0 else restore.offset);memory.pinned=restore.atTop;memory.restore=null}
             else if(pinFirstId==visibleIds.firstOrNull() && !memory.list.isScrollInProgress)memory.list.requestScrollToItem(0)
@@ -606,7 +690,7 @@ private val Paper=Color(0xFFF8F9F6)
         if(exitRequested)AlertDialog(onDismissRequest=onExit,properties=DialogProperties(dismissOnClickOutside=false),
             title={Text("Выйти из Почты?")},text={Text("Нажмите «Выйти» или кнопку Android «Назад» ещё раз. Фоновая проверка почты продолжится по настройкам.")},
             confirmButton={TextButton(onClick=onExit){Text("Выйти")}},dismissButton={TextButton(onClick={exitRequested=false}){Text("Остаться")}})
-        InboxViewport(fraction=chromeFraction,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},endInset=safeBottom,nearEnd=nearEndValue,
+        InboxViewport(fraction=chromeFraction,bottomVisible=bottomVisible,onHeaderMeasured=chrome::measureHeader,onPanelsMeasured={panelMetrics.value=it},endInset=safeBottom,nearEnd=nearEndValue,
             modifier=Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),header={
             Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)).testTag("inbox-header")) {
                 if(selectionMode)TopAppBar(modifier=if(style==MailStyle.STANDARD)Modifier else Modifier.height(DecorativeHeaderHeight),
@@ -619,7 +703,7 @@ private val Paper=Color(0xFFF8F9F6)
                     if(s.busy || refreshing || s.searching && query.isNotBlank())LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp).semantics{contentDescription="Обновление почты"})
                 }
                 if(!s.notificationAccess.canPost)TextButton(onClick=onDelivery,modifier=Modifier.fillMaxWidth()){Icon(Icons.Outlined.NotificationsOff,null);Spacer(Modifier.width(8.dp));Text("Уведомления выключены · настроить")}
-                OutlinedTextField(value=query,onValueChange={query=it},placeholder={Text("Поиск писем")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton(onClick={query=""}){Icon(Icons.Outlined.Close,"Очистить поиск")}},
+                OutlinedTextField(value=query,onValueChange={query=it},enabled=!s.startupInbox,placeholder={Text("Поиск писем")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton(onClick={query=""}){Icon(Icons.Outlined.Close,"Очистить поиск")}},
                     singleLine=true,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)18.dp else 32.dp),
                     colors=if(style==MailStyle.STANDARD)OutlinedTextFieldDefaults.colors()else OutlinedTextFieldDefaults.colors(
                         focusedContainerColor=MaterialTheme.colorScheme.surfaceContainer,unfocusedContainerColor=MaterialTheme.colorScheme.surfaceContainer,
@@ -633,20 +717,19 @@ private val Paper=Color(0xFFF8F9F6)
                 }
                 }
             }
-        },bottom={alpha->
-            val fade=alpha
+        },bottom={
             val composeButtonSize=56.dp
             Column(Modifier.fillMaxWidth().testTag("inbox-bottom")) {
                 // Keep the action slot when selection hides its button; reducing the
                 // list's end padding would move rows at the bottom of the mailbox.
                 Box(Modifier.fillMaxWidth().padding(end=16.dp,bottom=16.dp).height(composeButtonSize),contentAlignment=Alignment.CenterEnd) {
-                    if(!selectionMode)InboxFadingControl(alpha,shape=RoundedCornerShape(if(style==MailStyle.STANDARD)16.dp else 32.dp)) {
+                    if(!selectionMode) {
                         FloatingActionButton(onClick=onCompose,shape=CircleShape,
                             containerColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.primaryContainer else style.accent,
                             contentColor=if(style==MailStyle.STANDARD)MaterialTheme.colorScheme.onPrimaryContainer else Color.White,modifier=Modifier.size(composeButtonSize).semantics{contentDescription="Написать письмо"}.onGloballyPositioned{fabTop=it.boundsInRoot().top}) {Icon(Icons.Outlined.Edit,null)}
                     }
                 }
-                Column(Modifier.fillMaxWidth().graphicsLayer{this.alpha=fade().coerceIn(0f,1f)}.background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
                 Box(if(style==MailStyle.STANDARD)Modifier else Modifier.padding(horizontal=8.dp)) {
                     NavigationBar(windowInsets=WindowInsets(0,0,0,0),containerColor=MaterialTheme.colorScheme.surfaceContainer,
                         modifier=Modifier.height(64.dp).then(if(style==MailStyle.STANDARD)Modifier else Modifier.clip(RoundedCornerShape(26.dp))).onGloballyPositioned{navigationTop=it.boundsInRoot().top}) {
@@ -670,14 +753,14 @@ private val Paper=Color(0xFFF8F9F6)
             Box(Modifier.fillMaxSize().padding(end=16.dp,bottom=safeBottom+148.dp),contentAlignment=Alignment.BottomEnd) {
                 AnimatedVisibility(visible=showTop && !selectionMode,enter=fadeIn(animationSpec=tween(180)),exit=fadeOut(animationSpec=tween(180))) {
                     SmallFloatingActionButton(onClick={scope.launch {
-                        chrome.show();controlsProgress.floatValue=1f
+                        showPanels()
                         if(memory.list.firstVisibleItemIndex>8)memory.list.scrollToItem(8)
                         memory.list.animateScrollToItem(0)
                     }},shape=CircleShape,modifier=Modifier.size(48.dp).semantics{contentDescription="Вернуться к началу списка"}) {Icon(Icons.Outlined.ArrowUpward,null)}
                 }
             }
         },list={bottomPadding->
-                PullToRefreshBox(isRefreshing=refreshing,state=pullState,onRefresh={if(!refreshing){pullAccepted=true;pullGestureArmed=false;onRefresh()}},
+                PullToRefreshBox(isRefreshing=refreshing,state=pullState,onRefresh={if(!s.startupInbox && !refreshing){pullAccepted=true;pullGestureArmed=false;onRefresh()}},
                     indicator={PullRefreshHint(pullState.distanceFraction,refreshing,pullAccepted,pullGestureArmed,Modifier.align(Alignment.TopCenter))},modifier=Modifier.fillMaxSize()) {
                     LazyColumn(Modifier.fillMaxSize().testTag("inbox-list").nestedScroll(scrollControls),state=memory.list,contentPadding=bottomPadding) {
                         if(visible.isEmpty())item(key="empty") {Box(Modifier.fillMaxWidth().padding(vertical=30.dp),contentAlignment=Alignment.Center) {
@@ -689,7 +772,7 @@ private val Paper=Color(0xFFF8F9F6)
                             }
                         }}
                         items(visible,key={it.id}){m->MailRow(m,s.accounts.find{it.id==m.accountId},onOpen={if(selectionMode)toggle(m.id)else {memory.rememberPosition();onOpen(m)}},
-                            onSelect={toggle(m.id)},selectionMode=selectionMode,checked=m.id in selected,onStar={onStar(m)},busy=s.busy)}
+                            onSelect=({toggle(m.id)}).takeUnless{s.startupInbox},selectionMode=selectionMode,checked=m.id in selected,onStar={onStar(m)},busy=s.busy || s.startupInbox)}
                         if(historyFooter)item(key="history-footer") {
                             Column(Modifier.fillMaxWidth().padding(horizontal=22.dp,vertical=20.dp),horizontalAlignment=Alignment.CenterHorizontally) {
                                 Text(if(total==null)"Загружено $loaded писем" else "Загружено $loaded из $total",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -714,7 +797,7 @@ private fun folderIcon(folder: MailFolder)=when(folder){MailFolder.INBOX->Icons.
 }
 private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis()-time<24*3600000L)"HH:mm" else "d MMM",Locale("ru")).format(Date(time))
 
-@Composable private fun MailRow(m: MailItem,account: MailAccount?,onOpen: ()->Unit,onSelect: ()->Unit,selectionMode: Boolean,checked: Boolean,onStar: ()->Unit,busy: Boolean) {
+@Composable private fun MailRow(m: MailItem,account: MailAccount?,onOpen: ()->Unit,onSelect: (() -> Unit)?,selectionMode: Boolean,checked: Boolean,onStar: ()->Unit,busy: Boolean) {
     val style=LocalMailStyle.current
     val card=style!=MailStyle.STANDARD
     val background=when{card && !checked->MaterialTheme.colorScheme.surfaceContainer;checked->MaterialTheme.colorScheme.primaryContainer;m.unread->MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.28f);else->MaterialTheme.colorScheme.surface}
@@ -729,7 +812,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
         .semantics{stateDescription=if(m.unread)"Не прочитано" else "Прочитано";selected=checked}) {
         Row(Modifier.weight(1f).padding(start=14.dp,top=7.dp,bottom=7.dp,end=8.dp),verticalAlignment=Alignment.CenterVertically) {
             Box(Modifier.size(38.dp),contentAlignment=Alignment.Center) {
-                if(selectionMode)Checkbox(checked=checked,onCheckedChange={onSelect()},modifier=Modifier.fillMaxSize())else {
+                if(selectionMode)Checkbox(checked=checked,onCheckedChange={onSelect?.invoke()},modifier=Modifier.fillMaxSize())else {
                     val color=remember(m.sender){listOf(Color(0xFFE6EAD8),Color(0xFFE8E2D7),Color(0xFFDCE7E9),Color(0xFFEBDDDD))[(m.sender.hashCode() and Int.MAX_VALUE)%4]}
                     Surface(shape=CircleShape,color=color,modifier=Modifier.fillMaxSize()){Box(contentAlignment=Alignment.Center){Text(m.sender.take(1).uppercase(),fontWeight=FontWeight.Medium,color=Color(0xFF475042),fontSize=18.sp)}}
                 }
@@ -950,7 +1033,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 MailHtmlBody(readingSource,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},readingHistory,onInline,readerLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->
                     // One zoom progress drives every chrome overlay, never the native viewport.
                     scroll.zoomProgress=progress
-                    val zoomed=progress>0.001f
+                    val zoomed=kotlin.math.abs(scroll.nativeScaleRatio-1f)>0.03f
                     htmlZoomed=zoomed
                 },onPinchChanged=updatePinch,rendererFailed=rendererFailed,originalScale=originalHtmlScale,onContentReady={contentPresented=true},externalImageState=externalImageState,onImageAvailability={hasExternalImages=it},showImageControl=false)
             }

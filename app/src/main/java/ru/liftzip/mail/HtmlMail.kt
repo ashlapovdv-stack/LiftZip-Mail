@@ -59,6 +59,36 @@ object HtmlMail {
         doc.select("style").forEach{style->result=maxOf(result,pixelWidth.findAll(withoutMediaBlocks(style.data())).maxOfOrNull{it.groupValues[1].toInt()}?:0)}
         return result.takeIf{it>=480}?.coerceAtMost(1440)?:0
     }
+    private fun independentlyScrollingTables(tables: List<Element>): Set<Element> {
+        val isolated=mutableSetOf<Element>()
+        for(table in tables) {
+            val ancestors=table.parents().filter{it.normalName()=="table"}
+            if(ancestors.any{it in isolated})continue
+            val role=table.attr("role").lowercase()
+            if(role=="presentation" || role=="none")continue
+            val rows=table.children().flatMap { child->
+                when(child.normalName()) {
+                    "tr"->listOf(child)
+                    "thead","tbody","tfoot"->child.children().filter{it.normalName()=="tr"}
+                    else->emptyList()
+                }
+            }
+            val dataTable=role in setOf("table","grid","treegrid") ||
+                table.children().any{it.normalName()=="caption"} ||
+                rows.any{row->row.children().any{it.normalName()=="th"}}
+            if(dataTable) {
+                isolated.add(table)
+            }else if(ancestors.isEmpty()) {
+                // Email templates often put multiple layout tables in a single-column shell.
+                // Keep that shell in the page so its intrinsic width reaches WebView's fit.
+                val layoutShell=rows.isNotEmpty() && rows.all{row->
+                    row.children().size==1 && row.child(0).normalName()=="td"
+                } && table.getElementsByTag("table").size>1
+                if(!layoutShell)isolated.add(table)
+            }
+        }
+        return isolated
+    }
     /** Width rules inside conditional (@media) blocks target other viewports. Applied
      *  unconditionally they inflate the layout viewport and shrink an adaptive letter. */
     internal fun withoutMediaBlocks(css: String): String {
@@ -256,7 +286,8 @@ object HtmlMail {
     }
     /** Recognition only: retain the original HTML as the expanded representation.
      *  A plain projection corroborates a boundary but never replaces the rich history. */
-    fun analyzeHistory(html: String,conversation: QuotedConversation): HistoryAnalysis {
+    fun analyzeHistory(html: String,conversation: QuotedConversation): HistoryAnalysis = analyzeHistory(html,conversation,0)
+    private fun analyzeHistory(html: String,conversation: QuotedConversation,nesting: Int): HistoryAnalysis {
         fun keep(reason: HistoryReason)=HistoryAnalysis(html,false,reason)
         if(html.isBlank())return HistoryAnalysis(html,conversation.messages.isNotEmpty(),HistoryReason.NO_HTML)
         if(conversation.messages.isEmpty())return keep(HistoryReason.NO_PLAIN_HISTORY)
@@ -324,7 +355,23 @@ object HtmlMail {
                 conversation.quotedBody?.let{plain->QuotePresentation.matches(plain,boundary,::attributionHeader){element->
                     genericQuoteBoundary(element) || element.hasClass("gmail_quote") || element.hasClass("yahoo_quoted") || element.hasClass("protonmail_quote")
                 }}==true
-            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured && !flattenedProvider && !presentation)continue
+            // A subsequent reply can wrap a provider message whose own plain
+            // alternative had already flattened document blockquotes. Corroborate
+            // that older message with the same rules, then verify the remaining
+            // current segment independently. Never flatten the entire outer chain.
+            val nestedProvider=!single && !completeChain && !structured && !flattenedProvider && !presentation &&
+                nesting<12 && units.size>1 && boundary in providerRoots &&
+                attribution!=null && attributionMatches(units.first()) &&
+                conversation.quotedBody?.let{plain->
+                    val nestedConversation=ConversationText.parse(plain)
+                    if(nestedConversation.current.isBlank() || nestedConversation.messages.isEmpty())false
+                    else {
+                        val nested=analyzeHistory(boundary.html(),nestedConversation,nesting+1)
+                        nested.separateHistory &&
+                            presentationText(nestedConversation.current)==presentationText(historyText(nested.currentHtml))
+                    }
+                }==true
+            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured && !flattenedProvider && !nestedProvider && !presentation)continue
             // Generic citations need an attribution, not merely identical quoted words.
             if(providers.isEmpty() && attribution==null &&
                 !attributionHeader(historyText(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue
@@ -405,14 +452,14 @@ object HtmlMail {
         doc.select("style").forEach{it.html(css(it.data()))}
         doc.select("a").forEach{it.removeAttr("target");it.attr("rel","noreferrer noopener")}
         val csp="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src $ORIGIN; font-src 'none'; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'"
-        // Data tables are independent horizontal regions. Their explicit width must
-        // not reduce every surrounding paragraph to a desktop overview.
-        if(!originalScale)doc.select("table").filter{table->table.parents().none{it.normalName()=="table"}}.forEach { table->
-            table.wrap("<div class='mail-table-scroll'></div>")
-        }
+        val tables=if(originalScale)emptyList() else doc.select("table").toList()
+        val isolated=independentlyScrollingTables(tables)
+        isolated.forEach{it.wrap("<div class='mail-table-scroll'></div>")}
         // Normalize the display-only cut, not recognition, source MIME or the expanded quote.
         if(history.separateHistory)CollapsedReplyBoundary.normalize(doc.body())
-        val page=doc.clone().apply{if(!originalScale)select("table").remove()}
+        val page=if(isolated.isEmpty())doc else doc.clone().also{copy->
+            tables.zip(copy.select("table")).forEach{(table,copyTable)->if(table in isolated)copyTable.remove()}
+        }
         val layout=if(html.isNotBlank())layoutWidth(page)else 0
         val viewport=if(originalScale)"device-width, initial-scale=1"else if(layout>0)layout.toString()else "device-width"
         // Only the outer wrapper's own horizontal spacing replaces our inset; inner
@@ -432,12 +479,12 @@ object HtmlMail {
         val wrapping=if(originalScale)"normal"else "anywhere"
         val wrapped="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=$viewport, minimum-scale=0.01, maximum-scale=10"><meta http-equiv="Content-Security-Policy" content="$csp"><meta name="referrer" content="no-referrer"><style>
             html,body{margin:0;padding:0;max-width:100%;overflow-wrap:$wrapping;word-break:normal;background:$background;color:$foreground;font:16px/1.55 sans-serif}
-            body{box-sizing:border-box;padding-left:$leftInset;padding-right:$rightInset}
+            body{box-sizing:border-box}
             $adaptation
             $imageSizing a{color:#526b45;text-decoration:underline}
             .mail-plain,.mail-plain *{white-space:pre-wrap!important}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
             #mail-history-toggle{display:inline-flex!important;align-items:center!important;gap:5px!important;box-sizing:border-box!important;min-width:52px!important;height:28px!important;margin:12px 0!important;padding:3px 10px!important;border:1px solid #b8b8b8!important;border-radius:999px!important;background:#e6e6e6!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important;white-space:nowrap!important}
-            </style></head><body>${doc.body().html()}</body></html>""".trimIndent()
+            </style></head><body style="padding-left:$leftInset!important;padding-right:$rightInset!important">${doc.body().html()}</body></html>""".trimIndent()
         return MailHtmlDocument(wrapped,resources,hasExternal,layout,external,originalScale)
     }
     /** One forward scan, including malformed input; nested url( text cannot cause regex backtracking. */

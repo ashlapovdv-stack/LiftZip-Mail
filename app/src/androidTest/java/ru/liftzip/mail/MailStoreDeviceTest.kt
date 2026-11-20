@@ -7,6 +7,13 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.UUID
 import org.junit.Assert.*
@@ -28,6 +35,38 @@ class MailStoreDeviceTest {
     }
     private fun account()=MailAccount(id="a",name="Test",email="a@example.com",provider=Provider.CUSTOM,imapHost="imap.example.com",smtpHost="smtp.example.com",enabled=false)
     private fun message(account: String="a")=MailItem("m",account,sender="S",senderEmail="s@example.com",recipients="r@example.com",subject="Test",body="Keep this complete body",date=1,localFolder="drafts")
+    @Test fun startupPublishesIndexedInboxBeforeTheCompleteSnapshot(): Unit = runBlocking {
+        val c=context()
+        try {
+            val count=5_000
+            LocalStore(c).use{db->
+                db.putAccount(account().copy(enabled=true))
+                db.putAccount(account().copy(id="off",email="off@example.com"))
+                db.putMessages((1..count).map{i->message().copy(id="in-$i",uid=i.toLong(),validity=1,date=i.toLong(),localFolder="inbox",unread=false)}+
+                    message("off").copy(id="disabled",uid=1,validity=1,date=count+1L,localFolder="inbox"))
+                db.putAction(MailAction("trash","a","in-5000",ActionKind.TRASH,"{}"))
+                db.putAction(MailAction("star","a","in-4999",ActionKind.FLAGS,"{}",starred=true))
+            }
+            val repo=MailRepository(c)
+            val start=System.nanoTime()
+            val first=async(Dispatchers.Unconfined,start=CoroutineStart.UNDISPATCHED) {
+                val page=withTimeout(10_000){repo.startupInbox.filterNotNull().first()}
+                assertTrue("The complete snapshot was already published",repo.snapshot.value.messages.isEmpty())
+                (System.nanoTime()-start)/1_000_000 to page
+            }
+            repo.load()
+            val fullMs=(System.nanoTime()-start)/1_000_000
+            val (firstMs,preview)=first.await()
+            assertEquals(LOCAL_INBOX_PAGE_SIZE,preview.messages.size)
+            assertEquals((4999 downTo 4960).map{"in-$it"},preview.messages.map{it.id})
+            assertTrue(preview.messages.first().starred)
+            assertEquals(preview.messages,repo.localInboxPage(null,null,LOCAL_INBOX_PAGE_SIZE).items)
+            assertEquals(count+1,repo.snapshot.value.messages.size)
+            assertNull(repo.startupInbox.value)
+            android.util.Log.i("MailStartup","rows=${count+1} first_page_ms=$firstMs full_initialization_ms=$fullMs")
+        }finally{c.deleteDatabase("mail-v1.db")}
+    }
+
     @Test fun storedMimeHistoryIsReanalyzedAfterReopeningWithoutChangingItsSource() {
         val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
             .open("mailru-linked-history.eml").use{input->
@@ -110,6 +149,177 @@ class MailStoreDeviceTest {
             assertNotNull(db.action(a.id));assertEquals("a",db.message("m")?.accountId)
         }finally{db.close();c.deleteDatabase("mail-v1.db")}
     }
+    @Test fun folderSyncCommitsMessagesFlagsAndFolderStateTogether() {
+        val c = context()
+        val db = LocalStore(c)
+        val sent = ServerFolder("a", "Sent", "Sent", FolderRole.SENT, total = 1, validity = 7)
+        val updated = sent.copy(total = 2, checkedAt = 100)
+        val existing = message().copy(localFolder = "remote-sent", remoteFolder = sent.path, uid = 10, validity = sent.validity)
+        val incoming = existing.copy(id = "new-sent", uid = 11)
+        val flag = MailAction("sent-flag", "a", incoming.id, ActionKind.FLAGS, "{}")
+        try {
+            db.putAccount(account())
+            db.putFolders(listOf(sent))
+            db.putMessage(existing)
+            db.writableDatabase.execSQL("""
+                CREATE TRIGGER fail_folder_write BEFORE INSERT ON server_folders
+                BEGIN SELECT RAISE(ABORT, 'test folder write failure'); END
+            """.trimIndent())
+
+            assertThrows(SQLiteException::class.java) {
+                db.applyFolderSync(listOf(existing), listOf(incoming), updated, listOf(flag))
+            }
+            assertEquals(listOf(sent), db.folders())
+            assertEquals(listOf(existing.id), db.messages().map { it.id })
+            assertEquals(setOf(existing.id),db.search("complete body"){})
+            assertTrue(db.actions().isEmpty())
+
+            db.writableDatabase.execSQL("DROP TRIGGER fail_folder_write")
+            db.applyFolderSync(listOf(existing), listOf(existing, incoming), updated, listOf(flag))
+            db.close()
+            LocalStore(c).use { reopened ->
+                assertEquals(listOf(updated), reopened.folders())
+                assertEquals(setOf(existing.id, incoming.id), reopened.messages().map { it.id }.toSet())
+                assertEquals(existing.body, reopened.message(existing.id)?.body)
+                assertEquals(flag.id, reopened.actions().single().id)
+            }
+        } finally {
+            db.close()
+            c.deleteDatabase("mail-v1.db")
+        }
+    }
+
+    @Test fun folderDiscoveryRollsBackWhenRemovingAnObsoleteMessageFails() {
+        val c=context()
+        val removed=ServerFolder("a","Old","Old",FolderRole.OTHER)
+        val discovered=ServerFolder("a","New","New",FolderRole.OTHER)
+        val obsolete=message().copy(localFolder="remote-other",remoteFolder=removed.path,uid=10)
+        try {
+            LocalStore(c).use{ db->
+                db.putAccount(account())
+                db.putFolders(listOf(removed))
+                db.putMessage(obsolete)
+                db.writableDatabase.execSQL("""
+                    CREATE TRIGGER fail_message_delete BEFORE DELETE ON messages
+                    BEGIN SELECT RAISE(ABORT, 'test message delete failure'); END
+                """.trimIndent())
+                assertThrows(SQLiteException::class.java) {
+                    db.replaceFolders("a",listOf(discovered),setOf(obsolete.id))
+                }
+                assertEquals(listOf(removed),db.folders())
+                assertEquals(obsolete.body,db.message(obsolete.id)?.body)
+
+                db.writableDatabase.execSQL("DROP TRIGGER fail_message_delete")
+                db.replaceFolders("a",listOf(discovered),setOf(obsolete.id))
+                assertEquals(listOf(discovered),db.folders())
+                assertNull(db.message(obsolete.id))
+            }
+        }finally{c.deleteDatabase("mail-v1.db")}
+    }
+
+    @Test fun localSearchFindsRecipientsAndFullCachedBody() {
+        val c=context()
+        try {
+            val cached=message().copy(body="prefix ".repeat(100)+"sku-400",cc="copy@example.com",bcc="hidden@example.com")
+            LocalStore(c).use{ db->
+                db.putAccount(account())
+                db.putMessage(cached)
+                db.putMessage(cached.copy(id="other",body="Other letter",recipients="unrelated@example.com",cc="",bcc=""))
+                assertEquals(setOf(cached.id),db.search("r@example.com sku-400"){})
+                assertEquals(setOf(cached.id),db.search("COPY@EXAMPLE.COM hidden@example.com"){})
+                assertEquals(emptySet<String>(),db.search("copy@example.com missing"){})
+            }
+        }finally{c.deleteDatabase("mail-v1.db")}
+    }
+
+    @Test fun versionThreeSearchBackfillsWithoutLosingMatchesAndUsesTheIndex() {
+        val c=context()
+        val file="mail-v1.db"
+        val db=LocalStore(c)
+        val target=message().copy(id="target",sender="=?UTF-8?B?0JzQuNGA?=",subject="Заказ — ZIP-401",
+            body="Начало ".repeat(75)+"КОНТАКТОР-ДЭК",cc="supplier@example.com",htmlBody="<b>Keep original HTML</b>")
+        val count=5_000
+        fun measuredSearch(query: String): Triple<Set<String>,Int,Double> {
+            var inspected=0
+            val start=System.nanoTime()
+            val result=db.search(query){inspected++}
+            return Triple(result,inspected,(System.nanoTime()-start)/1_000_000.0)
+        }
+        try {
+            c.openOrCreateDatabase(file,0,null).use { legacy->
+                legacy.execSQL("CREATE TABLE accounts(id TEXT PRIMARY KEY,data TEXT NOT NULL)")
+                legacy.execSQL("CREATE TABLE messages(id TEXT PRIMARY KEY,account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,folder TEXT NOT NULL,data TEXT NOT NULL,preview TEXT,message_date INTEGER NOT NULL DEFAULT 0,source_draft_id TEXT)")
+                legacy.execSQL("INSERT INTO accounts VALUES('a','{}')")
+                legacy.beginTransaction()
+                try {
+                    legacy.compileStatement("INSERT INTO messages(id,account_id,folder,data) VALUES(?,?,?,?)").use { insert->
+                        for(i in 0 until count) {
+                            val item=if(i==count-1)target else message().copy(id="other-$i",body="Обычное письмо это письмо номер $i. ".repeat(16))
+                            insert.bindString(1,item.id);insert.bindString(2,item.accountId)
+                            insert.bindString(3,item.localFolder);insert.bindString(4,db.encodeMessage(item).toString())
+                            insert.executeInsert()
+                        }
+                    }
+                    legacy.setTransactionSuccessful()
+                } finally {legacy.endTransaction()}
+                legacy.version=3
+            }
+            assertEquals(4,db.readableDatabase.version)
+            val query="p-401 ТАКТОР-дэ supplier@"
+            val before=List(5){measuredSearch(query)}.sortedBy{it.third}[2]
+            assertEquals(setOf(target.id),before.first)
+            assertTrue("Lookup before backfill must inspect legacy rows",before.second>=count)
+            // An interrupted backfill can be resumed by a later application process.
+            assertTrue(db.indexSearchBatch{})
+            db.close()
+            assertEquals(setOf(target.id),db.search(query){})
+            while(db.indexSearchBatch{}) Unit
+            val after=List(5){measuredSearch(query)}.sortedBy{it.third}[2]
+            assertEquals(before.first,after.first)
+            assertTrue("Indexed lookup must skip non-matching letters",after.second<=3)
+            assertEquals(setOf(target.id),db.search("ир дэ"){})
+            assertEquals(setOf(target.id),db.search("-дэ"){})
+            assertEquals(target.htmlBody,db.message(target.id)?.htmlBody)
+            android.util.Log.i("MailSearchPerf","rows=$count legacy_scan_ms=${before.third} indexed_ms=${after.third}")
+        }finally{db.close();c.deleteDatabase(file)}
+    }
+
+    @Test fun searchReadsCommittedMailDuringSyncAndTracksUpdatesAndAccountDeletion() {
+        val c=context()
+        val db=LocalStore(c)
+        val message=message().copy(body="Запчасть AX-1200",localFolder="inbox",date=100)
+        try {
+            db.putAccount(account())
+            db.putMessage(message.copy(id="obsolete",body="Obsolete SKU"))
+            db.putMessage(message)
+            db.removeMessage("obsolete")
+            db.compact()
+            assertTrue(db.search("obsolete sku"){}.isEmpty())
+            assertEquals(setOf(message.id),db.search("x-12"){})
+            val updated=message.copy(body="Новый артикул RQ-7701")
+            val writer=db.writableDatabase
+            val executor=java.util.concurrent.Executors.newSingleThreadExecutor()
+            try {
+                writer.beginTransactionNonExclusive()
+                try {
+                    db.applyFolderSync(listOf(message),listOf(updated),ServerFolder("a","Inbox","Inbox",FolderRole.INBOX),emptyList())
+                    val concurrent=executor.submit<Set<String>>{db.search("x-12"){}}
+                    assertEquals(setOf(message.id),concurrent.get(10,java.util.concurrent.TimeUnit.SECONDS))
+                    writer.setTransactionSuccessful()
+                }finally{writer.endTransaction()}
+            }finally{executor.shutdownNow()}
+            assertTrue(db.search("x-12"){}.isEmpty())
+            assertEquals(setOf(message.id),db.search("q-77"){})
+            db.putMessage(db.messages().single().copy(starred=true))
+            assertEquals(setOf(message.id),db.search("q-77"){})
+            db.removeAccount("a")
+            assertTrue(db.search("q-77"){}.isEmpty())
+            db.readableDatabase.rawQuery("SELECT count(*) FROM message_search",null).use {
+                assertTrue(it.moveToFirst());assertEquals(0,it.getInt(0))
+            }
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
+
     @Test fun openingARealVersionOneDatabaseMigratesAndKeepsTheCompleteBody() {
         val c=context();val helper=LocalStore(c)
         val legacy=c.openOrCreateDatabase("mail-v1.db",0,null)
@@ -121,13 +331,65 @@ class MailStoreDeviceTest {
             val m=message().copy(body="Complete old body. "+"long text ".repeat(100))
             legacy.execSQL("INSERT INTO messages VALUES(?,?,?,?)",arrayOf(m.id,m.accountId,m.localFolder,helper.encodeMessage(m).toString()))
             legacy.version=1;legacy.close()
-            assertEquals(2,helper.readableDatabase.version)
+            assertEquals(4,helper.readableDatabase.version)
             assertEquals("encrypted-old-secret",helper.accounts().single().secret)
             assertEquals(m.body,helper.message(m.id)?.body)
             assertTrue(helper.messages().single().body.length<=MailContent.PREVIEW_LENGTH)
             assertEquals(m.body,helper.message(m.id)?.body)
             assertTrue(helper.actions().isEmpty());assertTrue(helper.folders().isEmpty())
         }finally{if(legacy.isOpen)legacy.close();helper.close();c.deleteDatabase("mail-v1.db")}
+    }
+
+    @Test fun versionTwoUpgradeKeepsMessagesAndPagesTiedDatesAcrossAccounts() {
+        val c=context()
+        val helper=LocalStore(c)
+        val file="mail-v1.db"
+        try {
+            c.openOrCreateDatabase(file,0,null).use{db->
+                db.execSQL("CREATE TABLE accounts(id TEXT PRIMARY KEY,data TEXT NOT NULL)")
+                db.execSQL("CREATE TABLE messages(id TEXT PRIMARY KEY,account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,folder TEXT NOT NULL,data TEXT NOT NULL)")
+                helper.onUpgrade(db,1,2)
+                db.execSQL("INSERT INTO accounts VALUES('a','{}'),('b','{}')")
+                val ids=(1..1050).map{"m"+it.toString().padStart(4,'0')}
+                db.beginTransaction()
+                try {
+                    for((i,id) in ids.withIndex()) {
+                        val item=message(if(i%2==0)"a" else "b").copy(id=id,date=5000,localFolder="inbox",body="Complete body",htmlBody="<b>Letter</b>")
+                        db.execSQL("INSERT INTO messages(id,account_id,folder,data,preview) VALUES(?,?,?,?,?)",arrayOf(item.id,item.accountId,item.localFolder,helper.encodeMessage(item).toString(),
+                            if(i%3==0)null else helper.encodeMessage(MailContent.preview(item)).toString()))
+                    }
+                    val draft=message().copy(id="edit",sourceDraftId=ids.last())
+                    db.execSQL("INSERT INTO messages(id,account_id,folder,data) VALUES(?,?,?,?)",arrayOf(draft.id,draft.accountId,draft.localFolder,helper.encodeMessage(draft).toString()))
+                    db.execSQL("INSERT INTO mail_actions VALUES('queued','a',1,'{}')")
+                    db.setTransactionSuccessful()
+                }finally{db.endTransaction()}
+                db.version=2
+            }
+            var after: LocalInboxCursor?=null
+            val ids=mutableListOf<String>()
+            repeat(27) {
+                val page=helper.inboxRows(setOf("a","b"),after,40)
+                assertTrue(page.isNotEmpty())
+                assertTrue(page.all{it.previewOnly})
+                ids+=page.map{it.id}
+                after=page.last().inboxCursor()
+            }
+            assertEquals((1049 downTo 1).map{"m"+it.toString().padStart(4,'0')},ids)
+            assertTrue(helper.inboxRows(setOf("a","b"),after,40).isEmpty())
+            assertEquals(listOf("m1049","m1047"),helper.inboxRows(setOf("a"),null,2).map{it.id})
+            assertEquals("<b>Letter</b>",helper.message("m1050")?.htmlBody)
+            assertEquals("m1050",helper.message("edit")?.sourceDraftId)
+            helper.readableDatabase.rawQuery("SELECT revision FROM mail_actions WHERE id='queued'",null).use{
+                assertTrue(it.moveToFirst());assertEquals(1,it.getInt(0))
+            }
+            helper.putMessage(message().copy(id="new",date=9000,localFolder="inbox"))
+            assertEquals("new",helper.inboxRows(setOf("a"),null,1).single().id)
+            helper.close()
+            LocalStore(c).use{reopened->
+                assertEquals(listOf("new","m1049"),reopened.inboxRows(setOf("a"),null,2).map{it.id})
+                assertEquals("Complete body",reopened.message("m1050")?.body)
+            }
+        }finally{helper.close();c.deleteDatabase(file)}
     }
 
     @Test fun htmlAndInlineImageMetadataSurviveAFlagUpdateFromAListPreview() {

@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.getOrNull
@@ -25,7 +27,15 @@ class ReaderDeviceTest {
     @org.junit.Before fun connectNativeAccessibilityBeforeCreatingWebView() {
         // UiAutomation connects lazily. Connect before setContent creates Chromium's
         // accessibility bridge, including when this class is run in isolation.
-        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+        val automation=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation
+        // Request the full native/Chromium accessibility hierarchy rather than
+        // only the important Compose nodes exposed by the default test service.
+        val serviceInfo=automation.serviceInfo
+        serviceInfo.flags=serviceInfo.flags or
+            android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+            android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        automation.serviceInfo=serviceInfo
+        automation.rootInActiveWindow
     }
     private val message=MailItem("reader-regression","a",sender="Sender",senderEmail="s@example.com",recipients="r@example.com",subject="Длинное письмо",body="Начало письма. Последняя строка письма.",date=1,
         htmlBody="<p>Начало письма</p><div style='height:100000px'></div><p>Последняя строка письма</p>",contentVersion=MailContent.FORMAT_VERSION)
@@ -65,17 +75,60 @@ class ReaderDeviceTest {
         rule.runOnIdle{view.setFindListener(null);view.clearMatches()}
         return found
     }
-    private fun changeHistory(view: MailHtmlWebView,toggle: NativeHistoryControl,expanded: Boolean) {
+    // These fixtures have no other grey fill in the left quarter of the reader.
+    // Locate the painted button and send the same tap as a reader would.
+    private fun tapPaintedHistoryCapsule() {
+        val root = rule.onRoot()
+        var target: Offset? = null
+        rule.waitUntil(15_000) {
+            val pixels = root.captureToImage().toPixelMap()
+            find@ for (y in pixels.height / 5 until pixels.height * 3 / 4 step 2) {
+                for (x in 0 until pixels.width / 4 - 8 step 2) {
+                    val solid = (0..8 step 2).all { dx ->
+                        (0..4 step 2).all { dy ->
+                            val pixel = pixels[x + dx, y + dy]
+                            kotlin.math.abs(pixel.red - 230f / 255f) < 0.005f &&
+                                kotlin.math.abs(pixel.green - pixel.red) < 0.005f &&
+                                kotlin.math.abs(pixel.blue - pixel.red) < 0.005f
+                        }
+                    }
+                    if (solid) {
+                        target = Offset(x + 4f, y + 2f)
+                        break@find
+                    }
+                }
+            }
+            target != null
+        }
+        root.performTouchInput { click(checkNotNull(target)) }
+    }
+    private fun changeHistory(
+        view: MailHtmlWebView,
+        toggle: NativeHistoryControl,
+        expanded: Boolean,
+        tap: (() -> Unit)? = null
+    ) {
         var revision=0L
         rule.runOnIdle{revision=view.documentGeneration()}
-        toggle.performScrollTo().assertIsDisplayed().performClick()
-        toggle.assertExpanded(expanded)
-        rule.waitUntil(15_000) {
-            var ready=false
-            // Unified HTML history updates the document inside the SAME native WebView.
-            // Plain history still changes only Compose controls, without a reload.
-            rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
-            ready
+        var stage="locate and click history control"
+        try {
+            if (tap == null) toggle.performScrollTo().assertIsDisplayed().performClick() else tap()
+            stage="wait for aria-expanded=$expanded"
+            toggle.assertExpanded(expanded)
+            stage="wait for reader readiness"
+            rule.waitUntil(15_000) {
+                var ready=false
+                // Unified HTML history updates the document inside the SAME native WebView.
+                // Plain history still changes only Compose controls, without a reload.
+                rule.runOnUiThread{ready=view.documentGeneration()>=revision && view.interactionEnabled && view.progress==100}
+                ready
+            }
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            var state="unavailable"
+            rule.runOnUiThread {
+                state="generation=${view.documentGeneration()} previous=$revision enabled=${view.interactionEnabled} progress=${view.progress} attached=${view.isAttachedToWindow} height=${view.contentHeight} url=${view.url}"
+            }
+            throw AssertionError("History transition timeout: expanded=$expanded stage=$stage $state",failure)
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
     }
@@ -168,6 +221,25 @@ class ReaderDeviceTest {
         assertEquals(1,matches(view,"Текущий ответ"))
         saveDeviceScreenshot(rule,"linked-mime-history")
     }
+    @Test fun replyingAgainKeepsTheHistoryButtonForAFlattenedProviderAlternative() {
+        val older="On Mon, 9 Nov 2026, Original <original@example.com> wrote:"
+        val recent="On Tue, 10 Nov 2026, Reply <reply@example.com> wrote:"
+        fun encoded(header: String)=header.replace("<","&lt;").replace(">","&gt;")
+        val originalPlain="*Исходное письмо*\nЦитата документа\nВложенная цитата"
+        val originalHtml="<b>Исходное письмо</b><blockquote>Цитата документа<blockquote>Вложенная цитата</blockquote></blockquote>"
+        val firstPlain="Первый ответ\n\n$older\n"+originalPlain.lineSequence().joinToString("\n"){"> $it"}
+        val body="Второй ответ\n\n$recent\n"+firstPlain.lineSequence().joinToString("\n"){"> $it"}
+        val html="<p>Второй ответ</p><div class='gmail_attr'>${encoded(recent)}</div><blockquote class='gmail_quote'>"+
+            "<p>Первый ответ</p><div class='gmail_attr'>${encoded(older)}</div><blockquote class='gmail_quote'>$originalHtml</blockquote></blockquote>"
+        rule.setContent{MailTheme{reader(message.copy(id="nested-flattened-provider",body=body,htmlBody=html))}}
+        val view=loaded()
+        val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 2")
+        assertEquals(0,matches(view,"Вложенная цитата"))
+        changeHistory(view,toggle,true,::tapPaintedHistoryCapsule)
+        assertEquals(1,matches(view,"Вложенная цитата"))
+        changeHistory(view,toggle,false,::tapPaintedHistoryCapsule)
+        assertEquals(0,matches(view,"Вложенная цитата"))
+    }
     @Test fun longHtmlCitationSharesScrollingAndRevealsItsFinalLine() {
         val header="On 7 Nov 2026, sender@example.com wrote:"
         val old=(1..32).joinToString("\n"){"Строка цитаты $it"}+"\nПоследняя строка цитаты"
@@ -177,7 +249,7 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{reader(message.copy(id="long-citation",body=plain,htmlBody=html))}}
         val main=loaded()
         val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
-        changeHistory(main,toggle,true)
+        changeHistory(main,toggle,true,::tapPaintedHistoryCapsule)
         val quote=unifiedHistoryView()
         assertEquals(1,matches(quote,"Последняя строка цитаты"))
         // Native scrolling must hand the movement back to the Compose page at its
@@ -210,7 +282,7 @@ class ReaderDeviceTest {
             rule.waitForIdle()
         }
         rule.runOnIdle{assertEquals(0,quote.scrollY)}
-        changeHistory(main,toggle,false)
+        changeHistory(main,toggle,false,::tapPaintedHistoryCapsule)
         assertEquals(1,matches(main,"Ответ"))
     }
     @Test fun reopeningUsesWarmGeometryAndStartsWithCollapsedHistory() {
@@ -519,7 +591,7 @@ class ReaderDeviceTest {
         val html="<p>Текущий ответ</p><div class='gmail_attr'>On Wed, 28 Oct 2026, Person &lt;a@example.com&gt; wrote:</div><blockquote class='gmail_quote'><p>Старое письмо</p></blockquote>"
         rule.setContent{MailTheme{reader(message.copy(id="html-history-zoom",body=body,htmlBody=html))}}
         val view=loaded()
-        rule.waitUntil(15_000){NativeHistoryControl(rule,"Предыдущие сообщения: 1").exists()}
+        NativeHistoryControl(rule,"Предыдущие сообщения: 1").assertExists()
         val history=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
         history.performScrollTo().assertIsDisplayed()
         rule.runOnIdle{view.zoomBy(2f)}
@@ -752,6 +824,48 @@ class ReaderDeviceTest {
         rule.runOnIdle{assertTrue("Whole page was shrunk",view.scale>=view.resources.displayMetrics.density*0.9f)}
         assertEquals(1,matches(view,"Широкая строка"))
         saveDeviceScreenshot(rule,"html-paste-responsive")
+    }
+
+    @Test fun fitsTheFullWidthOfANestedEmailTemplate() {
+        val html="""
+            <style>body{width:100%!important;margin:0!important;padding:0!important}</style>
+            <table width="100%"><tr><td style="padding:0 40px">
+                <div style="min-width:380px">
+                    <table width="100%"><tr><td>Reply to seller</td><td>Open conversation</td></tr></table>
+                </div>
+            </td></tr></table>
+        """.trimIndent()
+        val m=message.copy(id="nested-email-template",body="Reply to seller",htmlBody=html)
+        rule.setContent {
+            MailTheme {
+                androidx.compose.foundation.layout.Box(Modifier.width(300.dp)) {
+                    MailHtmlBody(m,m.body,HtmlMail.noHistory(html),{error("No resources")},{})
+                }
+            }
+        }
+        val view=loaded()
+        rule.runOnIdle {
+            assertTrue("The template must scale below 100% on a 300 dp viewport",
+                view.scale<view.resources.displayMetrics.density*0.80f)
+            assertFalse("Both columns must fit without panning",view.canScrollHorizontally(1))
+        }
+        assertEquals(1,matches(view,"Open conversation"))
+    }
+
+    @Test fun keepsBothPageGuttersWhenSenderResetsBodyPadding() {
+        val html="<style>body{width:100%!important;margin:0!important;padding:0!important}</style>"+
+            "<table role='presentation' width='100%' style='background:#ff00ff'><tr><td>Template</td></tr></table>"
+        val m=message.copy(id="page-gutters",body="Template",htmlBody=html)
+        rule.setContent{MailTheme{MailHtmlBody(m,m.body,HtmlMail.noHistory(html),{error("No resources")},{})}}
+        loaded()
+        val body=rule.onNodeWithTag("mail-body")
+        rule.waitUntil(10_000) {
+            val pixels=body.captureToImage().toPixelMap()
+            fun magenta(x: Int,y: Int)=pixels[x,y].let{it.red>0.95f && it.green<0.05f && it.blue>0.95f}
+            (0 until pixels.height).any{y->
+                magenta(pixels.width/2,y) && !magenta(1,y) && !magenta(pixels.width-2,y)
+            }
+        }
     }
 
     @Test fun receivedRichReplyExpandsAsHtmlAndBothPresentationsCanBeToggled() {
