@@ -43,6 +43,32 @@ class MessageFlowDeviceTest {
         rule.onNodeWithTag("mail-row:new-2").assertIsDisplayed()
     }
 
+    @Test fun startupRecordingCapturesFramesAndStopsWithAReport() {
+        val activity = rule.activity
+        val context = object : android.content.ContextWrapper(activity.applicationContext) {
+            override fun getSharedPreferences(name: String, mode: Int) =
+                super.getSharedPreferences("startup-frame-probe-test", mode)
+        }
+        val probe = StartupFrameProbe(context)
+        rule.runOnUiThread {
+            probe.arm()
+            probe.start(activity.window, 60f)
+        }
+        try {
+            rule.setContent {
+                SideEffect { probe.markInbox(cached = true, ready = true) }
+                Text("Проверка кадров запуска")
+            }
+            rule.onNodeWithText("Проверка кадров запуска").assertIsDisplayed()
+            rule.waitUntil(12_000) { probe.report.isNotBlank() }
+            assertTrue(probe.report.contains(Regex("Получено кадров: [1-9]")))
+            assertTrue(probe.report.contains("Сохранённая страница: +"))
+            assertTrue(probe.report.contains("Полное состояние списка: +"))
+        } finally {
+            rule.runOnUiThread { probe.stop(activity.window) }
+        }
+    }
+
     @Test fun compareScrollFrameTimesWithAutomaticPanelsEnabledAndDisabled() {
         val enabled=mutableStateOf(true)
         val messages=(0..99).map{i->mail.copy(id="perf-$i",subject="Письмо $i",date=2_000_000L-i)}
