@@ -1036,8 +1036,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 val readingHistory=remember(unifiedHtml,history){if(unifiedHistory)HtmlMail.noHistory(unifiedHtml)else history}
                 val readerLink: (String)->Unit={url->
                     if(unifiedHistory && url==UnifiedReaderDocument.TOGGLE_URL) {
-                        if(historyExpanded)scroll.toolbar.onHistoryCollapsed()
-                        historyExpanded=!historyExpanded
+                        val change={
+                            if(historyExpanded)scroll.toolbar.onHistoryCollapsed()
+                            historyExpanded=!historyExpanded
+                        }
+                        scroll.view?.retainFrameForHistoryChange(change)?:change()
                     } else onLink(url)
                 }
                 MailHtmlBody(readingSource,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},readingHistory,onInline,readerLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->

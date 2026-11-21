@@ -1,9 +1,15 @@
 package ru.liftzip.mail
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Rect
+import android.graphics.drawable.BitmapDrawable
 import android.net.http.SslError
 import android.view.MotionEvent
+import android.view.PixelCopy
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -26,7 +32,6 @@ import androidx.compose.material.icons.outlined.HideImage
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
@@ -73,6 +78,63 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     var ownsTouchStream=false
         private set
     var interactionEnabled=true
+    private var frameCapturePending=false
+    private var retainedFrame: BitmapDrawable?=null
+    private var frameRevision=-1L
+    val hasRetainedFrame get()=retainedFrame!=null
+
+    /** Retain the visible pixels until the replacement document is ready to draw. */
+    fun retainFrameForHistoryChange(change: ()->Unit) {
+        if(!live || frameCapturePending || hasRetainedFrame)return
+        val host=parent as? FrameLayout
+        var owner=context
+        while(owner is ContextWrapper && owner !is Activity && owner.baseContext!==owner)owner=owner.baseContext
+        val window=(owner as? Activity)?.window
+        val ui=handler
+        val visible=Rect()
+        if(host==null || window==null || ui==null || !getGlobalVisibleRect(visible)) {
+            change()
+            return
+        }
+        val location=IntArray(2)
+        rootView.getLocationInWindow(location)
+        visible.offset(location[0],location[1])
+        val origin=IntArray(2)
+        host.getLocationInWindow(origin)
+        val bounds=Rect(visible).apply{offset(-origin[0],-origin[1])}
+        val bitmap=Bitmap.createBitmap(visible.width(),visible.height(),Bitmap.Config.ARGB_8888)
+        val revision=documentRevision
+        frameCapturePending=true
+        try {
+            PixelCopy.request(window,visible,bitmap,{ result->
+                frameCapturePending=false
+                if(!live || parent!==host || documentRevision!=revision){bitmap.recycle();return@request}
+                if(result==PixelCopy.SUCCESS) {
+                    frameRevision=revision
+                    retainedFrame=BitmapDrawable(resources,bitmap).apply{setBounds(bounds)}
+                    host.overlay.add(requireNotNull(retainedFrame))
+                }else bitmap.recycle()
+                change()
+            },ui)
+        }catch(_: IllegalArgumentException) {
+            frameCapturePending=false
+            bitmap.recycle()
+            change()
+        }
+    }
+
+    fun presentRenderedFrame() {
+        if(!hasRetainedFrame || documentRevision==frameRevision)return
+        releaseRetainedFrame()
+        verticalChanged(scrollY)
+        publishHorizontal()
+        zoomChanged(((relativeScale()-1.03f)/0.47f).coerceIn(0f,1f))
+    }
+
+    private fun releaseRetainedFrame() {
+        retainedFrame?.let{(parent as? FrameLayout)?.overlay?.remove(it)}
+        retainedFrame=null
+    }
     var scrollPage: ((Float)->Float)?=null
     var onReleased: (()->Unit)?=null
     private val fling=OverScroller(context)
@@ -134,7 +196,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
                 MailZoomDiagnostics.record {"scale old=$oldScale new=$newScale webH=${view.height} scrollY=${view.scrollY} contentH=${view.contentHeight}"}
                 renderScale=newScale;recordGeometry("scale");publishHeight();if(establishingScale){initialScale=newScale}else initialScale?.let{base->
                 val progress=((newScale/base-1.03f)/0.47f).coerceIn(0f,1f)
-                post{if(live)zoomChanged(progress)}
+                post{if(live && !hasRetainedFrame)zoomChanged(progress)}
             }}
             override fun onPageCommitVisible(view: WebView,url: String){prepareVisibleDocument(url)}
             override fun onPageFinished(view: WebView,url: String){prepareVisibleDocument(url)}
@@ -358,9 +420,9 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
         return super.onTouchEvent(event)
     }
     override fun onDraw(canvas: Canvas){super.onDraw(canvas);publishHeight();publishHorizontal()}
-    override fun onScrollChanged(l: Int,t: Int,oldl: Int,oldt: Int){super.onScrollChanged(l,t,oldl,oldt);verticalChanged(t);publishHorizontal()}
+    override fun onScrollChanged(l: Int,t: Int,oldl: Int,oldt: Int){super.onScrollChanged(l,t,oldl,oldt);if(!hasRetainedFrame)verticalChanged(t);publishHorizontal()}
     private fun publishHorizontal(){
-        if(live)horizontalChanged(HorizontalScrollMetrics(computeHorizontalScrollOffset(),computeHorizontalScrollExtent(),computeHorizontalScrollRange()))
+        if(live && !hasRetainedFrame)horizontalChanged(HorizontalScrollMetrics(computeHorizontalScrollOffset(),computeHorizontalScrollExtent(),computeHorizontalScrollRange()))
     }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) {
         super.onSizeChanged(w,h,oldw,oldh)
@@ -407,6 +469,7 @@ class MailHtmlWebView(context: Context,private val image: (MailImageSource)->Mai
     }
     fun release(rendererGone: Boolean=false){
         if(!live)return
+        releaseRetainedFrame()
         live=false;ownsTouchStream=false;removeCallbacks(animateFling);fling.abortAnimation();velocity?.recycle();velocity=null
         onReleased?.invoke();onReleased=null;scrollPage=null
         if(!rendererGone)stopLoading()
@@ -486,6 +549,8 @@ internal fun readerBodyHeight(normal: Int): Int=normal
     // Keep the measured HTML extent separate from the Compose header. A late
     // measurement must never overwrite or double-add the header contribution.
     val height=intrinsicHeight+if(prepared)headerHeight else 0
+    var displayedHeight by remember(message.id,message.contentVersion){mutableIntStateOf(0)}
+    SideEffect{if(rendered)displayedHeight=height}
     val nativeDocument=remember(ready,prepared,viewport,bodyWidth,baseScale,headerHeight){ready?.let{doc->
         if(prepared)document?.withReaderInset(headerHeight,bodyWidth,baseScale)?.withReaderCanvas(viewport,bodyWidth,baseScale) else doc
     }}
@@ -504,8 +569,11 @@ internal fun readerBodyHeight(normal: Int): Int=normal
             message.body.ifBlank{"В письме нет доступного текстового содержимого."}.chunked(4000).forEach{Text(it,Modifier.fillMaxWidth().padding(bottom=6.dp))}
         } else if(ready!=null && headerMeasured) {
             val windowHeight=if(prepared)viewport else height.coerceAtMost(viewport)
+            val retainLayout=!rendered && web?.hasRetainedFrame==true
+            val displayedExtent=if(retainLayout)displayedHeight else height
+            val hostHeight=if(retainLayout)viewport else windowHeight
             val contentTop=(headerHeight-(scroll?.headerOffset?:0f)).coerceIn(0f,viewport.toFloat()).roundToInt()
-            val contentHeight=((if(zoomed)viewport else height.coerceAtMost(viewport))-contentTop).coerceAtLeast(0)
+            val contentHeight=((if(zoomed)viewport else displayedExtent.coerceAtMost(viewport))-contentTop).coerceAtLeast(0)
             // The native child always has the complete viewport after initial preparation.
             // Its unzoomed document extent alone determines where the Compose history follows.
             androidx.compose.ui.layout.Layout(content={
@@ -518,14 +586,25 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                             scrollOwner?.attach(view,primary=scroll!=null)
                             addView(view,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT))
                         }catch(e: Exception){android.util.Log.e("MailReaderReady","create failed",e);failed=true;loader.close()}
-                    }},modifier=Modifier.testTag("mail-native-window").fillMaxWidth().height(with(density){windowHeight.toDp()})
-                        .graphicsLayer{alpha=if(rendered)1f else 0f}
+                    }},modifier=Modifier.testTag("mail-native-window").fillMaxWidth().height(with(density){hostHeight.toDp()})
                         .onGloballyPositioned{coordinates->
                             web?.let{scrollOwner?.position(it,coordinates.positionInWindow().y.toInt())}
                             MailZoomDiagnostics.record {"bodyLayout zoomed=$zoomed pinch=${scroll?.pinchActive==true} top=${coordinates.positionInWindow().y} layoutH=${coordinates.size.height} webH=${scroll?.view?.height}"}
                             val view=web
                             if(MailZoomDiagnostics.isEnabled)android.util.Log.i("MailReaderReady","layout prepared=$prepared rendered=$rendered commit=$nativeCommit normal=$height window=$windowHeight native=${view?.height} header=$headerHeight")
-                        },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply{interactionEnabled=rendered;measuringDocument(!prepared);viewport(viewport);show(nativeDocument?:ready,density.fontScale)}},
+                        },update={host->(host.getChildAt(0) as? MailHtmlWebView)?.apply {
+                            val currentLayout=layoutParams as FrameLayout.LayoutParams
+                            if(currentLayout.height!=windowHeight) {
+                                currentLayout.height=windowHeight
+                                layoutParams=currentLayout
+                            }
+                            interactionEnabled=rendered
+                            alpha=if(rendered)1f else 0f
+                            measuringDocument(!prepared)
+                            viewport(viewport)
+                            show(nativeDocument?:ready,density.fontScale)
+                            if(rendered)presentRenderedFrame()
+                        }},
                         onRelease={host->(host.getChildAt(0) as? MailHtmlWebView)?.release();host.removeAllViews()})
                 }
                 Spacer(Modifier.testTag(if(rendered)"mail-body" else "mail-preparing-content").onGloballyPositioned{coordinates->
@@ -536,7 +615,7 @@ internal fun readerBodyHeight(normal: Int): Int=normal
                 val unbounded=constraints.copy(minHeight=0,maxHeight=androidx.compose.ui.unit.Constraints.Infinity)
                 val child=measurables[0].measure(unbounded)
                 val contentBounds=measurables[1].measure(unbounded)
-                layout(child.width,height.coerceAtMost(viewport).coerceAtLeast(1)){
+                layout(child.width,displayedExtent.coerceAtMost(viewport).coerceAtLeast(1)){
                     child.placeRelative(0,0)
                     contentBounds.placeRelative(0,contentTop)
                 }

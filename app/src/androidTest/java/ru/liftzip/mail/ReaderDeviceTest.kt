@@ -132,6 +132,34 @@ class ReaderDeviceTest {
         }
         rule.runOnIdle{android.util.Log.i("MailHistoryTest","expanded=$expanded generation=${view.documentGeneration()} url=${view.url} height=${view.contentHeight}")}
     }
+    @Test fun expandingHistoryKeepsAVisibleReplyUntilTheNewFrameIsReady() {
+        val body="Current reply stays visible\n\nOn 7 Nov 2026, sender@example.com wrote:\n> Older reply"
+        rule.setContent{MailTheme{reader(message.copy(id="history-visual-transition",body=body,htmlBody=""))}}
+        val view=loaded()
+        val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
+        var checkedFrames=0
+        var sawBlankFrame=false
+        lateinit var inspect: android.view.Choreographer.FrameCallback
+        inspect=android.view.Choreographer.FrameCallback {
+            checkedFrames++
+            if(view.alpha==0f && !view.hasRetainedFrame)sawBlankFrame=true
+            android.view.Choreographer.getInstance().postFrameCallback(inspect)
+        }
+        rule.runOnUiThread{android.view.Choreographer.getInstance().postFrameCallback(inspect)}
+        try {
+            changeHistory(view,toggle,true,::tapPaintedHistoryCapsule)
+            rule.runOnIdle{
+                assertTrue("No frames were observed during disclosure",checkedFrames>0)
+                assertFalse("The current reply disappeared during disclosure",sawBlankFrame)
+                assertFalse("The saved frame must be released after presentation",view.hasRetainedFrame)
+            }
+            assertEquals(1,matches(view,"Current reply stays visible"))
+            assertEquals(1,matches(view,"Older reply"))
+        } finally {
+            rule.runOnUiThread{android.view.Choreographer.getInstance().removeFrameCallback(inspect)}
+        }
+    }
+
     @Test fun plainOrderKeepsSeparateLinesAndTheFinalComment() {
         val mime=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
             .open("plain-order.eml").use{input->
