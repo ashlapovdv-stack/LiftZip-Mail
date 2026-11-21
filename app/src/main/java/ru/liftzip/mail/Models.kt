@@ -19,7 +19,7 @@ data class MailAccount(
     val colorSlot: Int = -1
 )
 
-data class Attachment(val path: String, val name: String, val mime: String, val size: Int,val contentId: String="")
+data class Attachment(val path: String, val name: String, val mime: String, val size: Int,val contentId: String="",val explicitAttachment: Boolean=false)
 data class OutgoingFile(val uri: String, val name: String, val mime: String, val size: Long,val contentId: String="") : java.io.Serializable
 data class OpenedAttachment(val uri: String, val name: String, val mime: String) : java.io.Serializable
 data class InboxHistory(val total: Int? = null, val hasOlder: Boolean = true, val unread: Int? = null)
