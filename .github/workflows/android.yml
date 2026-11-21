@@ -15,6 +15,9 @@ concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LIFTZIP_MAVEN_CENTRAL_MIRROR: https://maven-central.storage-download.googleapis.com/maven2
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -63,8 +66,6 @@ jobs:
           java-version: '17'
           cache: gradle
       - name: Build the signed release with R8
-        env:
-          LIFTZIP_MAVEN_CENTRAL_MIRROR: https://maven-central.storage-download.googleapis.com/maven2
         run: bash ./gradlew --no-daemon :app:assembleRelease
       - name: Download the debug APK from this run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
