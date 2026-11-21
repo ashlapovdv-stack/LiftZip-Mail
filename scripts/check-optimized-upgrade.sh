@@ -3,7 +3,7 @@ set -euo pipefail
 
 package=ru.liftzip.mail
 activity="$package/.MainActivity"
-baseline=upgrade-baseline-54/app-debug.apk
+baseline=upgrade-baseline-debug/app-debug.apk
 optimized=app/build/outputs/apk/release/app-release.apk
 report=optimized-upgrade-check.txt
 trap 'adb logcat -d -s AndroidRuntime:E ActivityManager:W' ERR
@@ -18,8 +18,14 @@ adb logcat -c
 
 adb install -r "$optimized"
 adb shell dumpsys package "$package" > optimized-package.txt
-version=$(python3 -c 'import json; print(json.load(open("app/build/outputs/apk/release/output-metadata.json"))["elements"][0]["versionName"])')
+read -r version code < <(python3 -c '
+import json
+from pathlib import Path
+element = json.loads(Path("app/build/outputs/apk/release/output-metadata.json").read_text())["elements"][0]
+print(element["versionName"], element["versionCode"])
+')
 sed -n 's/^[[:space:]]*versionName=//p' optimized-package.txt | grep -Fx "$version" > "$report"
+sed -En 's/^[[:space:]]*versionCode=([0-9]+).*$/\1/p' optimized-package.txt | grep -Fx "$code" >> "$report"
 if grep -Eq 'flags=\[[^]]*DEBUGGABLE' optimized-package.txt; then
     echo "The optimized app must not be debuggable." >&2
     exit 1
@@ -39,4 +45,4 @@ if grep -q 'FATAL EXCEPTION' optimized-runtime.txt; then
     cat optimized-runtime.txt >&2
     exit 1
 fi
-echo "Build 54 app data and launch verified after upgrade." >> "$report"
+echo "Debug APK data and app launch verified after installing the signed release." >> "$report"
