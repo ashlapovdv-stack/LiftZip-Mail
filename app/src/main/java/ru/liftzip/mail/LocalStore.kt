@@ -191,13 +191,14 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             db.setTransactionSuccessful()
         }finally{db.endTransaction()}
     }
-    private fun putMessage(db: SQLiteDatabase,m: MailItem) {
+    private fun putMessage(db: SQLiteDatabase,m: MailItem): JSONObject {
         // List preview updates preserve the full body and HTML.
         val stored=if(m.previewOnly)db.rawQuery("SELECT data FROM messages WHERE id=?",arrayOf(m.id)).use{
             if(it.moveToFirst())JSONObject(it.getString(0))else null
         }else null
         val full=MailContent.forStorage(m,stored?.getString("body"),stored?.optString("htmlBody"),stored?.optInt("contentVersion")).let{it.copy(composer=if(m.previewOnly)stored?.optJSONObject("composer")?.let(ComposeCodec::decode)?:m.composer else m.composer,headers=m.headers?:stored?.optJSONObject("headers")?.let(ComposeCodec::headers),cacheBytes=if(it.contentCached)MailContent.bytes(it)else it.cacheBytes,cachedAt=it.cachedAt.takeIf{time->time>0}?:System.currentTimeMillis())}
         val row=encodeMessage(full)
+        val preview=encodeMessage(MailContent.preview(full))
         val values=ContentValues().apply {
             put("id",full.id)
             put("account_id",full.accountId)
@@ -205,11 +206,12 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
             put("message_date",full.date)
             put("source_draft_id",full.sourceDraftId)
             put("data",row.toString())
-            put("preview",encodeMessage(MailContent.preview(full)).toString())
+            put("preview",preview.toString())
             put("search_pending",0)
         }
         if(db.update("messages",values,"id=?",arrayOf(full.id))==0)db.insertOrThrow("messages",null,values)
         MailSearch.put(db,full.id,row)
+        return preview
     }
     @Synchronized fun removeMessage(id: String) { writableDatabase.delete("messages","id = ?",arrayOf(id)) }
     @Synchronized fun removeMessages(ids: Set<String>) {
@@ -240,23 +242,38 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "mail-v1.db", nul
         items: List<MailItem>,
         folder: ServerFolder,
         flagActions: List<MailAction>
-    ) {
+    ): List<MailItem> {
         val db = writableDatabase
         db.beginTransaction()
         try {
-            applyMessageChanges(db, previous, items)
+            val previews = buildList {
+                applyMessageChanges(db, previous, items) { preview ->
+                    add(decodeMessage(preview, preview = true))
+                }
+            }
             flagActions.forEach { putAction(db, it) }
             putFolder(db, folder)
             db.setTransactionSuccessful()
+            return previews
         } finally {
             db.endTransaction()
         }
     }
-    private fun applyMessageChanges(db: SQLiteDatabase, previous: List<MailItem>, items: List<MailItem>) {
+    private fun applyMessageChanges(
+        db: SQLiteDatabase,
+        previous: List<MailItem>,
+        items: List<MailItem>,
+        onWrite: ((JSONObject) -> Unit)? = null
+    ) {
         val old = previous.associateBy { it.id }
         val ids = items.map { it.id }.toSet()
         previous.filter { it.id !in ids }.forEach { db.delete("messages", "id = ?", arrayOf(it.id)) }
-        items.filter { old[it.id] != it }.forEach { putMessage(db, it) }
+        items.forEach { item ->
+            if (old[item.id] != item) {
+                val preview = putMessage(db, item)
+                onWrite?.invoke(preview)
+            }
+        }
     }
     @Synchronized fun putMessages(items: List<MailItem>) {
         val db=writableDatabase
