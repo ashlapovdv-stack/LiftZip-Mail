@@ -10,18 +10,22 @@ android {
         applicationId = "ru.liftzip.mail"
         minSdk = 26
         targetSdk = 36
-        versionCode = 54
-        versionName = "0.5.33"
+        versionCode = 55
+        versionName = "0.5.34"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-    buildTypes {
-        release { isMinifyEnabled = false }
     }
     signingConfigs.getByName("debug") {
         storeFile = rootProject.file("signing/debug.keystore")
         storePassword = "android"
         keyAlias = "androiddebugkey"
         keyPassword = "android"
+    }
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
     }
     sourceSets.getByName("androidTest").assets.srcDir("src/test/resources")
     buildFeatures { compose = true; buildConfig = true }
