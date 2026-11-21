@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -70,9 +71,11 @@ internal val DecorativeHeaderHeight=112.dp
     }
 }
 
-/** Fit scene artwork without zooming/cropping the business desk at unusual window ratios. */
+// The desk and laptop sit below the artwork's vertical midpoint.
+private val BusinessArtworkAlignment=BiasAlignment(horizontalBias=1f,verticalBias=0.42f)
+
 @Composable internal fun DecorativeArtwork(style: MailStyle,modifier: Modifier=Modifier) {
     Image(painterResource(style.artwork),null,modifier.background(style.palette.header),
-        contentScale=if(style==MailStyle.BUSINESS)ContentScale.Fit else ContentScale.Crop,
-        alignment=Alignment.CenterEnd)
+        contentScale=ContentScale.Crop,
+        alignment=if(style==MailStyle.BUSINESS)BusinessArtworkAlignment else Alignment.CenterEnd)
 }
