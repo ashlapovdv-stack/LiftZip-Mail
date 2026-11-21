@@ -912,8 +912,13 @@ class MailRepository(private val context: Context) {
             }catch(e: CancellationException){throw e}catch(e: Exception){listOf("${account.name}: ${friendlyError(e)}")}
         }}.awaitAll().flatten()
     }
+    private fun publishFolderState() {
+        state.value = state.value.copy(folders = db.folders())
+    }
+
     suspend fun syncFolder(accountId: String,path: String,older: Boolean=false)=withContext(Dispatchers.IO){folderLocks.computeIfAbsent(accountId+"|"+path){Mutex()}.withLock {
         var folder: ServerFolder?=null
+        val coroutine = currentCoroutineContext()
         try {
             coordinator.request(prepare={
                 val f=db.folders().find{it.accountId==accountId && it.path==path}?:return@request null
@@ -921,9 +926,14 @@ class MailRepository(private val context: Context) {
                 folder=f
                 val captured=capture(accountId)?:return@request null
                 val cache=state.value.messages.filter{it.accountId==accountId && FolderRules.remote(it) && it.remoteFolder==path}
-                db.putFolders(listOf(f.copy(syncing=true,error="")));refresh(messages=state.value.messages)
+                db.putFolders(listOf(f.copy(syncing=true,error="")))
+                publishFolderState()
                 captured.copy(cached=cache) to f
-            },fetch={(r,f)->runInterruptible{gateway.inbox(r.account,vault.open(accountId,r.account.secret),r.cached,loadOlder=older,pageSize=100,folderPath=f.path,role=f.role)}},commit={(r,f),page->
+            },fetch={(r,f)->runInterruptible {
+                gateway.inbox(r.account,vault.open(accountId,r.account.secret),r.cached,loadOlder=older,pageSize=100,folderPath=f.path,role=f.role) {
+                    coroutine.ensureActive()
+                }
+            }},commit={(r,f),page->
                 if(!current(r))return@request
                 val now=state.value.messages.filter{it.accountId==accountId && FolderRules.remote(it) && it.remoteFolder==path}
                 val byId=now.associateBy{it.id}
@@ -946,19 +956,32 @@ class MailRepository(private val context: Context) {
                 val latest=db.folders().find{it.accountId==accountId && it.path==path}?:return@request
                 val updated=latest.copy(total=page.history.total,unread=page.history.unread?:latest.unread,validity=page.validity?:0,hasOlder=page.history.hasOlder,
                     checkedAt=System.currentTimeMillis(),syncing=false,syncAll=latest.syncAll && page.history.hasOlder,error="")
-                db.applyFolderSync(now, merged, updated, flagActions)
+                val previews = db.applyFolderSync(now, merged, updated, flagActions)
                 if(f.validity>0 && f.validity!=page.validity)coordinator.invalidate(accountId)
-                val previews=if(flagActions.isEmpty() && now==merged) state.value.messages else null
-                refresh(messages=previews)
+                val mergedIds = merged.mapTo(hashSetOf()) { it.id }
+                val removedIds = byId.keys - mergedIds
+                if (previews.isEmpty() && removedIds.isEmpty() && flagActions.isEmpty()) {
+                    publishFolderState()
+                } else {
+                    val changed = previews.associateBy { it.id }.toMutableMap()
+                    val messages = buildList {
+                        for (item in state.value.messages) {
+                            if (item.id !in removedIds) add(changed.remove(item.id) ?: item)
+                        }
+                        addAll(changed.values)
+                    }
+                    refresh(messages=messages)
+                }
             })
         }catch(e: CancellationException){throw e}catch(e: Exception){coordinator.data {
             if (folder != null) db.folders().find { it.accountId == accountId && it.path == path }?.let { latest ->
                 db.putFolders(listOf(latest.copy(syncing = false, checkedAt = System.currentTimeMillis(), error = friendlyError(e))))
+                publishFolderState()
             }
-            refresh(messages=state.value.messages)
         }}finally{withContext(kotlinx.coroutines.NonCancellable){coordinator.data{
             db.folders().find{it.accountId==accountId && it.path==path && it.syncing}?.let{
-                db.putFolders(listOf(it.copy(syncing=false)));refresh(messages=state.value.messages)
+                db.putFolders(listOf(it.copy(syncing=false)))
+                publishFolderState()
             }
         }}}
     }}

@@ -154,7 +154,10 @@ class MailStoreDeviceTest {
         val db = LocalStore(c)
         val sent = ServerFolder("a", "Sent", "Sent", FolderRole.SENT, total = 1, validity = 7)
         val updated = sent.copy(total = 2, checkedAt = 100)
-        val existing = message().copy(localFolder = "remote-sent", remoteFolder = sent.path, uid = 10, validity = sent.validity)
+        val existing = message().copy(
+            localFolder = "remote-sent", remoteFolder = sent.path, uid = 10, validity = sent.validity,
+            body = "Keep this complete body. ".repeat(100), htmlBody = "<p>Original HTML</p>"
+        )
         val incoming = existing.copy(id = "new-sent", uid = 11)
         val flag = MailAction("sent-flag", "a", incoming.id, ActionKind.FLAGS, "{}")
         try {
@@ -175,12 +178,19 @@ class MailStoreDeviceTest {
             assertTrue(db.actions().isEmpty())
 
             db.writableDatabase.execSQL("DROP TRIGGER fail_folder_write")
-            db.applyFolderSync(listOf(existing), listOf(existing, incoming), updated, listOf(flag))
+            val cached = db.messages().single()
+            val changed = cached.copy(starred = true)
+            val changedPreviews = db.applyFolderSync(listOf(cached), listOf(changed, incoming), updated, listOf(flag))
+            assertEquals(setOf(existing.id, incoming.id), changedPreviews.map { it.id }.toSet())
+            assertEquals(db.messages().associateBy { it.id }, changedPreviews.associateBy { it.id })
+            assertTrue(changedPreviews.single { it.id == existing.id }.starred)
+            assertTrue(db.applyFolderSync(changedPreviews, changedPreviews, updated, emptyList()).isEmpty())
             db.close()
             LocalStore(c).use { reopened ->
                 assertEquals(listOf(updated), reopened.folders())
                 assertEquals(setOf(existing.id, incoming.id), reopened.messages().map { it.id }.toSet())
                 assertEquals(existing.body, reopened.message(existing.id)?.body)
+                assertEquals(existing.htmlBody, reopened.message(existing.id)?.htmlBody)
                 assertEquals(flag.id, reopened.actions().single().id)
             }
         } finally {
