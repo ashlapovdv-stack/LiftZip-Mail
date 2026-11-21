@@ -695,27 +695,52 @@ class MailRepository(private val context: Context) {
         val source=CacheRules.warmSources(messages.filter{it.accountId in active},priority,CacheRules.bodyBudget(storage.limitMb))
         return ContentCacheRules.pending(source,accounts,priority)
     }
-    suspend fun storageStatus()=withContext(Dispatchers.IO){coordinator.data {
-        val cached=db.messages().filter{FolderRules.remote(it) && it.contentCached}
-        storage=storage.copy(bodyBytes=cached.sumOf{it.cacheBytes},attachmentBytes=previews.bytes(),cachedBodies=cached.size,checkedAt=System.currentTimeMillis())
-        refresh(messages=state.value.messages)
-    }}
+    private fun updateStorageStatus(messages: List<MailItem>, evicted: Set<String>, attachmentBytes: Long) {
+        var bytes = 0L
+        var count = 0
+        for (message in messages) {
+            if (FolderRules.remote(message) && message.contentCached && message.id !in evicted) {
+                bytes += message.cacheBytes
+                count++
+            }
+        }
+        storage = storage.copy(bodyBytes = bytes, attachmentBytes = attachmentBytes, cachedBodies = count,
+            checkedAt = System.currentTimeMillis())
+    }
+    suspend fun storageStatus() = withContext(Dispatchers.IO) {
+        val attachmentBytes = previews.bytes()
+        coordinator.data {
+            updateStorageStatus(db.messages(), emptySet(), attachmentBytes)
+            state.value = state.value.copy(storage = storage)
+        }
+    }
     suspend fun setCacheLimit(value: Int)=withContext(Dispatchers.IO) {
         coordinator.data{storage=storage.copy(limitMb=CacheRules.normalized(value));settings.edit().putInt("cache-limit-mb",storage.limitMb).apply();refresh(messages=state.value.messages)}
         trimCache()
     }
-    suspend fun trimCache(clear: Boolean=false)=withContext(Dispatchers.IO) {
+    suspend fun trimCache(clear: Boolean=false): Unit = withContext(Dispatchers.IO) {
+        val fileBudget = coordinator.data { CacheRules.fileBudget(storage.limitMb) }
+        previews.trim(fileBudget, clear)
+        val attachmentBytes = previews.bytes()
         coordinator.data {
-            val protected=db.actions().map{it.messageId}.toSet()+state.value.messages.filter{it.localFolder in setOf("drafts","outbox")}.flatMap{listOfNotNull(it.sourceDraftId,it.forwarding?.messageId)}
-            val ids=CacheRules.evict(db.messages(),protected,CacheRules.bodyBudget(storage.limitMb),clear)
-            if(ids.isNotEmpty()) {
-                db.putMessages(ids.mapNotNull{db.message(it)}.map{it.copy(body=it.body.take(MailContent.PREVIEW_LENGTH),htmlBody="",contentVersion=0,contentCached=false,previewOnly=false)})
-                bodyFailures.keys.removeAll(ids);saveBodyFailures();refresh()
+            val messages = db.messages()
+            val draftSources = messages.filter { it.localFolder in setOf("drafts", "outbox") }
+                .flatMap { listOfNotNull(it.sourceDraftId, it.forwarding?.messageId) }
+            val protected = db.actions().map { it.messageId }.toSet() + draftSources
+            val ids = CacheRules.evict(messages, protected, CacheRules.bodyBudget(storage.limitMb), clear)
+            if (ids.isNotEmpty()) {
+                db.putMessages(ids.mapNotNull { db.message(it) }.map {
+                    it.copy(body = it.body.take(MailContent.PREVIEW_LENGTH), htmlBody = "", contentVersion = 0,
+                        contentCached = false, previewOnly = false)
+                })
+                bodyFailures.keys.removeAll(ids)
+                saveBodyFailures()
             }
+            updateStorageStatus(messages, ids, attachmentBytes)
+            if (ids.isEmpty()) state.value = state.value.copy(storage = storage)
+            else refresh()
         }
-        previews.trim(CacheRules.fileBudget(storage.limitMb),clear)
-        if(clear)db.compact()
-        storageStatus()
+        if (clear) db.compact()
     }
     suspend fun saveDraft(draft: ComposeDraft)=withContext(Dispatchers.IO) {
         coordinator.data {

@@ -15,7 +15,8 @@ object CacheRules {
     fun fileBudget(limitMb: Int)=if(limitMb==0)Long.MAX_VALUE else limitMb*1024L*1024*2/5
     fun evictable(m: MailItem,protected: Set<String>)=FolderRules.remote(m) && m.contentCached && !m.pendingDelete && m.id !in protected
     fun evict(messages: List<MailItem>,protected: Set<String>,budget: Long,clear: Boolean=false): Set<String> {
-        var used=messages.filter{FolderRules.remote(it) && it.contentCached}.sumOf{it.cacheBytes.coerceAtLeast(0)}
+        var used=messages.sumOf{if(FolderRules.remote(it) && it.contentCached)it.cacheBytes.coerceAtLeast(0)else 0L}
+        if(!clear && used<=budget)return emptySet()
         return buildSet {
             for(m in messages.filter{evictable(it,protected)}.sortedWith(compareBy<MailItem>{if(it.unread)1 else 0}.thenBy{it.cachedAt}.thenBy{it.date})) {
                 if(!clear && used<=budget)break

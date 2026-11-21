@@ -199,6 +199,38 @@ class MailStoreDeviceTest {
         }
     }
 
+    @Test fun coldCacheTrimKeepsDraftSourcesAndReportsTheRemainingBodies(): Unit = runBlocking {
+        val databaseContext = context()
+        val attachmentCache = File(databaseContext.getDatabasePath("mail-v1.db").parentFile, "cache")
+        val isolated = object : ContextWrapper(databaseContext) {
+            override fun getCacheDir(): File = attachmentCache
+        }
+        try {
+            val source = message().copy(id = "edited-remote", localFolder = "remote-drafts", remoteFolder = "Drafts", uid = 10, validity = 7)
+            val cached = message().copy(id = "cached-inbox", localFolder = "inbox", uid = 11, validity = 7)
+            val draft = message().copy(id = "local-draft", sourceDraftId = source.id)
+            LocalStore(isolated).use { db ->
+                db.putAccount(account())
+                db.putMessages(listOf(source, cached, draft))
+            }
+
+            val repository = MailRepository(isolated)
+            repository.trimCache(clear = true)
+
+            LocalStore(isolated).use { db ->
+                assertEquals(draft.body, db.message(draft.id)?.body)
+                assertEquals(source.body, db.message(source.id)?.body)
+                assertTrue(db.message(source.id)?.contentCached == true)
+                assertFalse(db.message(cached.id)?.contentCached ?: true)
+            }
+            val storage = repository.snapshot.value.storage
+            assertEquals(1, storage.cachedBodies)
+            assertEquals(MailContent.bytes(source), storage.bodyBytes)
+        } finally {
+            isolated.deleteDatabase("mail-v1.db")
+        }
+    }
+
     @Test fun folderDiscoveryRollsBackWhenRemovingAnObsoleteMessageFails() {
         val c=context()
         val removed=ServerFolder("a","Old","Old",FolderRole.OTHER)
