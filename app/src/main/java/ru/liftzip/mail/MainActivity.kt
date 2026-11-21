@@ -112,12 +112,16 @@ class MainActivity: ComponentActivity() {
         super.onStart()
     }
     override fun onStop() {
-        (application as MailApplication).logMailVisibility(false)
+        val mail = application as MailApplication
+        mail.startupFrameProbe.stop(window)
+        mail.logMailVisibility(false)
         super.onStop()
     }
     override fun onNewIntent(intent: Intent){super.onNewIntent(intent);setIntent(intent);handleNotification(intent)}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val refreshHz = if (Build.VERSION.SDK_INT >= 30) display?.refreshRate else null
+        (application as MailApplication).startupFrameProbe.start(window, refreshHz ?: 60f)
         edgeMailWindow()
         handleNotification(intent)
         setContent {
@@ -243,6 +247,10 @@ private val Paper=Color(0xFFF8F9F6)
         else {draft=null;goInbox()}
     },onHome={systemInbox()})
     val openingCachedInbox=s.startupInbox && route=="inbox" && folder==MailFolder.INBOX && currentAccount==null && serverPath==null
+    SideEffect {
+        (context.applicationContext as MailApplication).startupFrameProbe.markInbox(openingCachedInbox,
+            s.loaded && route == "inbox" && s.accounts.isNotEmpty())
+    }
     if(route!="inbox" || (!s.loaded && !openingCachedInbox) || s.accounts.isEmpty())SystemBarIcons(forceLightSurface=route=="compose")
     Scaffold(modifier=Modifier.onSizeChanged{rootHeight=it.height},snackbarHost={
         SnackbarHost(snack,Modifier.fillMaxWidth().padding(start=16.dp,end=16.dp,bottom=noticeBottom)){ServiceSnackbar(it)}

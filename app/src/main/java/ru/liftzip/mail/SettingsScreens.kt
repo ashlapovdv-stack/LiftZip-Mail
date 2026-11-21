@@ -118,7 +118,22 @@ import java.util.Locale
 }
 
 @Composable internal fun DiagnosticsScreen(s: UiState,backgroundEvents: List<BackgroundEvent>,onBack: ()->Unit,onPermission: ()->Unit,onTestNotification: ()->Unit,onCheck: ()->Unit,onTestBackground: ()->Unit,onRestore: ()->Unit,onRetryBodies: ()->Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val startup = (context.applicationContext as MailApplication).startupFrameProbe
     SettingsPage("Диагностика",onBack) {
+        Text("Плавность запуска", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        OutlinedButton(onClick = startup::arm, enabled = !startup.armed) {
+            Text(if (startup.armed) "Замер включён" else "Записать следующий запуск")
+        }
+        if (startup.armed) Text("Полностью закройте Почту, откройте её снова и сразу прокрутите «Входящие». Через 8 секунд вернитесь сюда.",
+            style = MaterialTheme.typography.bodySmall)
+        if (startup.report.isNotBlank()) {
+            TextButton(onClick = {
+                val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Диагностика запуска", startup.report))
+            }) { Text("Скопировать замер запуска") }
+        }
+        HorizontalDivider()
         BackgroundSettings(s,backgroundEvents,onPermission,onTestNotification,onCheck,onTestBackground,onRestore,onRetryBodies)
         HorizontalDivider(Modifier.padding(vertical=8.dp))
         Text("Проверки ящиков",style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold)

@@ -41,6 +41,7 @@ data class SyncResult(val newUnread: Int, val errors: List<String>, val dnsFaile
 class MailApplication : Application() {
     val repository by lazy { MailRepository(this) }
     val fastMail by lazy {FastMailController(this)}
+    internal val startupFrameProbe by lazy { StartupFrameProbe(this) }
     val processToken=UUID.randomUUID().toString()
     private val actions=BodyWarmupSignals()
     private val scope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+Dispatchers.IO)
