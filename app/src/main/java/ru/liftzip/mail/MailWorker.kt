@@ -53,7 +53,7 @@ class MailWorker(context: Context,params: WorkerParameters): CoroutineWorker(con
                 return Result.success()
             }
             repo.backgroundStarted(token,if(test)"test" else "auto")
-            val result=repo.sync(warmBodies=false)
+            val result=repo.sync(warmBodies=false,notificationPreviews=MailNotifications.access(applicationContext).canPost)
             val retry=NotificationRules.shouldRetry(result)
             repo.backgroundFinished(token,if(retry)"retry" else "success",result.errors.joinToString("\n"),result.newUnread)
             checked=true

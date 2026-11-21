@@ -28,13 +28,16 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
 
 class DeliveryUncertainException : Exception("Сервер не подтвердил результат отправки. Проверьте почту получателя или отправленные на сервере перед повторной отправкой.")
 class ServerCopyUnconfirmedException: java.io.IOException("Сервер пока не подтвердил сохранение копии. Проверка будет повторена без повторной отправки письма.")
 class MailConnectionException(val stage: String, val host: String, val port: Int, cause: Exception) : Exception(cause)
 
 class MailGateway(private val context: Context,private val sslSocketFactory: javax.net.ssl.SSLSocketFactory?=null) {
-    private fun session(a: MailAccount,fast: Boolean=false,watchFactory: javax.net.ssl.SSLSocketFactory?=null): Session {
+    private fun session(a: MailAccount,fast: Boolean=false,watchFactory: javax.net.ssl.SSLSocketFactory?=null,fetchSize: Int=65_536): Session {
         if(a.authKind==AuthKind.GOOGLE)AuthRules.validateGoogle(a)?.let{error(it)}
         val imap=if(a.imapStartTls)"imap" else "imaps"
         val p=Properties().apply {
@@ -44,7 +47,7 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
             (watchFactory?:sslSocketFactory)?.let{put("mail.$imap.ssl.socketFactory",it)}
             setProperty("mail.$imap.peek","true")
             setProperty("mail.$imap.partialfetch","true")
-            setProperty("mail.$imap.fetchsize","65536")
+            setProperty("mail.$imap.fetchsize",fetchSize.toString())
             if(a.imapStartTls){setProperty("mail.imap.starttls.enable","true");setProperty("mail.imap.starttls.required","true")}
             setProperty("mail.smtp.auth","true")
             if(a.authKind==AuthKind.GOOGLE) {
@@ -109,48 +112,99 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
         pageSize: Int=InboxPaging.PAGE_SIZE,folderPath: String="INBOX",role: FolderRole=FolderRole.INBOX,checkCancelled: ()->Unit={}): InboxPage = store(a,password,fast=!loadOlder).use { store->
         val folder=store.getFolder(folderPath) as IMAPFolder
         folder.open(Folder.READ_ONLY)
+        try { inboxPage(a,folder,cached,loadOlder,pageSize,folderPath,role,checkCancelled) }
+        finally { folder.close(false) }
+    }
+
+    suspend fun inboxWithNotificationPreviews(a: MailAccount,password: String,cached: List<MailItem>,cursor: ArrivalCursor): InboxPage {
+        val reader=IdleConnection(sslSocketFactory?:javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
+        val connection=session(a,fast=true,watchFactory=reader.factory,fetchSize=NotificationPreview.READ_BYTES)
+            .getStore(if(a.imapStartTls)"imap" else "imaps")
+        var folder: IMAPFolder?=null
         try {
-            val count=folder.messageCount
-            if(count==0)return@use InboxPage(emptyList(),InboxHistory(0,false,0),folder.uidValidity)
-            // UID, unlike sequence number, survives arrivals and deletions between sessions.
-            val sameFolder=cached.filter{it.validity==folder.uidValidity && it.uid>0 && it.remoteFolder.equals(folderPath,true)}
-            val validCache=sameFolder.filter{role!=FolderRole.INBOX || it.localFolder=="inbox"}
-            val oldestUid=validCache.minOfOrNull{it.uid}
-            // History pages fetch only the next batch, not all previously downloaded bodies/headers.
-            val retained=if(oldestUid==null)emptyList() else if(loadOlder) {
-                folder.getMessageByUID(oldestUid)?.let{listOf(it)} ?: folder.getMessagesByUID(oldestUid,UIDFolder.LASTUID)
-                    .filter{folder.getUID(it)>=oldestUid}.take(1)
-            } else folder.getMessagesByUID(oldestUid,UIDFolder.LASTUID).filter{folder.getUID(it)>=oldestUid}
-            val messages=if(retained.isEmpty()) {
-                val range=InboxPaging.latest(count,pageSize)!!
-                folder.getMessages(range.first,range.last).toList()
-            } else if(loadOlder) {
-                val range=InboxPaging.older(retained.minOf{it.messageNumber},pageSize)
-                    ?:return@use InboxPage(emptyList(),InboxHistory(count,false),folder.uidValidity)
-                folder.getMessages(range.first,range.last).toList()
-            } else retained
-            val cachedByUid=sameFolder.associateBy { it.uid }
-            folder.fetch(messages.toTypedArray(),FetchProfile().apply {add(FetchProfile.Item.FLAGS);add(UIDFolder.FetchProfileItem.UID)})
-            val unknown=messages.filter{cachedByUid[folder.getUID(it)]?.internetMessageId.isNullOrBlank()}
-            if(unknown.isNotEmpty())folder.fetch(unknown.toTypedArray(),FetchProfile().apply{add(FetchProfile.Item.ENVELOPE)})
-            val items=messages.map { m->
-                checkCancelled()
-                (m as? IMAPMessage)?.setPeek(true)
-                val uid=folder.getUID(m)
-                val existing=cachedByUid[uid]
-                if(!loadOlder && existing!=null)return@map existing.copy(internetMessageId=existing.internetMessageId.ifBlank{(m as? MimeMessage)?.messageID.orEmpty()},localFolder=FolderRules.local(role),unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),answered=existing.answered || m.isSet(Flags.Flag.ANSWERED),forwarded=existing.forwarded || m.flags.contains("\$Forwarded"))
-                val reused=existing?.takeIf{it.contentCached}
-                // Pagination must advance even if a particular MIME body cannot be read.
-                val content=if(reused!=null)DecodedMail(reused.body,reused.attachments) else DecodedMail("",emptyList())
-                if(existing!=null)return@map existing.copy(localFolder=FolderRules.local(role),body=content.text,attachments=content.attachments,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),answered=existing.answered || m.isSet(Flags.Flag.ANSWERED),forwarded=existing.forwarded || m.flags.contains("\$Forwarded"),previewOnly=reused?.previewOnly?:false,contentCached=reused!=null)
-                val from=m.from?.firstOrNull() as? InternetAddress
-                MailItem(FolderRules.id(a.id,folderPath,folder.uidValidity,uid),a.id,uid,folder.uidValidity,folderPath,from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
-                    HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:(if(role==FolderRole.DRAFTS)"" else "Без темы"),content.text,
-                    (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false,localFolder=FolderRules.local(role),internetMessageId=(m as? MimeMessage)?.messageID.orEmpty(),answered=m.isSet(Flags.Flag.ANSWERED),forwarded=m.flags.contains("\$Forwarded"),cc=HeaderText.addresses(m.getRecipients(Message.RecipientType.CC)))
+            val page=withTimeout(30_000) {
+                val coroutine=currentCoroutineContext()
+                reader.call {
+                    GoogleMailAuth.withCredential(context,a,password){connection.connect(a.imapHost,a.imapPort,a.username,it)}
+                    val inbox=connection.getFolder("INBOX") as IMAPFolder
+                    folder=inbox
+                    inbox.open(Folder.READ_ONLY)
+                    inboxPage(a,inbox,cached,false,InboxPaging.PAGE_SIZE,"INBOX",FolderRole.INBOX){coroutine.ensureActive()}
+                }
             }
-            val unread=if(loadOlder)null else folder.unreadMessageCount.takeIf{it>=0}
-            InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1,unread),folder.uidValidity)
-        } finally { folder.close(false) }
+            val candidates=NotificationPreview.candidates(page,cursor)
+            if(candidates.isEmpty())return page
+
+            // Keep the fetched envelope page if preview I/O stalls. Cancellation closes the
+            // socket so a blocked IMAP read cannot hold the arrival notification.
+            val snippets=java.util.concurrent.ConcurrentHashMap<String,String>()
+            withTimeoutOrNull(2_000) {
+                val coroutine=currentCoroutineContext()
+                reader.call {
+                    val inbox=requireNotNull(folder)
+                    for(item in candidates) {
+                        coroutine.ensureActive()
+                        try {
+                            val remote=inbox.getMessageByUID(item.uid) as? IMAPMessage ?: continue
+                            remote.setPeek(true)
+                            NotificationPreview.read(remote){coroutine.ensureActive()}.takeIf{it.isNotBlank()}
+                                ?.let{snippets[item.id]=it}
+                        }catch(e: CancellationException){throw e}
+                        catch(_: FolderClosedException){break}
+                        catch(_: StoreClosedException){break}
+                        catch(_: Exception){/* The existing body worker can retry this item. */}
+                    }
+                }
+            }
+            return page.copy(messages=page.messages.map{item->snippets[item.id]?.let{item.copy(notificationPreview=it)}?:item})
+        }finally{
+            reader.close()
+            withContext(NonCancellable+Dispatchers.IO){runCatching{folder?.forceClose()};runCatching{connection.close()}}
+        }
+    }
+
+    private fun inboxPage(a: MailAccount,folder: IMAPFolder,cached: List<MailItem>,loadOlder: Boolean,pageSize: Int,
+        folderPath: String,role: FolderRole,checkCancelled: ()->Unit): InboxPage {
+        val count=folder.messageCount
+        if(count==0)return InboxPage(emptyList(),InboxHistory(0,false,0),folder.uidValidity)
+        // UID, unlike sequence number, survives arrivals and deletions between sessions.
+        val sameFolder=cached.filter{it.validity==folder.uidValidity && it.uid>0 && it.remoteFolder.equals(folderPath,true)}
+        val validCache=sameFolder.filter{role!=FolderRole.INBOX || it.localFolder=="inbox"}
+        val oldestUid=validCache.minOfOrNull{it.uid}
+        // History pages fetch only the next batch, not all previously downloaded bodies/headers.
+        val retained=if(oldestUid==null)emptyList() else if(loadOlder) {
+            folder.getMessageByUID(oldestUid)?.let{listOf(it)} ?: folder.getMessagesByUID(oldestUid,UIDFolder.LASTUID)
+                .filter{folder.getUID(it)>=oldestUid}.take(1)
+        } else folder.getMessagesByUID(oldestUid,UIDFolder.LASTUID).filter{folder.getUID(it)>=oldestUid}
+        val messages=if(retained.isEmpty()) {
+            val range=InboxPaging.latest(count,pageSize)!!
+            folder.getMessages(range.first,range.last).toList()
+        } else if(loadOlder) {
+            val range=InboxPaging.older(retained.minOf{it.messageNumber},pageSize)
+                ?:return InboxPage(emptyList(),InboxHistory(count,false),folder.uidValidity)
+            folder.getMessages(range.first,range.last).toList()
+        } else retained
+        val cachedByUid=sameFolder.associateBy { it.uid }
+        folder.fetch(messages.toTypedArray(),FetchProfile().apply {add(FetchProfile.Item.FLAGS);add(UIDFolder.FetchProfileItem.UID)})
+        val unknown=messages.filter{cachedByUid[folder.getUID(it)]?.internetMessageId.isNullOrBlank()}
+        if(unknown.isNotEmpty())folder.fetch(unknown.toTypedArray(),FetchProfile().apply{add(FetchProfile.Item.ENVELOPE)})
+        val items=messages.map { m->
+            checkCancelled()
+            (m as? IMAPMessage)?.setPeek(true)
+            val uid=folder.getUID(m)
+            val existing=cachedByUid[uid]
+            if(!loadOlder && existing!=null)return@map existing.copy(internetMessageId=existing.internetMessageId.ifBlank{(m as? MimeMessage)?.messageID.orEmpty()},localFolder=FolderRules.local(role),unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),answered=existing.answered || m.isSet(Flags.Flag.ANSWERED),forwarded=existing.forwarded || m.flags.contains("\$Forwarded"))
+            val reused=existing?.takeIf{it.contentCached}
+            // Pagination must advance even if a particular MIME body cannot be read.
+            val content=if(reused!=null)DecodedMail(reused.body,reused.attachments) else DecodedMail("",emptyList())
+            if(existing!=null)return@map existing.copy(localFolder=FolderRules.local(role),body=content.text,attachments=content.attachments,unread=!m.isSet(Flags.Flag.SEEN),starred=m.isSet(Flags.Flag.FLAGGED),answered=existing.answered || m.isSet(Flags.Flag.ANSWERED),forwarded=existing.forwarded || m.flags.contains("\$Forwarded"),previewOnly=reused?.previewOnly?:false,contentCached=reused!=null)
+            val from=m.from?.firstOrNull() as? InternetAddress
+            MailItem(FolderRules.id(a.id,folderPath,folder.uidValidity,uid),a.id,uid,folder.uidValidity,folderPath,from?.personal?:from?.address?:"Без отправителя",from?.address.orEmpty(),
+                HeaderText.addresses(m.getRecipients(Message.RecipientType.TO)),m.subject?:(if(role==FolderRole.DRAFTS)"" else "Без темы"),content.text,
+                (m.receivedDate?:m.sentDate)?.time?:0L,!m.isSet(Flags.Flag.SEEN),m.isSet(Flags.Flag.FLAGGED),attachments=content.attachments,previewOnly=false,contentCached=false,localFolder=FolderRules.local(role),internetMessageId=(m as? MimeMessage)?.messageID.orEmpty(),answered=m.isSet(Flags.Flag.ANSWERED),forwarded=m.flags.contains("\$Forwarded"),cc=HeaderText.addresses(m.getRecipients(Message.RecipientType.CC)))
+        }
+        val unread=if(loadOlder)null else folder.unreadMessageCount.takeIf{it>=0}
+        return InboxPage(items,InboxHistory(count,messages.minOf{it.messageNumber}>1,unread),folder.uidValidity)
     }
     fun unread(a: MailAccount,password: String,cached: List<MailItem>,checkCancelled: ()->Unit={}): UnreadPage=store(a,password,fast=true).use{store->
         val folder=store.getFolder("INBOX") as IMAPFolder

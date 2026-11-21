@@ -19,7 +19,7 @@ data class MailAccount(
     val colorSlot: Int = -1
 )
 
-data class Attachment(val path: String, val name: String, val mime: String, val size: Int,val contentId: String="")
+data class Attachment(val path: String, val name: String, val mime: String, val size: Int,val contentId: String="",val explicitAttachment: Boolean=false)
 data class OutgoingFile(val uri: String, val name: String, val mime: String, val size: Long,val contentId: String="") : java.io.Serializable
 data class OpenedAttachment(val uri: String, val name: String, val mime: String) : java.io.Serializable
 data class InboxHistory(val total: Int? = null, val hasOlder: Boolean = true, val unread: Int? = null)
@@ -36,7 +36,8 @@ data class MailItem(
     val forwarding: ForwardPlan? = null, val internetMessageId: String="", val sourceDraftId: String?=null, val editRevision: Long=0, val pendingDelete: Boolean=false, val cacheBytes: Long=0, val cachedAt: Long=0,
     val htmlBody: String="", val contentVersion: Int=0,
     val answered: Boolean=false, val forwarded: Boolean=false, val responseTo: String?=null, val responseKind: String="", val cc: String="", val bcc: String="",
-    val headers: MessageHeaders?=null,val composer: ComposerSnapshot?=null
+    val headers: MessageHeaders?=null,val composer: ComposerSnapshot?=null,
+    val notificationPreview: String=""
 )
 
 data class ComposeDraft(

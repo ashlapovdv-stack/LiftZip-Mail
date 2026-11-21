@@ -37,7 +37,8 @@ object ReaderDocuments {
 
 /** Source/version keyed analysis; cached hits never need to parse HTML on the UI thread. */
 class ReaderAnalysisCache(private val budget: Long=4L*1024*1024,private val limit: Int=8) {
-    data class Key(val identity: String,val body: String,val html: String,val contentVersion: Int,val parserVersion: Int=2)
+    data class Key(val identity: String,val body: String,val html: String,val contentVersion: Int,val parserVersion: Int=2,
+        val attachments: List<Attachment> = emptyList())
     private data class Entry(val result: Pair<QuotedConversation,HtmlMail.HistoryAnalysis>,val bytes: Long)
     private val entries=LinkedHashMap<Key,Entry>(8,0.75f,true)
     private var bytes=0L
@@ -45,7 +46,7 @@ class ReaderAnalysisCache(private val budget: Long=4L*1024*1024,private val limi
     fun prepare(key: Key): Pair<QuotedConversation,HtmlMail.HistoryAnalysis> {
         peek(key)?.let{return it}
         val conversation=ConversationText.parse(key.body)
-        val history=HtmlMail.analyzeHistory(key.html,conversation)
+        val history=HtmlMail.analyzeHistory(key.html,conversation,key.attachments)
         val result=(if(history.separateHistory)conversation else conversation.copy(messages=emptyList())) to history
         val size=6L*key.body.length+4L*key.html.length+2L*(history.currentHtml.length+history.quotedHtml.length)
         synchronized(this) {
