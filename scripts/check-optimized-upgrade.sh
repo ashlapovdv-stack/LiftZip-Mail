@@ -6,11 +6,13 @@ activity="$package/.MainActivity"
 baseline=upgrade-baseline-54/app-debug.apk
 optimized=app/build/outputs/apk/release/app-release.apk
 report=optimized-upgrade-check.txt
+trap 'adb logcat -d -s AndroidRuntime:E ActivityManager:W' ERR
 
 adb install -r "$baseline"
 adb shell am start -W -n "$activity"
 adb shell run-as "$package" mkdir -p files
 adb shell run-as "$package" touch files/upgrade-probe
+user_dir=$(adb shell run-as "$package" pwd | tr -d '\r')
 adb shell am force-stop "$package"
 adb logcat -c
 
@@ -22,10 +24,9 @@ if grep -Eq 'flags=\[[^]]*DEBUGGABLE' optimized-package.txt; then
     echo "The optimized app must not be debuggable." >&2
     exit 1
 fi
-adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb shell am instrument -w -e verifyOptimizedUpgrade true -e class ru.liftzip.mail.OptimizedUpgradeDeviceTest \
-    "$package.test/androidx.test.runner.AndroidJUnitRunner" | tee -a "$report"
-grep -Fx "OK (1 test)" "$report"
+adb root
+adb wait-for-device
+adb shell test -f "$user_dir/files/upgrade-probe"
 adb shell am start -W -n "$activity" | tee -a "$report"
 grep -Fx "Status: ok" "$report"
 pid=$(adb shell pidof "$package" | tr -d '\r')
