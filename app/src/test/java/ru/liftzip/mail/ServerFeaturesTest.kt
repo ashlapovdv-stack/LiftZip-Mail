@@ -49,6 +49,15 @@ class ServerFeaturesTest {
         val archive=mail("archive",folder="remote-archive").copy(internetMessageId=inbox.internetMessageId)
         assertEquals(listOf(inbox),FolderRules.deduplicate(listOf(archive,inbox)))
     }
+    @Test fun movingAFavoriteToTrashDoesNotRevealItsStarredTrashCopy() {
+        val inbox=mail().copy(starred=true,internetMessageId="<one@example.com>")
+        val trash=inbox.copy(id="trash",localFolder="remote-trash",remoteFolder="Trash")
+        val other=inbox.copy(id="other",accountId="b")
+        val state=ActionRules.overlay(listOf(inbox,trash,other),listOf(action(ActionKind.TRASH)))
+
+        assertEquals(listOf(other),MailRules.filter(state,null,MailFolder.STARRED,""))
+        assertEquals(listOf(trash),FolderRules.display(state).filter{it.remoteFolder=="Trash"})
+    }
     @Test fun anotherMailboxOrMissingMessageIdIsNotMergedAway() {
         assertEquals(2,FolderRules.deduplicate(listOf(mail("one"),mail("two"))).size)
         val one=mail().copy(internetMessageId="<one@example.com>")

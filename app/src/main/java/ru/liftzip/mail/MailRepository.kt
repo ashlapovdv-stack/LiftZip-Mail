@@ -148,7 +148,17 @@ class MailRepository(private val context: Context) {
             AccountColorSlots.assign(accounts).zip(accounts).filter{(assigned,old)->assigned.colorSlot!=old.colorSlot}
                 .forEach{(assigned,_)->db.updateAccount(assigned,resetInbox=false)}
             val process=(context.applicationContext as MailApplication).processToken
-            db.actions().forEach{a->val recovered=ActionRules.recovered(a,process);if(recovered!=a)db.putAction(recovered)}
+            db.actions().forEach { action ->
+                val recovered=ActionRules.recovered(action,process)
+                val failedInTrash=action.kind==ActionKind.TRASH &&
+                    action.status=="failed" && action.error==TrashRules.ALREADY_IN_TRASH
+                val cached=if(action.kind==ActionKind.TRASH && (failedInTrash || recovered.status=="pending"))
+                    db.message(action.messageId) else null
+                if(failedInTrash || cached?.let(FolderRules::trash)==true) {
+                    val restored=cached?.takeIf{it.pendingDelete}?.copy(pendingDelete=false)
+                    db.finishAction(action,items=listOfNotNull(restored))
+                }else if(recovered!=action)db.putAction(recovered)
+            }
             try {
                 // The coordinator's full snapshot remains authoritative for sync and notifications.
                 // Publish only the indexed first page to the UI while the complete snapshot is read.
@@ -431,7 +441,8 @@ class MailRepository(private val context: Context) {
     }
     suspend fun deleteMessages(ids: Set<String>): DeleteResult=withContext(Dispatchers.IO) {
         val result=coordinator.data {
-            val chosen=state.value.messages.filter{it.id in ids && !it.pendingDelete}
+            val selected=state.value.messages.filter{it.id in ids && !it.pendingDelete}
+            val chosen=selected.filterNot(FolderRules::trash)
             val remote=chosen.filter{FolderRules.remote(it) || it.uid==0L && it.localFolder=="sent"}
             val local=chosen.filter{TrashRules.local(it) && it.localFolder!="sent"}
             val actions=remote.map{actionFor(it,ActionKind.TRASH)}.toMutableList()
@@ -450,7 +461,11 @@ class MailRepository(private val context: Context) {
                 edit.apply()
             }
             refresh()
-            DeleteResult((remote+local).map{it.id}.toSet(),if(chosen.size!=remote.size+local.size)listOf("Дождитесь окончания отправки, чтобы удалить оставшиеся письма.")else emptyList())
+            val errors=buildList {
+                if(selected.size!=chosen.size)add(TrashRules.ALREADY_IN_TRASH)
+                if(chosen.size!=remote.size+local.size)add("Дождитесь окончания отправки, чтобы удалить оставшиеся письма.")
+            }
+            DeleteResult((remote+local).map{it.id}.toSet(),errors)
         }
         wakeActions();result
     }

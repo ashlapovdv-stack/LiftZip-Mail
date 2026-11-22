@@ -285,7 +285,9 @@ class MailGateway(private val context: Context,private val sslSocketFactory: jav
                 connection.getFolder(name)
             }
             val folder=connection.getFolder(messages.first().remoteFolder) as IMAPFolder
-            require(!folder.fullName.equals(target.fullName,true)){"Письма уже находятся в папке «$title»."}
+            require(!folder.fullName.equals(target.fullName,true)){
+                if(role==FolderRole.TRASH)TrashRules.ALREADY_IN_TRASH else "Письма уже находятся в папке «$title»."
+            }
             runInterruptible{folder.open(Folder.READ_WRITE)}
             try {
                 require(messages.all{it.accountId==a.id && it.remoteFolder==folder.fullName && it.validity==folder.uidValidity}){"Папка изменилась. Обновите список писем."}

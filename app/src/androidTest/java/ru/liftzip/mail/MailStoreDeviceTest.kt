@@ -512,6 +512,30 @@ class MailStoreDeviceTest {
             assertEquals(original.body,db.message(original.id)?.body)
         }finally{db.close();c.deleteDatabase("mail-v1.db")}
     }
+    @Test fun openingTheMailboxClearsFailedMovesThatAlreadyReachedTrash()=kotlinx.coroutines.runBlocking {
+        val c=context();val db=LocalStore(c)
+        try {
+            db.putAccount(account())
+            val trash=message().copy(uid=12,validity=7,localFolder="remote-trash",remoteFolder="Trash",starred=true)
+            val inbox=trash.copy(id="inbox",uid=13,localFolder="inbox",remoteFolder="INBOX")
+            val failed=MailAction("TRASH:${trash.id}","a",trash.id,ActionKind.TRASH,db.encodeMessage(trash).toString(),
+                status="failed",error="Письма уже находятся в папке «Корзина».")
+            val unrelated=failed.copy(id="TRASH:${inbox.id}",messageId=inbox.id,payload=db.encodeMessage(inbox).toString(),
+                error="Папка изменилась. Обновите список писем.")
+            db.applyActions(listOf(trash.copy(pendingDelete=true),inbox),actions=listOf(failed,unrelated))
+
+            val repo=MailRepository(c);repo.load()
+            assertEquals(listOf(unrelated),db.actions())
+            assertEquals(trash.body,db.message(trash.id)?.body)
+            assertFalse(db.message(trash.id)!!.pendingDelete)
+            assertEquals(listOf(inbox.id),MailRules.filter(repo.snapshot.value.messages,null,MailFolder.STARRED,"").map{it.id})
+
+            val repeated=repo.deleteMessages(setOf(trash.id))
+            assertTrue(repeated.removed.isEmpty())
+            assertEquals(listOf(unrelated),db.actions())
+            assertNotNull(db.message(trash.id))
+        }finally{db.close();c.deleteDatabase("mail-v1.db")}
+    }
     @Test fun accountColorsAndResponseMarkersSurviveDatabaseReopenAndOldRecordsRemainReadable() {
         val c=context();var db=LocalStore(c)
         try {
