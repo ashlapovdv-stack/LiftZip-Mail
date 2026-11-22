@@ -147,6 +147,9 @@ object HtmlMail {
             body.childNodes().toList().forEach{wrapper.appendChild(it)}
             body.appendChild(wrapper)
         }
+        doc.select("a[href^=//]").forEach { anchor->
+            link("https:"+anchor.attr("href"))?.let{anchor.attr("href",it)}
+        }
         val safe=Cleaner(safelist()).clean(doc)
         safe.outputSettings().prettyPrint(false)
         safe.select("a").forEach{a->val url=link(a.attr("href"));if(url==null)a.removeAttr("href")else a.attr("href",url)}
@@ -312,9 +315,30 @@ object HtmlMail {
             val preceding=precedingAttribution(boundary)
             val precedingText=preceding?.let{historyText(it.html)}.orEmpty()
             val units=conversation.messages
-            val attribution=preceding?.takeIf{
+            var attribution=preceding?.takeIf{
                 boundary.hasClass("gmail_quote") && it.singleElement?.hasClass("gmail_attr")==true || attributionHeader(precedingText) ||
                     it.singleElement?.let{element->senderLinkAttribution(element,units.first())}==true
+            }
+            var historyBoundary=boundary
+            // A mail editor can put the attribution before a wrapper that contains
+            // only the quote. Cross that wrapper only when the header agrees with MIME.
+            if(attribution==null) {
+                var child=boundary
+                for(level in 0 until 4) {
+                    val parent=child.parent()?:break
+                    if(parent.normalName() !in setOf("div","section") || parent.children().singleOrNull()!==child ||
+                        parent.textNodes().any{it.text().isNotBlank()})break
+                    val wrappedHeader=precedingAttribution(parent)
+                    if(wrappedHeader!=null && attributionHeader(historyText(wrappedHeader.html))) {
+                        val expected=normalizedAttribution(units.first().attribution.orEmpty())
+                        if(expected!=normalizedAttribution(historyText(wrappedHeader.html)) &&
+                            expected!=normalizedAttribution(text(wrappedHeader.html)))break
+                        attribution=wrappedHeader
+                        historyBoundary=parent
+                        break
+                    }
+                    child=parent
+                }
             }
             val bodies=setOf(normalizedHistoryText(historyText(boundary.outerHtml())),normalizedHistoryText(text(boundary.outerHtml())))
             val attributed=attribution?.let{setOf(normalizedAttribution(historyText(it.html)),normalizedAttribution(text(it.html)))}
@@ -392,13 +416,13 @@ object HtmlMail {
             if(providers.isEmpty() && attribution==null &&
                 !attributionHeader(historyText(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue
             val shortened=doc.clone()
-            val path=doc.getAllElements().indexOf(boundary)
+            val path=doc.getAllElements().indexOf(historyBoundary)
             val attributionPaths=attribution?.nodes?.map{nodePath(doc,it)}.orEmpty()
             val nodes=shortened.getAllElements().toList()
             val attributionNodes=attributionPaths.map{path->resolveNode(shortened,path)}
             attributionNodes.forEach{it.remove()};nodes[path].remove()
             if(text(shortened.outerHtml()).isBlank())return keep(HistoryReason.EMPTY_CURRENT)
-            val richHistory=attribution?.html.orEmpty()+boundary.outerHtml()
+            val richHistory=attribution?.html.orEmpty()+historyBoundary.outerHtml()
             // Preserve scoped stylesheet rules for the independently rendered citation.
             val styles=doc.select("style").joinToString(""){it.outerHtml()}
             return HistoryAnalysis(shortened.outerHtml(),true,HistoryReason.SEPARATED,styles+richHistory)

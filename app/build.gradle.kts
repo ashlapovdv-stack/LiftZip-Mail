@@ -10,8 +10,8 @@ android {
         applicationId = "ru.liftzip.mail"
         minSdk = 26
         targetSdk = 36
-        versionCode = 60
-        versionName = "0.5.39"
+        versionCode = 61
+        versionName = "0.5.40"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs.getByName("debug") {

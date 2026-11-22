@@ -10,30 +10,30 @@ import org.jsoup.select.NodeVisitor
 internal object QuoteStructure {
     data class Run(val depth: Int,val text: String)
     private val blocks=setOf("br","p","div","tr","li","blockquote","h1","h2","h3","h4","h5","h6","hr")
-    private class Runs(private val header: (String)->Boolean) {
+    private class Runs(private val header: (String)->Boolean,private val normalizeHeader: (String)->String) {
         val values=mutableListOf<Run>()
         fun line(source: String,structuralDepth: Int) {
             var text=source.trim();var depth=structuralDepth
             while(text.startsWith('>')){depth++;text=text.drop(1).trimStart()}
             text=text.replace('\u00a0',' ').replace("\uFFFC","").replace(Regex("[\\s\\u200B\\uFEFF]+")," ").trim()
             if(text.isEmpty())return
-            if(header(text))text=text.replace(Regex("\\s+:$"),":")
+            if(header(text))text=normalizeHeader(text.replace(Regex("\\s+:$"),":"))
             val previous=values.lastOrNull()
             if(previous?.depth==depth)values[values.lastIndex]=previous.copy(text=previous.text+" "+text)
             else values+=Run(depth,text)
         }
     }
-    fun plain(source: String,header: (String)->Boolean): List<Run> {
-        val runs=Runs(header)
+    fun plain(source: String,header: (String)->Boolean,normalizeHeader: (String)->String={it}): List<Run> {
+        val runs=Runs(header,normalizeHeader)
         source.lineSequence().forEach{runs.line(it,0)}
         return runs.values
     }
-    fun html(source: Element,header: (String)->Boolean,isQuote: (Element)->Boolean,linkTargets: Boolean=false): List<Run> {
+    fun html(source: Element,header: (String)->Boolean,isQuote: (Element)->Boolean,linkTargets: Boolean=false,normalizeHeader: (String)->String={it}): List<Run> {
         val root=source.clone()
         root.select("head,style,script,noscript,[hidden]").remove()
         root.select("[style]").filter{it.attr("style").contains(Regex("(?i)(display\\s*:\\s*none|visibility\\s*:\\s*hidden)"))}.forEach{it.remove()}
         if(linkTargets)root.select("a[href]").forEach{a->HtmlMail.link(a.attr("href"))?.let{url->if(a.text().trim()!=url)a.appendText(" ($url)")}}
-        val runs=Runs(header);val line=StringBuilder();var depth=0
+        val runs=Runs(header,normalizeHeader);val line=StringBuilder();var depth=0
         fun flush(){runs.line(line.toString(),depth);line.setLength(0)}
         NodeTraversor.traverse(object: NodeVisitor {
             override fun head(node: Node,level: Int) {
