@@ -119,8 +119,27 @@ class NotificationRulesTest {
         assertEquals(3000,NotificationRules.body(message).length)
         assertEquals(180,NotificationRules.shortBody(message).length)
     }
-    @Test fun pendingTextIsExplicitAndAnEmptyMessageWithAttachmentsHasAMeaningfulLabel() {
-        assertTrue(NotificationRules.body(mail(1).copy(contentCached=false)).contains("пока не загружен"))
+    @Test fun aNewArrivalWaitsForItsExcerptAndIsShownWhenTheBodyArrivesWithoutANewArrival() {
+        val message=mail(1).copy(contentCached=false,body="")
+        val older=mail(2).copy(date=0)
+        val initial=NotificationRules.plan(setOf(older.id),setOf(message.id),listOf(message,older),emptySet())
+        assertEquals(setOf(message.id,older.id),initial.pending)
+        assertEquals(listOf(older),initial.messages)
+
+        val downloaded=message.copy(contentCached=true,body="New reply")
+        val ready=NotificationRules.plan(initial.pending,emptySet(),listOf(downloaded,older),emptySet())
+        assertEquals(listOf(downloaded,older),ready.messages)
+        assertEquals("New reply",NotificationRules.body(ready.messages.first()))
+    }
+    @Test fun readingAnArrivalWhileItsTextIsLoadingPreventsALaterNotification() {
+        val message=mail(1).copy(contentCached=false,body="")
+        val initial=NotificationRules.plan(emptySet(),setOf(message.id),listOf(message),emptySet())
+        val read=message.copy(contentCached=true,body="Downloaded",unread=false)
+        val ready=NotificationRules.plan(initial.pending,emptySet(),listOf(read),emptySet())
+        assertTrue(ready.pending.isEmpty())
+        assertTrue(ready.messages.isEmpty())
+    }
+    @Test fun anEmptyMessageWithAttachmentsHasAMeaningfulLabel() {
         assertEquals("Письмо содержит вложения",NotificationRules.body(mail(1).copy(body="",attachments=listOf(Attachment("0","a.pdf","application/pdf",1)))))
     }
     @Test fun shortTextDoesNotKeepLineBreaksOrRepeatedWhitespace() {

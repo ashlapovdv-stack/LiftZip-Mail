@@ -91,6 +91,24 @@ class MessageFlowDeviceTest {
         }
     }
 
+    @Test fun deletingAnOpenLetterRequiresConfirmation() {
+        var deletions=0
+        rule.setContent {
+            MailTheme {
+                ReaderScreen(mail,account,false,emptyList(),emptySet(),onBack={},onStar={},
+                    onInline={error("unused")},onLink={},onDownload={},onOpenAttachment={},onOpenLocal={},
+                    onReply={},onForward={},onDelete={deletions++})
+            }
+        }
+        rule.onNodeWithContentDescription("Удалить письмо").performClick()
+        rule.onNodeWithText("Удалить письмо?").assertIsDisplayed()
+        rule.onNodeWithText("Отмена").performClick()
+        rule.runOnIdle{assertEquals(0,deletions)}
+        rule.onNodeWithContentDescription("Удалить письмо").performClick()
+        rule.onNodeWithText("Удалить",substring=false).performClick()
+        rule.runOnIdle{assertEquals(1,deletions)}
+    }
+
     @Test fun readerDisplaysCompactHeaderAndExpandableDetails() {
         val m=mail.copy(sender="\\\"Компания, Иван\\\"",cc="copy@example.com",subject="Очень длинная тема письма ".repeat(10))
         rule.setContent {MailTheme {ReaderScreen(m,account,false,emptyList(),emptySet(),onBack={},onStar={},onInline={error("unused")},onLink={},onDownload={},onOpenAttachment={},onOpenLocal={},onReply={},onForward={})}}

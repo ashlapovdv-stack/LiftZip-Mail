@@ -23,9 +23,12 @@ object NotificationRules {
     fun plan(previous: Set<String>,arrived: Set<String>,messages: List<MailItem>,dismissed: Set<String>): NotificationPlan {
         val pending=SyncRules.pendingNotifications(previous,arrived,messages)
         val hidden=dismissed.intersect(pending)
-        return NotificationPlan(pending,hidden,messages.filter{it.id in pending && it.id !in hidden}.sortedWith(compareByDescending<MailItem>{it.date}.thenBy{it.id}))
+        val ready=messages.filter{
+            it.id in pending && it.id !in hidden && (it.contentCached || it.notificationPreview.isNotBlank())
+        }.sortedWith(compareByDescending<MailItem>{it.date}.thenBy{it.id})
+        return NotificationPlan(pending,hidden,ready)
     }
-    fun body(message: MailItem): String=if(!message.contentCached)message.notificationPreview.ifBlank{"Текст пока не загружен. Нажмите, чтобы открыть письмо."} else
+    fun body(message: MailItem): String=if(!message.contentCached)message.notificationPreview else
         ReplyText.split(message.body).current.trim().take(3000).ifBlank{if(message.attachments.isNotEmpty())"Письмо содержит вложения" else "Письмо без текста"}
     fun shortBody(message: MailItem)=body(message).replace(Regex("\\s+")," ").take(180)
     fun shouldRetry(result: SyncResult)=result.errors.isNotEmpty()

@@ -229,7 +229,7 @@ private val Paper=Color(0xFFF8F9F6)
                 currentCoroutineContext().ensureActive()
                 selected=id;notificationFallback=message
                 if(message==null)route="message-missing"
-                else {serverPath=null;currentAccount=message.accountId;folder=MailFolder.INBOX;route="reader";vm.notificationOpened(id)}
+                else {route="reader";vm.notificationOpened(id)}
             }
             onNotificationConsumed(request.token)
         }
@@ -355,6 +355,11 @@ private val Paper=Color(0xFFF8F9F6)
                         onSaveOriginal={originalMessage=message;saveOriginal.launch(OriginalMessageFile.name(message.subject))},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
+                        onDelete={
+                            vm.deleteMessages(setOf(message.id)){removed->
+                                if(message.id in removed && route=="reader" && selected==message.id)goInbox()
+                            }
+                        },
                         onSpam={vm.spamMessages(setOf(message.id),SpamRules.junk(message)){moved->if(message.id in moved && route=="reader" && selected==message.id)goInbox()}},
                         onReply={vm.reply(message){ready->if(route=="reader" && selected==message.id)compose(ready)else vm.notice("Ответ подготовлен в черновиках")}},
                         loadingError=s.openingError?.takeIf{it.first==message.id}?.second,onRetryLoad={vm.openMessage(message.id)},onForward={
@@ -854,7 +859,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     if(!card)HorizontalDivider(Modifier.padding(start=75.dp),color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.45f))
 }
 
-@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null,onThumbnail: (suspend (Attachment)->OpenedAttachment)?=null,loadingError: String?=null,onRetryLoad: ()->Unit={},onSaveOriginal: (() -> Unit)?=null) {
+@Composable internal fun ReaderScreen(m: MailItem,account: MailAccount?,busy: Boolean,ownAddresses: List<String>,attachmentBusy: Set<String>,onBack: ()->Unit,onStar: ()->Unit,onInline: suspend (Attachment)->OpenedAttachment,onLink: (String)->Unit,onDownload: (Attachment)->Unit,onOpenAttachment: (Attachment)->Unit,onOpenLocal: (OutgoingFile)->Unit,onReply: ()->Unit,onForward: ()->Unit,onSpam: (() -> Unit)?=null,onThumbnail: (suspend (Attachment)->OpenedAttachment)?=null,loadingError: String?=null,onRetryLoad: ()->Unit={},onSaveOriginal: (() -> Unit)?=null,onDelete: (() -> Unit)?=null) {
     val theme=MaterialTheme.colorScheme
     val style=LocalMailStyle.current
     val accent=if(isSystemInDarkTheme())if(style==MailStyle.STANDARD)Olive else style.accent else theme.primary
@@ -872,6 +877,17 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     val outer=rememberScrollState()
     val scroll=remember(outer,m.id){ReaderScroll(outer)}
     var messageMenu by remember(m.id){mutableStateOf(false)}
+    var confirmDelete by rememberSaveable(m.id){mutableStateOf(false)}
+    val canDelete=onDelete!=null && !m.pendingDelete && !FolderRules.trash(m) && TrashRules.movesToTrash(m)
+    if(confirmDelete && canDelete)AlertDialog(
+        onDismissRequest={confirmDelete=false},
+        title={Text("Удалить письмо?")},
+        text={Text("Письмо будет перемещено в Корзину на сервере после подключения к сети.")},
+        confirmButton={
+            TextButton(onClick={confirmDelete=false;onDelete?.invoke()},enabled=!busy){Text("Удалить")}
+        },
+        dismissButton={TextButton(onClick={confirmDelete=false}){Text("Отмена")}}
+    )
     var actionsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var subjectExpanded by rememberSaveable(m.id){mutableStateOf(false)}
     var detailsExpanded by rememberSaveable(m.id){mutableStateOf(false)}
@@ -900,6 +916,7 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
     // The toolbar is an overlay: hiding it never changes the native reading viewport.
     val toolbar: @Composable () -> Unit = {Box(Modifier.fillMaxWidth().onSizeChanged{scroll.toolbar.height=it.height}.readerChrome(scroll.toolbar.zoomProgress,if(scroll.zoomProgress>0f)scroll.chromeOffset else scroll.toolbar.hiddenPixels).testTag("reader-toolbar").onGloballyPositioned{MailZoomDiagnostics.record {"topBar hidden=${scroll.toolbar.hiddenPixels} pinch=$pinchActive top=${it.positionInWindow().y} height=${it.size.height}"}}) {TopAppBar(windowInsets=WindowInsets(0,0,0,0),colors=TopAppBarDefaults.topAppBarColors(containerColor=Color.White,scrolledContainerColor=Color.White),title={Text(account?.name?:"Письмо",style=MaterialTheme.typography.titleSmall)},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"Назад")}},actions={
         IconButton(onClick=onStar,enabled=!busy){Icon(if(m.starred)Icons.Outlined.Star else Icons.Outlined.StarOutline,"Избранное")}
+        if(canDelete)IconButton(onClick={confirmDelete=true},enabled=!busy){Icon(Icons.Outlined.DeleteOutline,"Удалить письмо")}
         if(onSaveOriginal!=null || (onSpam!=null && SpamRules.eligible(m,SpamRules.junk(m))))Box {
             IconButton(onClick={messageMenu=true},enabled=!busy){Icon(Icons.Outlined.MoreVert,"Действия с письмом")}
             DropdownMenu(expanded=messageMenu,onDismissRequest={messageMenu=false}) {
