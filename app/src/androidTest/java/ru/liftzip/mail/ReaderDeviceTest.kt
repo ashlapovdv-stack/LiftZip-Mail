@@ -76,8 +76,7 @@ class ReaderDeviceTest {
         return found
     }
     // These fixtures have no other grey fill in the left quarter of the reader.
-    // Locate the painted button and send the same tap as a reader would.
-    private fun tapPaintedHistoryCapsule() {
+    private fun paintedHistoryCapsule(): Offset {
         val root = rule.onRoot()
         var target: Offset? = null
         rule.waitUntil(15_000) {
@@ -100,7 +99,11 @@ class ReaderDeviceTest {
             }
             target != null
         }
-        root.performTouchInput { click(checkNotNull(target)) }
+        return checkNotNull(target)
+    }
+    private fun tapPaintedHistoryCapsule() {
+        val target = paintedHistoryCapsule()
+        rule.onRoot().performTouchInput { click(target) }
     }
     private fun changeHistory(
         view: MailHtmlWebView,
@@ -324,7 +327,8 @@ class ReaderDeviceTest {
         val first=loaded();var cold=0L
         rule.runOnIdle{cold=first.documentGeneration()}
         val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: 1")
-        changeHistory(first,toggle,true)
+        changeHistory(first,toggle,true,::tapPaintedHistoryCapsule)
+        assertEquals(1,matches(first,"Старое письмо"))
         rule.runOnIdle{open=false};rule.waitForIdle();rule.runOnIdle{open=true}
         val second=loaded()
         rule.runOnIdle{
@@ -903,11 +907,12 @@ class ReaderDeviceTest {
         rule.setContent{MailTheme{reader(message.copy(id="rich-reply",body=mime.text,htmlBody=mime.html))}}
         val main=loaded()
         val toggle=NativeHistoryControl(rule,"Предыдущие сообщения: ${conversation.messages.size}")
-        changeHistory(main,toggle,true)
+        changeHistory(main,toggle,true,::tapPaintedHistoryCapsule)
         val quote=unifiedHistoryView()
         assertEquals(1,matches(quote,"Тест HTML-письма"));assertEquals(1,matches(quote,"Контактор"))
         assertEquals(1,matches(main,"Контактор"))
-        toggle.performScrollTo();saveDeviceScreenshot(rule,"rich-reply-expanded")
+        paintedHistoryCapsule()
+        saveDeviceScreenshot(rule,"rich-reply-expanded")
         var generation=0L;rule.runOnIdle{generation=quote.documentGeneration()}
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").performClick()
         rule.waitUntil(30_000){var ready=false;rule.runOnUiThread{ready=quote.documentGeneration()>generation && quote.interactionEnabled && quote.progress==100};ready}
@@ -916,11 +921,12 @@ class ReaderDeviceTest {
             assertFalse(quote.settings.javaScriptEnabled)
             assertTrue("Original width must be available to pan",quote.canScrollHorizontally(1))
         }
-        toggle.performScrollTo();saveDeviceScreenshot(rule,"rich-reply-original")
+        paintedHistoryCapsule()
+        saveDeviceScreenshot(rule,"rich-reply-original")
         rule.onNodeWithContentDescription("Подогнать HTML по ширине").performClick()
         rule.onNodeWithContentDescription("Оригинальный масштаб HTML").assertExists()
         assertEquals(1,matches(unifiedHistoryView(),"Контактор"))
-        changeHistory(main,toggle,false)
+        changeHistory(main,toggle,false,::tapPaintedHistoryCapsule)
         assertEquals(0,matches(main,"Контактор"))
     }
     @Test fun originalScaleControlIsAbsentForPlainMailAndRoundTripsAFixedCanvas() {
