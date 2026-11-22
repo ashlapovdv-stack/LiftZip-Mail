@@ -150,11 +150,12 @@ class MailRepository(private val context: Context) {
             val process=(context.applicationContext as MailApplication).processToken
             db.actions().forEach { action ->
                 val recovered=ActionRules.recovered(action,process)
-                val redundantTrash=action.kind==ActionKind.TRASH &&
-                    (action.status=="failed" && action.error==TrashRules.ALREADY_IN_TRASH ||
-                        recovered.status=="pending" && FolderRules.trash(actionMessage(action)))
-                if(redundantTrash) {
-                    val restored=db.message(action.messageId)?.takeIf{it.pendingDelete}?.copy(pendingDelete=false)
+                val failedInTrash=action.kind==ActionKind.TRASH &&
+                    action.status=="failed" && action.error==TrashRules.ALREADY_IN_TRASH
+                val cached=if(action.kind==ActionKind.TRASH && (failedInTrash || recovered.status=="pending"))
+                    db.message(action.messageId) else null
+                if(failedInTrash || cached?.let(FolderRules::trash)==true) {
+                    val restored=cached?.takeIf{it.pendingDelete}?.copy(pendingDelete=false)
                     db.finishAction(action,items=listOfNotNull(restored))
                 }else if(recovered!=action)db.putAction(recovered)
             }
