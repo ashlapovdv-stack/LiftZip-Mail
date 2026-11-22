@@ -30,6 +30,7 @@ object FolderRules {
     fun remote(m: MailItem)=m.uid>0 && m.validity>0 && (SyncRules.remoteInbox(m) || m.localFolder.startsWith("remote-"))
     fun sent(m: MailItem)=m.localFolder in setOf("sent","remote-sent")
     fun draft(m: MailItem)=m.localFolder in setOf("drafts","remote-drafts")
+    fun trash(m: MailItem)=m.localFolder==local(FolderRole.TRASH)
     fun unread(m: MailItem)=m.unread && !m.pendingDelete && m.localFolder !in setOf("drafts","remote-drafts","sent","remote-sent","remote-trash","remote-junk","outbox")
     fun deduplicate(items: List<MailItem>,preferDraft: Boolean=false): List<MailItem> = items.groupBy{it.accountId+"|"+it.internetMessageId.trim().ifBlank{it.id}}.values.map{group->
         group.minWith(compareBy<MailItem>{if(preferDraft && it.localFolder=="drafts")0 else 1}.thenBy{if(SyncRules.remoteInbox(it))0 else 1}.thenBy{if(it.uid>0)0 else 1}.thenBy{if(it.contentCached)0 else 1})

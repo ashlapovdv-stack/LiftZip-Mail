@@ -92,7 +92,7 @@ object MailRules {
         return FolderRules.display(messages).filter { m ->
             (accountId == null || m.accountId == accountId) &&
                 (when(folder) {
-                    MailFolder.STARRED -> m.starred && !FolderRules.draft(m) && m.localFolder!="outbox"
+                    MailFolder.STARRED -> m.starred && !FolderRules.draft(m) && !FolderRules.trash(m) && m.localFolder!="outbox"
                     MailFolder.UNREAD -> FolderRules.unread(m)
                     MailFolder.SENT -> FolderRules.sent(m)
                     MailFolder.DRAFTS -> FolderRules.draft(m)

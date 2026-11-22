@@ -5,6 +5,7 @@ data class TrashFolderInfo(val name: String,val attributes: Set<String>)
 data class DeleteResult(val removed: Set<String>,val errors: List<String>)
 
 object TrashRules {
+    const val ALREADY_IN_TRASH="Письма уже находятся в папке «Корзина»."
     fun method(move: Boolean,uidPlus: Boolean): TrashMethod?=when{move->TrashMethod.MOVE;uidPlus->TrashMethod.COPY_UID_EXPUNGE;else->null}
     fun destination(folders: List<TrashFolderInfo>): String? {
         val usable=folders.filter{!it.name.equals("INBOX",true) && it.attributes.none{a->a.equals("\\NoSelect",true)}}
