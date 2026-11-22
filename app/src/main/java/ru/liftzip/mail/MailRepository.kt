@@ -330,21 +330,25 @@ class MailRepository(private val context: Context) {
         val p=PollSettings.normalized(poll.foregroundMinutes,poll.backgroundMinutes)
         settings.edit().putInt("foreground-minutes",p.foregroundMinutes).putInt("background-minutes",p.backgroundMinutes).apply();refresh()
     }}
-    suspend fun sync(accountId: String?=null,warmBodies: Boolean=true): SyncResult=checkAccounts(accountId,false).also{if(warmBodies)requestBodyWarmup()}
+    suspend fun sync(accountId: String?=null,warmBodies: Boolean=true,notificationPreviews: Boolean=false): SyncResult=
+        checkAccounts(accountId,false,notificationPreviews).also{if(warmBodies)requestBodyWarmup()}
     suspend fun syncUnread(accountId: String?): SyncResult=checkAccounts(accountId,true).also{requestBodyWarmup()}
-    private suspend fun checkAccounts(accountId: String?,unread: Boolean): SyncResult=supervisorScope {
+    private suspend fun checkAccounts(accountId: String?,unread: Boolean,notificationPreviews: Boolean=false): SyncResult=supervisorScope {
         val ids=coordinator.data{state.value.accounts.filter{it.enabled && (accountId==null || it.id==accountId)}.map{it.id}}
-        val results=ids.map{id->async(Dispatchers.IO){parallelChecks.withPermit{checkAccount(id,unread)}}}.awaitAll()
+        val results=ids.map{id->async(Dispatchers.IO){parallelChecks.withPermit{checkAccount(id,unread,notificationPreviews)}}}.awaitAll()
         SyncResult(results.sumOf{it.newUnread},results.flatMap{it.errors},results.any{it.dnsFailed})
     }
-    private suspend fun checkAccount(id: String,unread: Boolean): SyncResult=coordinator.poll(id) {
+    private suspend fun checkAccount(id: String,unread: Boolean,notificationPreviews: Boolean): SyncResult=coordinator.poll(id) {
         var request: Request?=null
         val started=System.nanoTime()
         try {
             coordinator.request(prepare={capture(id).also{request=it}},fetch={captured->
-                withTimeout(30_000){val coroutine=currentCoroutineContext();runInterruptible(Dispatchers.IO){
-                    if(unread)CheckReply(unread=gateway.unread(captured.account,vault.open(id,captured.account.secret),captured.cached){coroutine.ensureActive()})
-                    else CheckReply(inbox=gateway.inbox(captured.account,vault.open(id,captured.account.secret),captured.cached,checkCancelled={coroutine.ensureActive()}))
+                val password=vault.open(id,captured.account.secret)
+                if(notificationPreviews && !unread && captured.cursor.ready) {
+                    CheckReply(inbox=gateway.inboxWithNotificationPreviews(captured.account,password,captured.cached,captured.cursor))
+                } else withTimeout(30_000){val coroutine=currentCoroutineContext();runInterruptible(Dispatchers.IO){
+                    if(unread)CheckReply(unread=gateway.unread(captured.account,password,captured.cached){coroutine.ensureActive()})
+                    else CheckReply(inbox=gateway.inbox(captured.account,password,captured.cached,checkCancelled={coroutine.ensureActive()}))
                 }}
             },commit={captured,response->
                 if(!current(captured))return@request SyncResult(0,emptyList())

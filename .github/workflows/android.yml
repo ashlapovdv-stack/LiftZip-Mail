@@ -15,6 +15,9 @@ concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LIFTZIP_MAVEN_CENTRAL_MIRROR: https://maven-central.storage-download.googleapis.com/maven2
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -48,6 +51,50 @@ jobs:
             app/build/test-results/testDebugUnitTest/*.xml
             app/build/reports/lint-results-debug.*
           retention-days: 14
+
+  optimized-apk:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Build the signed release with R8
+        run: bash ./gradlew --no-daemon :app:assembleRelease
+      - name: Download the debug APK from this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: LiftZip-Mail-debug
+          path: upgrade-baseline-debug
+      - name: Free runner space for emulator
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc
+      - name: Enable emulator acceleration
+        run: sudo chmod 666 /dev/kvm
+      - name: Check the optimized upgrade on Android 15
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -no-metrics
+          script: bash scripts/check-optimized-upgrade.sh
+      - name: Save verified optimized APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LiftZip-Mail-optimized
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            optimized-upgrade-check.txt
+          if-no-files-found: error
+          retention-days: 30
 
   device-tests:
     runs-on: ubuntu-24.04

@@ -25,7 +25,7 @@ object NotificationRules {
         val hidden=dismissed.intersect(pending)
         return NotificationPlan(pending,hidden,messages.filter{it.id in pending && it.id !in hidden}.sortedWith(compareByDescending<MailItem>{it.date}.thenBy{it.id}))
     }
-    fun body(message: MailItem): String=if(!message.contentCached)"Текст пока не загружен. Нажмите, чтобы открыть письмо." else
+    fun body(message: MailItem): String=if(!message.contentCached)message.notificationPreview.ifBlank{"Текст пока не загружен. Нажмите, чтобы открыть письмо."} else
         ReplyText.split(message.body).current.trim().take(3000).ifBlank{if(message.attachments.isNotEmpty())"Письмо содержит вложения" else "Письмо без текста"}
     fun shortBody(message: MailItem)=body(message).replace(Regex("\\s+")," ").take(180)
     fun shouldRetry(result: SyncResult)=result.errors.isNotEmpty()

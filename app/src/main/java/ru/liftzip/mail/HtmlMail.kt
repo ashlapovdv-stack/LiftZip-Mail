@@ -147,6 +147,9 @@ object HtmlMail {
             body.childNodes().toList().forEach{wrapper.appendChild(it)}
             body.appendChild(wrapper)
         }
+        doc.select("a[href^=//]").forEach { anchor->
+            link("https:"+anchor.attr("href"))?.let{anchor.attr("href",it)}
+        }
         val safe=Cleaner(safelist()).clean(doc)
         safe.outputSettings().prettyPrint(false)
         safe.select("a").forEach{a->val url=link(a.attr("href"));if(url==null)a.removeAttr("href")else a.attr("href",url)}
@@ -198,7 +201,11 @@ object HtmlMail {
         NO_HTML,NO_PLAIN_HISTORY,NO_PROVIDER_BOUNDARY,MULTIPLE_PROVIDER_BOUNDARIES,
         TRAILING_CONTENT,EMPTY_CURRENT,PLAIN_HISTORY_MISMATCH,SEPARATED
     }
-    data class HistoryAnalysis(val currentHtml: String,val separateHistory: Boolean,val reason: HistoryReason,val quotedHtml: String="")
+    data class HistoryAnalysis(val currentHtml: String,val separateHistory: Boolean,val reason: HistoryReason,
+        val quotedHtml: String="",val inlineImagePaths: Set<String> = emptySet()) {
+        fun visibleAttachments(attachments: List<Attachment>)=
+            attachments.filter{it.explicitAttachment || it.path !in inlineImagePaths}
+    }
     fun noHistory(html: String)=HistoryAnalysis(html,false,HistoryReason.NO_PLAIN_HISTORY)
     private fun normalizedHistoryText(value: String)=value.replace('\u00a0',' ').replace("\uFFFC","")
         .replace(Regex("[\\s\\u200B\\uFEFF]+")," ").trim()
@@ -286,8 +293,12 @@ object HtmlMail {
     }
     /** Recognition only: retain the original HTML as the expanded representation.
      *  A plain projection corroborates a boundary but never replaces the rich history. */
-    fun analyzeHistory(html: String,conversation: QuotedConversation): HistoryAnalysis = analyzeHistory(html,conversation,0)
-    private fun analyzeHistory(html: String,conversation: QuotedConversation,nesting: Int): HistoryAnalysis {
+    fun analyzeHistory(html: String,conversation: QuotedConversation,attachments: List<Attachment> = emptyList()): HistoryAnalysis {
+        val inlineImages=if(html.isNotBlank() && attachments.any{it.contentId.isNotBlank() && it.mime.startsWith("image/",true)})
+            inlineImages(Jsoup.parseBodyFragment(cleanSource(html)).body(),attachments) else emptyList()
+        return analyzeHistory(html,conversation,attachments,0).copy(inlineImagePaths=inlineImages.map{it.path}.toSet())
+    }
+    private fun analyzeHistory(html: String,conversation: QuotedConversation,attachments: List<Attachment>,nesting: Int): HistoryAnalysis {
         fun keep(reason: HistoryReason)=HistoryAnalysis(html,false,reason)
         if(html.isBlank())return HistoryAnalysis(html,conversation.messages.isNotEmpty(),HistoryReason.NO_HTML)
         if(conversation.messages.isEmpty())return keep(HistoryReason.NO_PLAIN_HISTORY)
@@ -304,9 +315,30 @@ object HtmlMail {
             val preceding=precedingAttribution(boundary)
             val precedingText=preceding?.let{historyText(it.html)}.orEmpty()
             val units=conversation.messages
-            val attribution=preceding?.takeIf{
+            var attribution=preceding?.takeIf{
                 boundary.hasClass("gmail_quote") && it.singleElement?.hasClass("gmail_attr")==true || attributionHeader(precedingText) ||
                     it.singleElement?.let{element->senderLinkAttribution(element,units.first())}==true
+            }
+            var historyBoundary=boundary
+            // A mail editor can put the attribution before a wrapper that contains
+            // only the quote. Cross that wrapper only when the header agrees with MIME.
+            if(attribution==null) {
+                var child=boundary
+                for(level in 0 until 4) {
+                    val parent=child.parent()?:break
+                    if(parent.normalName() !in setOf("div","section") || parent.children().singleOrNull()!==child ||
+                        parent.textNodes().any{it.text().isNotBlank()})break
+                    val wrappedHeader=precedingAttribution(parent)
+                    if(wrappedHeader!=null && attributionHeader(historyText(wrappedHeader.html))) {
+                        val expected=normalizedAttribution(units.first().attribution.orEmpty())
+                        if(expected!=normalizedAttribution(historyText(wrappedHeader.html)) &&
+                            expected!=normalizedAttribution(text(wrappedHeader.html)))break
+                        attribution=wrappedHeader
+                        historyBoundary=parent
+                        break
+                    }
+                    child=parent
+                }
             }
             val bodies=setOf(normalizedHistoryText(historyText(boundary.outerHtml())),normalizedHistoryText(text(boundary.outerHtml())))
             val attributed=attribution?.let{setOf(normalizedAttribution(historyText(it.html)),normalizedAttribution(text(it.html)))}
@@ -366,23 +398,31 @@ object HtmlMail {
                     val nestedConversation=ConversationText.parse(plain)
                     if(nestedConversation.current.isBlank() || nestedConversation.messages.isEmpty())false
                     else {
-                        val nested=analyzeHistory(boundary.html(),nestedConversation,nesting+1)
+                        val nested=analyzeHistory(boundary.html(),nestedConversation,attachments,nesting+1)
                         nested.separateHistory &&
                             presentationText(nestedConversation.current)==presentationText(historyText(nested.currentHtml))
                     }
                 }==true
-            if(bodies.all{it.isEmpty()} || !single && !completeChain && !structured && !flattenedProvider && !nestedProvider && !presentation)continue
+            // A plain alternative represents a quoted inline photo with empty quote lines.
+            // Require the same attribution and a resolvable image in the HTML boundary.
+            val imageOnly=bodies.all{it.isEmpty()} && attribution!=null && units.singleOrNull()?.let{message->
+                message.body.isBlank() && attributionMatches(message) &&
+                    inlineImages(Jsoup.parseBodyFragment(cleanSource(boundary.outerHtml())).body(),attachments).isNotEmpty()
+            }==true
+            val matchingText=bodies.any{it.isNotEmpty()} &&
+                (single || completeChain || structured || flattenedProvider || nestedProvider || presentation)
+            if(!imageOnly && !matchingText)continue
             // Generic citations need an attribution, not merely identical quoted words.
             if(providers.isEmpty() && attribution==null &&
                 !attributionHeader(historyText(boundary.outerHtml()).lineSequence().firstOrNull().orEmpty()))continue
             val shortened=doc.clone()
-            val path=doc.getAllElements().indexOf(boundary)
+            val path=doc.getAllElements().indexOf(historyBoundary)
             val attributionPaths=attribution?.nodes?.map{nodePath(doc,it)}.orEmpty()
             val nodes=shortened.getAllElements().toList()
             val attributionNodes=attributionPaths.map{path->resolveNode(shortened,path)}
             attributionNodes.forEach{it.remove()};nodes[path].remove()
             if(text(shortened.outerHtml()).isBlank())return keep(HistoryReason.EMPTY_CURRENT)
-            val richHistory=attribution?.html.orEmpty()+boundary.outerHtml()
+            val richHistory=attribution?.html.orEmpty()+historyBoundary.outerHtml()
             // Preserve scoped stylesheet rules for the independently rendered citation.
             val styles=doc.select("style").joinToString(""){it.outerHtml()}
             return HistoryAnalysis(shortened.outerHtml(),true,HistoryReason.SEPARATED,styles+richHistory)
@@ -413,6 +453,16 @@ object HtmlMail {
         return (sides["padding-left"]==true || sides["margin-left"]==true) to
             (sides["padding-right"]==true || sides["margin-right"]==true)
     }
+    private fun inlineImage(raw: String,attachments: List<Attachment>): Attachment? {
+        if(!raw.startsWith("cid:",true))return null
+        val id=cid(raw.substring(4))
+        return attachments.firstOrNull{it.contentId.isNotBlank() && cid(it.contentId)==id && it.mime.startsWith("image/",true)}
+    }
+    private fun trackingPixel(img: Element)=img.attr("width").toIntOrNull()?.let{it<=2}==true &&
+        img.attr("height").toIntOrNull()?.let{it<=2}==true
+    private fun inlineImages(root: Element,attachments: List<Attachment>): List<Attachment> =
+        root.select("img[src]").filterNot(::trackingPixel).mapNotNull{inlineImage(it.attr("src"),attachments)}
+
     fun document(html: String,plain: String,attachments: List<Attachment>,history: HistoryAnalysis=noHistory(html),external: Boolean=false,
         foreground: String="#20241f",background: String="#f8f9f6",identity: String="",originalScale: Boolean=false): MailHtmlDocument {
         val currentHtml=html.takeIf{it.isNotBlank()}?.let{history.currentHtml}
@@ -428,7 +478,7 @@ object HtmlMail {
         val resources=linkedMapOf<String,MailImageSource>();var hasExternal=false
         fun resource(raw: String): Pair<String,MailImageSource>? {
             val image=when {
-                raw.startsWith("cid:",true)->attachments.firstOrNull{cid(it.contentId)==cid(raw.substring(4)) && it.contentId.isNotBlank() && it.mime.startsWith("image/",true) }?.let{MailImageSource.Inline(it)}
+                raw.startsWith("cid:",true)->inlineImage(raw,attachments)?.let{MailImageSource.Inline(it)}
                 raw.startsWith("data:",true)->Regex("(?is)^data:(image/(?:png|jpeg|gif|webp));base64,([a-z0-9+/=\\s]+)$").matchEntire(raw)?.takeIf{raw.length<2*1024*1024}?.let{MailImageSource.Data(it.groupValues[1].lowercase(),it.groupValues[2])}
                 else->imageUrl(raw)?.let{MailImageSource.Remote(it)}
             }?:return null
@@ -441,7 +491,7 @@ object HtmlMail {
             return path to image
         }
         doc.select("img").toList().forEach{img->
-            if(img.attr("width").toIntOrNull()?.let{it<=2}==true && img.attr("height").toIntOrNull()?.let{it<=2}==true){img.remove();return@forEach}
+            if(trackingPixel(img)){img.remove();return@forEach}
             val resolved=resource(img.attr("src"))
             if(resolved==null)img.replaceWith(Element("span").addClass("mail-image-placeholder").text(img.attr("alt").ifBlank{"Изображение"}))
             else{img.attr("src",resolved.first);img.removeAttr("srcset")}
@@ -483,7 +533,8 @@ object HtmlMail {
             $adaptation
             $imageSizing a{color:#526b45;text-decoration:underline}
             .mail-plain,.mail-plain *{white-space:pre-wrap!important}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
-            #mail-history-toggle{display:inline-flex!important;align-items:center!important;gap:5px!important;box-sizing:border-box!important;min-width:52px!important;height:28px!important;margin:12px 0!important;padding:3px 10px!important;border:1px solid #b8b8b8!important;border-radius:999px!important;background:#e6e6e6!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important;white-space:nowrap!important}
+            #mail-history-toggle{display:inline-flex!important;align-items:center!important;gap:5px!important;box-sizing:border-box!important;min-width:52px!important;height:28px!important;margin:12px 0!important;padding:3px 10px!important;border:1px solid #b8b8b8!important;border-radius:999px!important;background:#e6e6e6!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important;white-space:nowrap!important;-webkit-tap-highlight-color:transparent}
+            #mail-history-toggle:active{background:#d6d6d6!important}
             </style></head><body style="padding-left:$leftInset!important;padding-right:$rightInset!important">${doc.body().html()}</body></html>""".trimIndent()
         return MailHtmlDocument(wrapped,resources,hasExternal,layout,external,originalScale)
     }

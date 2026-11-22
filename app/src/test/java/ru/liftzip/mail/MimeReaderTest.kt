@@ -92,6 +92,8 @@ class MimeReaderTest {
         assertTrue(decoded.html.contains("Rich version"));assertTrue(decoded.html.contains("cid:logo@example.com"))
         assertEquals(1,Regex("Rich version").findAll(decoded.html).count())
         assertEquals(setOf("logo@example.com",""),decoded.attachments.map{it.contentId}.toSet())
+        assertFalse(decoded.attachments.single{it.contentId=="logo@example.com"}.explicitAttachment)
+        assertTrue(decoded.attachments.single{it.name=="note.txt"}.explicitAttachment)
     }
     @Test fun newsletterCssDoesNotLeakIntoPreviewsOrReplyText() {
         val m=MimeMessage(session).apply{setContent("<style>p {margin:0} @media screen {.x {width:100%!important}}</style><p>Прогноз Q4</p><a href='https://example.com'>Читать</a>","text/html; charset=UTF-8");saveChanges()}

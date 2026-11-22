@@ -29,9 +29,10 @@ class MimeReader(private val checkCancelled: ()->Unit={},private val htmlToText:
         }
         val mime=runCatching { ContentType(part.contentType).baseType }.getOrDefault("application/octet-stream").lowercase()
         val contentId=part.getHeader("Content-ID")?.firstOrNull()?.let(HtmlMail::cid).orEmpty()
-        if(part.disposition.equals(Part.ATTACHMENT,true) || !filename.isNullOrBlank() || part.isMimeType("message/rfc822") || contentId.isNotBlank() && mime.startsWith("image/")) {
+        val explicitAttachment=part.disposition.equals(Part.ATTACHMENT,true)
+        if(explicitAttachment || !filename.isNullOrBlank() || part.isMimeType("message/rfc822") || contentId.isNotBlank() && mime.startsWith("image/")) {
             val name=filename?:if(mime.startsWith("image/"))"Изображение-${path}."+when(mime){"image/jpeg"->"jpg";"image/png"->"png";"image/gif"->"gif";"image/webp"->"webp";else->"img"}else "Вложение.eml"
-            return DecodedMail("",listOf(Attachment(path,name,mime,part.size,contentId)))
+            return DecodedMail("",listOf(Attachment(path,name,mime,part.size,contentId,explicitAttachment)))
         }
         if(part.isMimeType("multipart/*")) {
             checkCancelled()

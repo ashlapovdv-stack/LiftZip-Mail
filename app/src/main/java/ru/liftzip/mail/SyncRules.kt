@@ -34,6 +34,8 @@ object SyncRules {
     private fun latestContent(incoming: MailItem,current: MailItem?,protectFlags: Boolean): MailItem {
         var result=incoming
         if(current?.contentCached==true && (incoming.previewOnly || incoming.contentVersion<=current.contentVersion))result=result.copy(body=current.body,htmlBody=current.htmlBody,contentVersion=current.contentVersion,cacheBytes=current.cacheBytes,attachments=current.attachments,contentCached=true,previewOnly=current.previewOnly)
+        if(!result.contentCached && result.notificationPreview.isEmpty() && current?.notificationPreview?.isNotEmpty()==true)
+            result=result.copy(notificationPreview=current.notificationPreview)
         if(current!=null && protectFlags)result=result.copy(unread=current.unread,starred=current.starred)
         if(current!=null)result=result.copy(answered=result.answered || current.answered,forwarded=result.forwarded || current.forwarded)
         return result

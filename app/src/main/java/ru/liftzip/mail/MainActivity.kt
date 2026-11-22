@@ -935,12 +935,14 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
             }
             Spacer(Modifier.height(10.dp))
             if(m.localFolder=="sent")InfoCard("Письмо принято SMTP-сервером. Копия ожидает сохранения в серверной папке «Отправленные».")
-            if(m.attachments.isNotEmpty() || m.outgoing.isNotEmpty()) {
+            val received=currentContent?.let{it.history.visibleAttachments(it.message.attachments)}
+                ?:m.attachments.filter{it.explicitAttachment || !it.mime.startsWith("image/",true) || it.contentId.isBlank()}
+            val local=m.outgoing.filter{it.contentId.isBlank()}.map{file->Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt())}
+            if(received.isNotEmpty() || local.isNotEmpty()) {
                 Text("Вложения",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(bottom=6.dp))
-                if(m.attachments.isNotEmpty())key(m.id){AttachmentThumbnails(m.attachments,!busy,onThumbnail,onOpenAttachment,onDownload,
-                    busyPaths=m.attachments.filter{"${m.id}|${it.path}" in attachmentBusy}.map{it.path}.toSet())}
-                if(m.outgoing.isNotEmpty()) {
-                    val local=m.outgoing.filter{it.contentId.isBlank()}.map{file->Attachment(file.uri,file.name,file.mime,file.size.coerceIn(0,Int.MAX_VALUE.toLong()).toInt())}
+                if(received.isNotEmpty())key(m.id){AttachmentThumbnails(received,!busy,onThumbnail,onOpenAttachment,onDownload,
+                    busyPaths=received.filter{"${m.id}|${it.path}" in attachmentBusy}.map{it.path}.toSet())}
+                if(local.isNotEmpty()) {
                     key(m.id,"local"){AttachmentThumbnails(local,!busy,{file->OpenedAttachment(file.path,file.name,AttachmentRules.mime(file.name,file.mime))},
                         onOpen={file->m.outgoing.firstOrNull{it.uri==file.path}?.let(onOpenLocal)})}
                 }
@@ -1034,8 +1036,11 @@ private fun displayDate(time: Long)=SimpleDateFormat(if(System.currentTimeMillis
                 val readingHistory=remember(unifiedHtml,history){if(unifiedHistory)HtmlMail.noHistory(unifiedHtml)else history}
                 val readerLink: (String)->Unit={url->
                     if(unifiedHistory && url==UnifiedReaderDocument.TOGGLE_URL) {
-                        if(historyExpanded)scroll.toolbar.onHistoryCollapsed()
-                        historyExpanded=!historyExpanded
+                        val change={
+                            if(historyExpanded)scroll.toolbar.onHistoryCollapsed()
+                            historyExpanded=!historyExpanded
+                        }
+                        scroll.view?.retainFrameForHistoryChange(change)?:change()
                     } else onLink(url)
                 }
                 MailHtmlBody(readingSource,parsed.current.ifBlank{"В письме нет доступного текстового содержимого."},readingHistory,onInline,readerLink,scroll,zoomed=htmlZoomed,header=messageHeader,onZoomChanged={progress->

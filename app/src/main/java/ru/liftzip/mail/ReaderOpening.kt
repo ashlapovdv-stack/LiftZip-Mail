@@ -24,14 +24,14 @@ internal data class PreparedReaderContent(val message: MailItem,val conversation
     prepare: suspend (ReaderAnalysisCache.Key)->Pair<QuotedConversation,HtmlMail.HistoryAnalysis> = {ReaderDocuments.analysis.prepare(it)}
 ): State<PreparedReaderContent?> {
     val identity="${message.accountId}:${message.id}:${message.validity}"
-    val analysisKey=remember(identity,message.body,message.htmlBody,message.contentVersion){
-        ReaderAnalysisCache.Key(identity,message.body,message.htmlBody,message.contentVersion)
+    val analysisKey=remember(identity,message.body,message.htmlBody,message.contentVersion,message.attachments){
+        ReaderAnalysisCache.Key(identity,message.body,message.htmlBody,message.contentVersion,attachments=message.attachments)
     }
     val available=MailContent.canDisplay(message)
     val latestPrepare by rememberUpdatedState(prepare)
     return key(identity) {
         val cached=if(available)ReaderDocuments.analysis.peek(analysisKey)else null
-        produceState(cached?.let{PreparedReaderContent(message,it.first,it.second)},analysisKey,available,message.attachments) {
+        produceState(cached?.let{PreparedReaderContent(message,it.first,it.second)},analysisKey,available) {
             if(!available)return@produceState
             // Publish on Main even when a test frame interceptor resumes the producer
             // inline on the worker that finished parsing.
