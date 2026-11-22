@@ -69,8 +69,9 @@ class FastMailService: Service() {
                 delay(250)
                 try {
                     // Refresh all enabled accounts: conflation must not lose a burst from another mailbox.
-                    app.repository.sync(warmBodies=false)
-                    app.repository.prefetchBodies(45_000)
+                    app.repository.sync(warmBodies=false,notificationPreviews=MailNotifications.access(this@FastMailService).canPost)
+                    val bodies=app.repository.prefetchBodies(45_000)
+                    if(bodies.pending>0)NotificationPreviewWorker.enqueue(this@FastMailService)
                     app.fastMail.event()
                 }catch(e: CancellationException){throw e}catch(_: Exception){/* Each watcher reconnects; periodic work remains scheduled. */}
             }

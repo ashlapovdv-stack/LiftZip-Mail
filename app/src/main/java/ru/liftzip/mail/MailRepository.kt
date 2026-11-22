@@ -443,7 +443,7 @@ class MailRepository(private val context: Context) {
         val result=coordinator.data {
             val selected=state.value.messages.filter{it.id in ids && !it.pendingDelete}
             val chosen=selected.filterNot(FolderRules::trash)
-            val remote=chosen.filter{FolderRules.remote(it) || it.uid==0L && it.localFolder=="sent"}
+            val remote=chosen.filter(TrashRules::movesToTrash)
             val local=chosen.filter{TrashRules.local(it) && it.localFolder!="sent"}
             val actions=remote.map{actionFor(it,ActionKind.TRASH)}.toMutableList()
             remote.filter{it.uid==0L}.forEach{m->db.action(ActionKind.APPEND_SENT.name+":"+m.id)?.let{db.completeAction(it)}}

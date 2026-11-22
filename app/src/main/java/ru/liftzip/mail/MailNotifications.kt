@@ -79,7 +79,7 @@ class MailNotifications(private val context: Context) {
         if(!access(context).canPost)return@synchronized
         channel()
         val group=plan.messages.size>1
-        val audible=children.firstOrNull{it.id in arrived && it.id !in posted}?.id
+        val audible=children.firstOrNull{it.id !in posted}?.id
         val names=accounts.associate{it.id to it.name}
         val public=NotificationCompat.Builder(context,CHANNEL).setSmallIcon(R.drawable.ic_notification).setContentTitle("Новая почта").setContentText("Откройте телефон для просмотра").build()
         for(m in children) {

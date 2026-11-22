@@ -14,6 +14,7 @@ object TrashRules {
     }
     fun remote(m: MailItem)=FolderRules.remote(m)
     fun local(m: MailItem)=m.uid==0L && m.localFolder in setOf("drafts","sent") && m.delivery!="sending"
+    fun movesToTrash(m: MailItem)=remote(m) || m.uid==0L && m.localFolder=="sent"
     fun unreadAfter(count: Int,removed: List<MailItem>)=(count-removed.count{SyncRules.remoteInbox(it) && it.unread && !it.pendingDelete}).coerceAtLeast(0)
 }
 
