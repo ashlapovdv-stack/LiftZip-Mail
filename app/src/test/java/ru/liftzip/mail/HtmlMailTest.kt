@@ -62,6 +62,32 @@ class HtmlMailTest {
         assertEquals(MailImageSource.Remote("https://images.example.com/hero.png"),allowed.images.values.single())
         assertTrue(Jsoup.parse(allowed.html).selectFirst("img")!!.attr("src").startsWith(HtmlMail.ORIGIN))
     }
+    @Test fun blockedDecorativeIconsDoNotInsertTextIntoNarrowFooterCells() {
+        val source="""
+            <table role="presentation"><tr>
+                <td width="12"><img src="https://images.example.com/docs.png" width="12" alt=""></td>
+                <td><a href="https://example.com/docs">Documentation</a></td>
+                <td width="16"><img src="https://images.example.com/support.png" width="16" alt=""></td>
+                <td><a href="https://example.com/support">Support</a></td>
+            </tr></table>
+            <a href="https://example.com/home"><img src="https://images.example.com/home.png" alt=""></a>
+            <img src="https://images.example.com/undocumented.png">
+        """.trimIndent()
+        for(originalScale in listOf(false,true)) {
+            val blocked=HtmlMail.document(source,"",emptyList(),originalScale=originalScale)
+            val body=Jsoup.parse(blocked.html).body()
+            assertTrue(blocked.externalImages)
+            assertTrue(blocked.images.isEmpty())
+            assertEquals("Documentation Support",body.selectFirst("table")!!.text())
+            assertEquals(listOf("Изображение","Изображение"),
+                body.select(".mail-image-placeholder").map{it.text()})
+            assertEquals("Изображение",body.selectFirst("a[href='https://example.com/home']")!!.text())
+
+            val allowed=HtmlMail.document(source,"",emptyList(),external=true,originalScale=originalScale)
+            assertEquals(4,allowed.images.size)
+            assertEquals(listOf("12","16"),Jsoup.parse(allowed.html).select("table img").map{it.attr("width")})
+        }
+    }
     @Test fun cidImagesResolveWithoutEnablingExternalImages() {
         val attachment=Attachment("1.2","photo.png","IMAGE/PNG",100,"logo+1@example")
         val doc=HtmlMail.document("<p>Фото</p><img src='cid:logo%2B1%40example'>","",listOf(attachment))
