@@ -499,11 +499,18 @@ object HtmlMail {
                 return@forEach
             }
             val alt=img.attr("alt")
-            val imageOnlyLink=img.parents().any{it.normalName()=="a" && it.hasAttr("href") && it.text().isBlank()}
-            if(img.hasAttr("alt") && alt.isBlank() && !imageOnlyLink) {
-                img.remove()
-            } else {
-                img.replaceWith(Element("span").addClass("mail-image-placeholder").text(alt.ifBlank{"Изображение"}))
+            val imageOnlyLink=img.parents().firstOrNull{it.normalName()=="a" && it.hasAttr("href") && it.text().isBlank()}
+            val imageWidth=img.attr("width").trim().toIntOrNull()
+            when {
+                imageOnlyLink!=null && imageWidth!=null && imageWidth in 1..48 -> {
+                    // These links occupy icon-sized cells. Keep the full name on the link.
+                    val label=imageOnlyLink.attr("aria-label").ifBlank{alt.ifBlank{"Открыть ссылку"}}
+                    imageOnlyLink.attr("aria-label",label)
+                    if(!imageOnlyLink.hasAttr("title"))imageOnlyLink.attr("title",label)
+                    img.replaceWith(Element("span").addClass("mail-image-link-placeholder").attr("aria-hidden","true").text("↗"))
+                }
+                imageOnlyLink==null && img.hasAttr("alt") && alt.isBlank() -> img.remove()
+                else -> img.replaceWith(Element("span").addClass("mail-image-placeholder").text(alt.ifBlank{"Изображение"}))
             }
         }
         // CSS images use the same isolated loader; external fonts and unknown resources stay blocked.
@@ -543,6 +550,7 @@ object HtmlMail {
             $adaptation
             $imageSizing a{color:#526b45;text-decoration:underline}
             .mail-plain,.mail-plain *{white-space:pre-wrap!important}.mail-image-placeholder{display:inline-block;padding:8px 12px;margin:4px 0;border:1px solid #b9c3b4;border-radius:10px;font:13px/1.4 sans-serif}
+            .mail-image-link-placeholder{display:inline-block;box-sizing:border-box;width:24px;max-width:100%;height:24px;vertical-align:middle;border:1px solid #b9c3b4;border-radius:6px;text-align:center;font:16px/22px sans-serif;white-space:nowrap!important}
             #mail-history-toggle{display:inline-flex!important;align-items:center!important;gap:5px!important;box-sizing:border-box!important;min-width:52px!important;height:28px!important;margin:12px 0!important;padding:3px 10px!important;border:1px solid #b8b8b8!important;border-radius:999px!important;background:#e6e6e6!important;color:#191919!important;font:14px/22px sans-serif!important;text-decoration:none!important;white-space:nowrap!important;-webkit-tap-highlight-color:transparent}
             #mail-history-toggle:active{background:#d6d6d6!important}
             </style></head><body style="padding-left:$leftInset!important;padding-right:$rightInset!important">${doc.body().html()}</body></html>""".trimIndent()
