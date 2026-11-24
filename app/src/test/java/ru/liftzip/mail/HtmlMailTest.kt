@@ -88,6 +88,34 @@ class HtmlMailTest {
             assertEquals(listOf("12","16"),Jsoup.parse(allowed.html).select("table img").map{it.attr("width")})
         }
     }
+    @Test fun blockedSmallIconLinksKeepTheirNamesWithinTheOriginalCell() {
+        val url="https://example.com/community"
+        val name="Visit Example Community"
+        val source="""
+            <table role="presentation"><tr><td width="36">
+                <a href="$url"><img src="https://images.example.com/icon.png" width="33" alt="$name"></a>
+            </td></tr></table>
+            <a href="https://example.com/report"><img src="https://images.example.com/report.png" width="240" alt="Annual report"></a>
+        """.trimIndent()
+        for(originalScale in listOf(false,true)) {
+            val blocked=HtmlMail.document(source,"",emptyList(),originalScale=originalScale)
+            val body=Jsoup.parse(blocked.html).body()
+            val link=body.selectFirst("a[href='$url']")!!
+            assertEquals("↗",link.text())
+            assertEquals(name,link.attr("aria-label"))
+            assertEquals(name,link.attr("title"))
+            assertEquals("true",link.selectFirst(".mail-image-link-placeholder")!!.attr("aria-hidden"))
+            assertEquals("Annual report",body.selectFirst(".mail-image-placeholder")!!.text())
+            assertTrue(blocked.externalImages)
+            assertTrue(blocked.images.isEmpty())
+
+            val allowed=HtmlMail.document(source,"",emptyList(),external=true,originalScale=originalScale)
+            assertEquals(2,allowed.images.size)
+            val icon=Jsoup.parse(allowed.html).selectFirst("a[href='$url'] img")!!
+            assertEquals(name,icon.attr("alt"))
+            assertEquals("33",icon.attr("width"))
+        }
+    }
     @Test fun cidImagesResolveWithoutEnablingExternalImages() {
         val attachment=Attachment("1.2","photo.png","IMAGE/PNG",100,"logo+1@example")
         val doc=HtmlMail.document("<p>Фото</p><img src='cid:logo%2B1%40example'>","",listOf(attachment))
