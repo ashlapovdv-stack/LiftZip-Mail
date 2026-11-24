@@ -493,8 +493,18 @@ object HtmlMail {
         doc.select("img").toList().forEach{img->
             if(trackingPixel(img)){img.remove();return@forEach}
             val resolved=resource(img.attr("src"))
-            if(resolved==null)img.replaceWith(Element("span").addClass("mail-image-placeholder").text(img.attr("alt").ifBlank{"Изображение"}))
-            else{img.attr("src",resolved.first);img.removeAttr("srcset")}
+            if(resolved!=null) {
+                img.attr("src",resolved.first)
+                img.removeAttr("srcset")
+                return@forEach
+            }
+            val alt=img.attr("alt")
+            val imageOnlyLink=img.parents().any{it.normalName()=="a" && it.hasAttr("href") && it.text().isBlank()}
+            if(img.hasAttr("alt") && alt.isBlank() && !imageOnlyLink) {
+                img.remove()
+            } else {
+                img.replaceWith(Element("span").addClass("mail-image-placeholder").text(alt.ifBlank{"Изображение"}))
+            }
         }
         // CSS images use the same isolated loader; external fonts and unknown resources stay blocked.
         fun css(value: String)=transparentNeutralBackgrounds(rewriteCss(value){resource(it)?.first})
