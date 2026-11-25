@@ -51,7 +51,7 @@ internal object QuotePresentation {
                 val depth=prefix.count{it=='>'}
                 repeat(depth){if(next.startsWith('>'))next=next.drop(1).trimStart()else next=""}
                 val combined=when {
-                    next.startsWith('(')->normalizeComposeLink("$first $next").takeIf{it!="$first $next"}
+                    next.startsWith('(') || first.endsWith('(')->normalizeComposeLink("$first $next").takeIf{it!="$first $next"}
                     next==">:"->"$first>:".takeIf{wrappedAngle.matches(it)}
                     else->null
                 }

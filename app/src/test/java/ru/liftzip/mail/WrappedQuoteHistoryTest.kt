@@ -74,6 +74,18 @@ class WrappedQuoteHistoryTest {
         assertEquals("https:$composeUrl",quote.selectFirst("a[href]")?.attr("href"))
     }
 
+    @Test fun aComposeLinkWrappedAfterItsOpeningParenthesisStillCorroboratesHistory() {
+        val wrapped=plain.replace("$second $recipient\n> ( $composeUrl", "$second $recipient (\n> $composeUrl")
+        assertNotEquals(plain,wrapped)
+        val safe=HtmlMail.cleanSource(html)
+        val history=HtmlMail.analyzeHistory(safe,ConversationText.parse(wrapped))
+        assertTrue(history.reason.toString(),history.separateHistory)
+        assertEquals("Получено",Jsoup.parse(history.currentHtml).text())
+
+        val mismatched=wrapped.replace(composeUrl,composeUrl.replace(recipient,"other@example.com"))
+        assertFalse(HtmlMail.analyzeHistory(safe,ConversationText.parse(mismatched)).separateHistory)
+    }
+
     @Test fun anAnnotationForADifferentAddressDoesNotCorroborateHistory() {
         val altered=plain.replace(composeUrl,composeUrl.replace(recipient,"other@example.com"))
         assertFalse(HtmlMail.analyzeHistory(HtmlMail.cleanSource(html),ConversationText.parse(altered)).separateHistory)
