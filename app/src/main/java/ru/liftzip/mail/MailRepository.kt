@@ -1320,9 +1320,9 @@ class MailRepository(private val context: Context) {
     }
     suspend fun download(message: MailItem,file: Attachment,uri: Uri?): Unit=withContext(Dispatchers.IO){
         if(uri==null){
-            check(Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q)
-            val cached=cachedAttachment(message,file)
-            saveInDownloads(context.contentResolver,file,cached)
+            if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q){
+                saveInDownloads(context.contentResolver,file,cachedAttachment(message,file))
+            }else error("Для сохранения выберите папку.")
             return@withContext
         }
         try{
