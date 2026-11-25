@@ -1,6 +1,11 @@
 package ru.liftzip.mail
 
 import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
+import androidx.test.filters.SdkSuppress
+import kotlinx.coroutines.runBlocking
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
@@ -11,6 +16,43 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class StorageDeviceTest {
+    @SdkSuppress(minSdkVersion = 29)
+    @Test fun attachmentGoesToPublicDownloadsWithoutReplacingAnExistingFile() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val resolver = context.contentResolver
+        val name = "mail-download-${UUID.randomUUID()}.txt"
+        val source = File(context.cacheDir, name)
+        val saved = mutableListOf<Uri>()
+        val attachment = Attachment("1", name, "application/octet-stream", 0)
+        try {
+            source.writeText("first attachment")
+            saved += saveInDownloads(resolver, attachment, source)
+            source.writeText("second attachment")
+            saved += saveInDownloads(resolver, attachment, source)
+
+            assertNotEquals(saved[0], saved[1])
+            val names = saved.map { uri ->
+                val columns = arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH,
+                    MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.IS_PENDING)
+                resolver.query(uri, columns, null, null, null)!!.use { row ->
+                    assertTrue(row.moveToFirst())
+                    assertEquals(Environment.DIRECTORY_DOWNLOADS, row.getString(1).trimEnd('/'))
+                    assertEquals("text/plain", row.getString(2))
+                    assertEquals(0, row.getInt(3))
+                    row.getString(0)
+                }
+            }
+            assertEquals(name, names[0])
+            assertNotEquals(names[0], names[1])
+            assertEquals(listOf("first attachment", "second attachment"), saved.map { uri ->
+                resolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
+            })
+        } finally {
+            saved.forEach { resolver.delete(it, null, null) }
+            source.delete()
+        }
+    }
+
     @Test fun queuedAttachmentIsAnImmutableCopyOfTheSelectedFile() {
         val c=ApplicationProvider.getApplicationContext<Context>()
         val source=File(c.cacheDir,"queue-test-"+UUID.randomUUID()+".txt")

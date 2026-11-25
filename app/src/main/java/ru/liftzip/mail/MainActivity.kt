@@ -351,7 +351,10 @@ private val Paper=Color(0xFFF8F9F6)
                         onFolder={folder=it;serverPath=null;goInbox()},onServerFolder={currentAccount=it.accountId;folder=MailFolder.INBOX;serverPath=it.path;goInbox()},
                         onQueue={route="actions"},onAdd={route="add"},onSettings={route="settings"}) { ReaderScreen(message,s.accounts.find{it.id==message.accountId},s.busy || message.previewOnly || !message.contentCached,ownAddresses=s.accounts.map{it.email},attachmentBusy=s.attachmentBusy,onBack={goInbox()},onStar={vm.star(message)},
                         onInline={file->vm.inlineImage(message,file)},onThumbnail={file->vm.thumbnailImage(message,file)},onLink={url->HtmlMail.link(url)?.let{safe->runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(safe)).addCategory(Intent.CATEGORY_BROWSABLE))}.onFailure{vm.notice("Не удалось открыть ссылку",error=true)}}},
-                        onDownload={attachment->download=message to attachment;saveFile.launch(attachment.name)},
+                        onDownload={attachment->
+                            if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q)vm.download(message,attachment)
+                            else{download=message to attachment;saveFile.launch(attachment.name)}
+                        },
                         onSaveOriginal={originalMessage=message;saveOriginal.launch(OriginalMessageFile.name(message.subject))},
                         onOpenAttachment={file->vm.openAttachment(message,file){if(route=="reader" && selected==message.id)openFile(it)}},
                         onOpenLocal={file->openFile(OpenedAttachment(file.uri,file.name,AttachmentRules.mime(file.name,file.mime)))},
