@@ -490,27 +490,35 @@ object HtmlMail {
             val path="${ORIGIN}image/$namespace/${resources.size}".also{resources[it]=image}
             return path to image
         }
-        doc.select("img").toList().forEach{img->
-            if(trackingPixel(img)){img.remove();return@forEach}
-            val resolved=resource(img.attr("src"))
-            if(resolved!=null) {
-                img.attr("src",resolved.first)
-                img.removeAttr("srcset")
-                return@forEach
+        doc.select("img").filter(::trackingPixel).forEach{it.remove()}
+        val images=doc.select("img")
+        // Classify the original links before inserting any visible fallback text.
+        val imageOnlyLinks=doc.select("a[href]").filter{it.text().isBlank()}.toSet()
+        val compactLinks=imageOnlyLinks.associateWith{it.select("img")}.filterValues{icons->
+            icons.isNotEmpty() && icons.all{(it.attr("width").trim().toIntOrNull()?:0) in 1..48}
+        }
+        val compactImages=compactLinks.values.flatten().toSet()
+        val resolvedImages=images.associateWith{resource(it.attr("src"))?.first}
+        compactLinks.forEach{(link,icons)->
+            val blocked=icons.filter{resolvedImages[it]==null}
+            if(blocked.size==icons.size) {
+                val alt=icons.firstNotNullOfOrNull{it.attr("alt").takeIf(String::isNotBlank)}
+                val label=link.attr("aria-label").ifBlank{alt?:"Открыть ссылку"}
+                link.attr("aria-label",label)
+                if(!link.hasAttr("title"))link.attr("title",label)
+                link.appendChild(Element("span").addClass("mail-image-link-placeholder").attr("aria-hidden","true").text("↗"))
             }
-            val alt=img.attr("alt")
-            val imageOnlyLink=img.parents().firstOrNull{it.normalName()=="a" && it.hasAttr("href") && it.text().isBlank()}
-            val imageWidth=img.attr("width").trim().toIntOrNull()
-            when {
-                imageOnlyLink!=null && imageWidth!=null && imageWidth in 1..48 -> {
-                    // These links occupy icon-sized cells. Keep the full name on the link.
-                    val label=imageOnlyLink.attr("aria-label").ifBlank{alt.ifBlank{"Открыть ссылку"}}
-                    imageOnlyLink.attr("aria-label",label)
-                    if(!imageOnlyLink.hasAttr("title"))imageOnlyLink.attr("title",label)
-                    img.replaceWith(Element("span").addClass("mail-image-link-placeholder").attr("aria-hidden","true").text("↗"))
-                }
-                imageOnlyLink==null && img.hasAttr("alt") && alt.isBlank() -> img.remove()
-                else -> img.replaceWith(Element("span").addClass("mail-image-placeholder").text(alt.ifBlank{"Изображение"}))
+            blocked.forEach{it.remove()}
+        }
+        images.forEach{img->
+            val resolved=resolvedImages[img]
+            if(resolved!=null) {
+                img.attr("src",resolved)
+                img.removeAttr("srcset")
+            } else if(img !in compactImages) {
+                val alt=img.attr("alt")
+                if(img.hasAttr("alt") && alt.isBlank() && img.parents().none{it in imageOnlyLinks})img.remove()
+                else img.replaceWith(Element("span").addClass("mail-image-placeholder").text(alt.ifBlank{"Изображение"}))
             }
         }
         // CSS images use the same isolated loader; external fonts and unknown resources stay blocked.
