@@ -323,6 +323,9 @@ class MailViewModel(app: Application): AndroidViewModel(app) {
             catch(e: Exception){notice(friendlyError(e),error=true)}
         }
     }
-    fun download(m: MailItem,file: Attachment,uri: Uri)=attachmentWork(m,file){repo.download(m,file,uri);notice("Вложение сохранено")}
+    fun download(m: MailItem,file: Attachment,uri: Uri?=null)=attachmentWork(m,file){
+        repo.download(m,file,uri)
+        notice(if(uri==null)"Вложение сохранено в «Загрузки»" else "Вложение сохранено")
+    }
     fun openAttachment(m: MailItem,file: Attachment,onOpen: (OpenedAttachment)->Unit)=attachmentWork(m,file){onOpen(repo.openAttachment(m,file))}
 }

@@ -3,6 +3,7 @@ package ru.liftzip.mail
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -1317,7 +1318,13 @@ class MailRepository(private val context: Context) {
             throw e
         } finally { temporary.delete() }
     }
-    suspend fun download(message: MailItem,file: Attachment,uri: Uri)=withContext(Dispatchers.IO){
+    suspend fun download(message: MailItem,file: Attachment,uri: Uri?): Unit=withContext(Dispatchers.IO){
+        if(uri==null){
+            check(Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q)
+            val cached=cachedAttachment(message,file)
+            saveInDownloads(context.contentResolver,file,cached)
+            return@withContext
+        }
         try{
             val cached=cachedAttachment(message,file)
             context.contentResolver.openOutputStream(uri)?.use{output->cached.inputStream().use{it.copyTo(output,64*1024)}}?:error("Не удалось создать файл.")
