@@ -116,6 +116,34 @@ class HtmlMailTest {
             assertEquals("33",icon.attr("width"))
         }
     }
+    @Test fun alternateThemeIconsShareOnePlaceholderOnTheirLink() {
+        val source="""
+            <style>@media (prefers-color-scheme: dark) {
+                img.light { display:none !important }
+                img.dark { display:block !important }
+            }</style>
+            <table role="presentation"><tr><td width="24"><a href="https://example.com/community">
+                <img src="https://images.example.com/light.png" width="24" class="light" alt="Community">
+                <img src="https://images.example.com/dark.png" width="24" class="dark" style="display:none" alt="Community">
+            </a></td></tr></table>
+        """.trimIndent()
+        for (originalScale in listOf(false,true)) {
+            val blocked=HtmlMail.document(source,"",emptyList(),originalScale=originalScale)
+            val link=Jsoup.parse(blocked.html).selectFirst("a")!!
+            assertEquals("↗",link.text())
+            assertEquals("Community",link.attr("aria-label"))
+            assertEquals(1,link.select(".mail-image-link-placeholder").size)
+            assertTrue(blocked.externalImages)
+            assertTrue(blocked.images.isEmpty())
+
+            val allowed=HtmlMail.document(source,"",emptyList(),external=true,originalScale=originalScale)
+            val allowedLink=Jsoup.parse(allowed.html).selectFirst("a")!!
+            assertEquals(2,allowed.images.size)
+            assertNotNull(allowedLink.selectFirst("img.light"))
+            assertEquals("display:none",allowedLink.selectFirst("img.dark")!!.attr("style"))
+            assertTrue(allowedLink.select(".mail-image-link-placeholder").isEmpty())
+        }
+    }
     @Test fun cidImagesResolveWithoutEnablingExternalImages() {
         val attachment=Attachment("1.2","photo.png","IMAGE/PNG",100,"logo+1@example")
         val doc=HtmlMail.document("<p>Фото</p><img src='cid:logo%2B1%40example'>","",listOf(attachment))
