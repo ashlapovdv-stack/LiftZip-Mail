@@ -86,6 +86,51 @@ class WrappedQuoteHistoryTest {
         assertFalse(HtmlMail.analyzeHistory(safe,ConversationText.parse(mismatched)).separateHistory)
     }
 
+    @Test fun repeatedSenderLinksCorroborateAcrossDifferentLineWraps() {
+        val prefix=third.substringBeforeLast("Получатель")
+        val old="$third <$recipient\n>> ( $composeUrl )>:"
+        val safe=HtmlMail.cleanSource(html.replace(
+            "$third &lt;<a href=\"$composeUrl\">$recipient</a>&gt;:",
+            "$prefix<a href=\"$composeUrl\">$recipient</a> &lt;<a href=\"$composeUrl\">$recipient</a>&gt;:"
+        ))
+        val tokens=listOf("$prefix$recipient","(",composeUrl,")","<$recipient","(",composeUrl,")>:")
+        for(mask in 0 until (1 shl (tokens.size-1))) {
+            if(Integer.bitCount(mask)>3)continue
+            val header=buildString {
+                tokens.forEachIndexed{index,token->
+                    if(index>0)append(if(mask and (1 shl (index-1))!=0)"\n>> " else " ")
+                    append(token)
+                }
+            }
+            val wrapped=plain.replace(old,header)
+            assertNotEquals(plain,wrapped)
+            val parsed=ConversationText.parse(wrapped)
+            val history=HtmlMail.analyzeHistory(safe,parsed)
+            assertTrue("Line breaks $mask: ${history.reason}",history.separateHistory)
+            assertEquals("Получено",Jsoup.parse(history.currentHtml).text())
+            assertEquals(4,parsed.messages.size)
+        }
+        val wrapped=plain.replace(old,tokens.joinToString(" "))
+        val last=wrapped.lastIndexOf(composeUrl)
+        val wrong=wrapped.replaceRange(last,last+composeUrl.length,composeUrl.replace(recipient,"other@example.com"))
+        assertFalse(HtmlMail.analyzeHistory(safe,ConversationText.parse(wrong)).separateHistory)
+        val wrongDepth=plain.replace(old,"$prefix$recipient (\n>>> $composeUrl ) <$recipient ( $composeUrl )>:")
+        assertFalse(HtmlMail.analyzeHistory(safe,ConversationText.parse(wrongDepth)).separateHistory)
+    }
+
+    @Test fun adjacentUrlAndColonCorroborateEvenWithDifferentSpacing() {
+        val url="https://example.com/item"
+        for(colon in listOf(":", "：")) {
+            val safe=HtmlMail.cleanSource(html.replace("Исходный заказ",
+                "Исходный заказ <span>Ссылка$colon</span><a href=\"$url\">$url</a>"))
+            for(space in listOf("", " ", "  ")) {
+                val text=plain.replace("Исходный заказ","Исходный заказ Ссылка$colon$space$url")
+                assertTrue(HtmlMail.analyzeHistory(safe,ConversationText.parse(text)).separateHistory)
+                assertFalse(HtmlMail.analyzeHistory(safe,ConversationText.parse(text.replace(url,"https://example.com/other"))).separateHistory)
+            }
+        }
+    }
+
     @Test fun anAnnotationForADifferentAddressDoesNotCorroborateHistory() {
         val altered=plain.replace(composeUrl,composeUrl.replace(recipient,"other@example.com"))
         assertFalse(HtmlMail.analyzeHistory(HtmlMail.cleanSource(html),ConversationText.parse(altered)).separateHistory)
