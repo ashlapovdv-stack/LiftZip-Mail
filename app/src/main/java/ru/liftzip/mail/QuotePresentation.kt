@@ -9,6 +9,7 @@ internal object QuotePresentation {
     private fun text(value: String)=value.replace('\u00a0',' ').replace("\uFFFC","")
         .replace(Regex("[\\s\\u200B\\uFEFF]+")," ").trim()
         .replace(Regex("\\s+([.,;:!?])"),"$1")
+        .replace(Regex("([:：])\\s+(?=https?://)",RegexOption.IGNORE_CASE),"$1")
     private val emphasis=Regex("(?<![\\p{L}\\p{N}])([*_]{1,2})(\\S(?:.*?\\S)?)\\1(?![\\p{L}\\p{N}])",RegexOption.DOT_MATCHES_ALL)
     private val bullet=Regex("^(\\s*(?:>\\s*)*)(?:[*+-]|\\d+[.)])\\s+(.+)$")
     private val annotation=Regex("\\(\\s*(https?://[^\\s<>]+?)\\s*\\)")
@@ -18,21 +19,33 @@ internal object QuotePresentation {
     private const val address="[A-Za-z0-9.!#$%&'*+/=?^`{|}~-]+@[A-Za-z0-9.-]+"
     private val quotePrefix=Regex("^(?:[ \t]*>[ \t]*)*")
     private val angleAddress=Regex("""\s*<\s*($address)\s*>""")
-    private val composeAttribution=Regex("""(?i)^(.*?(?:\s|<))($address)\s*\(\s*((?:https:)?//e\.mail\.ru/compose/\?mailto=[^\s()]+)\s*\)(\s*>?\s*:)$""")
+    private val composeAnnotation=Regex("""(?i)($address)\s*\(\s*((?:https:)?//e\.mail\.ru/compose/\?mailto=[^\s()]+)\s*\)""")
     private val wrappedAngle=Regex("""^(.*?<)($address)\s*>:$""")
 
     private fun headerText(value: String)=angleAddress.replace(value){" <${it.groupValues[1]}>"}
 
-    private fun normalizeComposeLink(value: String): String {
-        val match=composeAttribution.matchEntire(value)?:return value
-        val address=match.groupValues[2]
-        val target=match.groupValues[3].substringAfter("?mailto=","")
-        val decoded=runCatching{java.net.URLDecoder.decode(target.replace("+","%2B"),"UTF-8")}.getOrNull()
-        return if(decoded.equals("mailto:$address",true))match.groupValues[1]+address+match.groupValues[4] else value
+    private fun normalizeComposeLinks(value: String): String {
+        if(!value.contains("e.mail.ru/compose/",ignoreCase=true))return value
+        return composeAnnotation.replace(value){match->
+            val email=match.groupValues[1]
+            val target=match.groupValues[2].substringAfter("?mailto=","")
+            val decoded=runCatching{java.net.URLDecoder.decode(target.replace("+","%2B"),"UTF-8")}.getOrNull()
+            if(decoded.equals("mailto:$email",true))email else match.value
+        }
     }
 
-    /** Rejoin only attribution continuations. A > closing an email address belongs
-     * to the header even when it is at the beginning of a continuation line. */
+    private fun continuationAtDepth(line: String,depth: Int): String? {
+        var content=line.trimStart()
+        repeat(depth) {
+            if(!content.startsWith('>'))return null
+            content=content.drop(1).trimStart()
+        }
+        // A final >: may close the sender's angle address rather than start a quote.
+        return content.takeIf{it.isNotBlank() && (!it.startsWith('>') || it==">:")}
+    }
+
+    /** Rejoin a recognized attribution at its original quote depth. Every compose
+     * annotation must match the adjacent address before it can be removed. */
     private fun joinAttributions(source: String,header: (String)->Boolean): String {
         val lines=source.lines()
         val result=mutableListOf<String>()
@@ -41,27 +54,34 @@ internal object QuotePresentation {
             val line=lines[i++]
             val prefix=quotePrefix.find(line)!!.value
             val first=line.drop(prefix.length).trim()
-            val sameLine=normalizeComposeLink(first)
-            if(sameLine!=first && header(sameLine)) {
-                result+=prefix+sameLine
+            val normalized=normalizeComposeLinks(first)
+            if(normalized!=first && header(normalized)) {
+                result+=prefix+normalized
                 continue
             }
-            if(i<lines.size && '@' in first && !header(first)) {
-                var next=lines[i].trimStart()
-                val depth=prefix.count{it=='>'}
-                repeat(depth){if(next.startsWith('>'))next=next.drop(1).trimStart()else next=""}
-                val combined=when {
-                    next.startsWith('(') || first.endsWith('(')->normalizeComposeLink("$first $next").takeIf{it!="$first $next"}
-                    next==">:"->"$first>:".takeIf{wrappedAngle.matches(it)}
-                    else->null
-                }
-                if(combined!=null && header(combined)) {
-                    result+=prefix+combined
-                    i++
-                    continue
+            if('@' !in first || header(first)) {
+                result+=line
+                continue
+            }
+            val depth=prefix.count{it=='>'}
+            var combined=first
+            var joined=false
+            // The same sender header may contain several links, each split at
+            // different whitespace boundaries. Stop at blank or different-depth lines.
+            for(end in i until minOf(i+15,lines.size)) {
+                val next=continuationAtDepth(lines[end],depth)?:break
+                combined+=if(next==">:")next else " $next"
+                if(combined.length>8192)break
+                val candidate=normalizeComposeLinks(combined)
+                val proven=candidate!=combined || (next==">:" && wrappedAngle.matches(candidate))
+                if(proven && header(candidate)) {
+                    result+=prefix+candidate
+                    i=end+1
+                    joined=true
+                    break
                 }
             }
-            result+=line
+            if(!joined)result+=line
         }
         return result.joinToString("\n")
     }
